@@ -1,0 +1,49 @@
+[package]
+name = "fire-notes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Window & Input
+winit = "0.30"
+raw-window-handle = "0.6"
+
+# OpenGL context
+glutin = "0.32"
+glutin-winit = "0.5"
+
+# GPU rendering
+femtovg = "0.9"
+
+# Text layout & rendering
+cosmic-text = "0.12"
+
+# Efficient text buffer
+ropey = "1.6"
+
+# File dialogs - using native-dialog instead of rfd for lighter weight
+native-dialog = "0.7"
+
+# Clipboard support
+arboard = "3"
+
+# User directories (XDG)
+dirs = "5"
+
+[dev-dependencies]
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "performance"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
