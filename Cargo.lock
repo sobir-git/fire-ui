@@ -710,6 +710,8 @@ dependencies = [
  "native-dialog",
  "raw-window-handle 0.6.2",
  "ropey",
+ "serde",
+ "serde_json",
  "winit",
 ]
 
