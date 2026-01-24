@@ -30,3 +30,6 @@ target/
 
 # User-specific settings
 .idea/
+
+# Local dev storage
+tmp/
