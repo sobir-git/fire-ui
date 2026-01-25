@@ -1,7 +1,7 @@
 [package]
 name = "fire-notes"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 # Window & Input
@@ -14,9 +14,6 @@ glutin-winit = "0.5"
 
 # GPU rendering
 femtovg = "0.9"
-
-# Text layout & rendering
-cosmic-text = "0.12"
 
 # Efficient text buffer
 ropey = "1.6"
