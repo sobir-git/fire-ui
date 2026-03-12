@@ -57,3 +57,7 @@ strip = true
 
 [profile.dev]
 opt-level = 1
+
+[patch.crates-io]
+winit = { path = "patches/winit-0.30.12" }
+smithay-client-toolkit = { path = "patches/smithay-client-toolkit-0.19.2" }
