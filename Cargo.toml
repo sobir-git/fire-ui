@@ -37,6 +37,12 @@ rand = "0.8"
 [dev-dependencies]
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
+# Structural snapshot testing
+insta = { version = "1", features = ["ron"] }
+# Property-based / fuzz testing
+proptest = "1"
+# GL context for headless pixel tests (same version femtovg uses)
+glow = { version = "0.13", default-features = false }
 
 [[bench]]
 name = "performance"

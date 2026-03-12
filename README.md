@@ -1,70 +1,64 @@
-# Fire Notes 🔥
+# fire-notes
 
-A blazing-fast, native markdown editor for Ubuntu.
+Native GPU-accelerated text editor for Linux. Single binary, no Electron.
 
-## Features
+## Architecture
 
-- **Tabs** - Multiple files with `Ctrl+N` (new), `Ctrl+W` (close), `Ctrl+Tab` (switch)
-- **File Operations** - `Ctrl+O` (open), `Ctrl+S` (save)
-- **GPU-Accelerated** - OpenGL rendering with femtovg
-- **Efficient** - Rope data structure for O(log n) edits
+```
+App  (owns renderer + clipboard, handles platform events)
+ └── AppLogic  (all document and UI state — pure Rust, no platform deps)
+      ├── tabs: Vec<Tab>         rope-backed text buffers
+      ├── scroll_state           per-tab scroll position
+      ├── ui_state               hover, drag, cursor blink
+      └── render_frame()  →  RenderFrame  (pure data snapshot)
 
-## Performance
+Renderer  (femtovg/OpenGL, consumes Tab + UiState directly)
+ ├── tab_bar/     tab strip + window chrome
+ ├── text_content/  editor area, selection highlight, cursor
+ └── scrollbar/
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Binary Size | <2MB | 4.0MB |
-| Tests | Pass | ✅ 17/17 |
+Platform
+ ├── winit event loop  →  App::handle_event()
+ └── glutin/EGL        →  OpenGL context on Wayland or X11
+```
+
+**Key design invariant:** `AppLogic` has zero platform dependencies. It can be constructed and driven entirely from test code — no window, no GPU.
+
+## Stack
+
+| Layer | Crate |
+|-------|-------|
+| Text buffer | `ropey` — O(log n) insert/delete |
+| Text layout | `cosmic-text` — shaping + glyph cache |
+| 2D rendering | `femtovg` — retained path renderer over OpenGL |
+| Windowing | `winit` + `glutin` |
 
 ## Build
 
 ```bash
-# Install dependencies
 sudo apt install build-essential pkg-config libfontconfig-dev libxkbcommon-dev libwayland-dev
-
-# Build release
 cargo build --release
-
-# Run
 ./target/release/fire-notes
 ```
 
-## Keyboard Shortcuts
+## Testing
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | New tab |
-| `Ctrl+W` | Close tab |
-| `Ctrl+Tab` | Next tab |
-| `Ctrl+O` | Open file |
-| `Ctrl+S` | Save file |
-| `Escape` | Quit |
-| Arrow keys | Navigate |
-| `Backspace` / `Delete` | Delete text |
+Four layers, ordered by speed:
 
-## Tech Stack
+| Layer | What | Command |
+|-------|------|---------|
+| L1 | Logic unit tests (pure `AppLogic`) | `cargo test` |
+| L2 | `RenderFrame` structural snapshots | `cargo test` |
+| L3 | Headless pixel tests (EGL surfaceless + FBO) | `cargo test renderer::tests` |
+| L4 | Xvfb smoke tests (5 xdotool scenarios) | `./tests/visual/run_visual_tests.sh` |
 
-- **Rust** - Memory-safe systems programming
-- **winit** - Cross-platform windowing
-- **femtovg** - GPU-accelerated 2D rendering
-- **cosmic-text** - Fast text layout
-- **ropey** - O(log n) text buffer
-
-## Automated Visual Testing
-
-Run visual regression tests:
+L1–L3 require no display server. L3 uses `EGL_PLATFORM_SURFACELESS_MESA`; tests skip gracefully if Mesa is absent.
 
 ```bash
-# Create/update baseline snapshots
+# Update L4 baselines
 ./tests/visual/run_visual_tests.sh --update-snapshots
-
-# Run tests and compare against snapshots
-./tests/visual/run_visual_tests.sh
 ```
 
-Tests use:
-- **xdotool** - Simulates keyboard/mouse input
-- **scrot** - Captures screenshots
-- **ImageMagick** - Compares images (SSIM)
+## Shortcuts
 
-> **Development Guideline**: When facing choices or unexpected issues, always perform a web search to find the latest information and best practices.
+`Ctrl+N` new tab · `Ctrl+W` close · `Ctrl+Tab` switch · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Z/Y` undo/redo · `Escape` quit
