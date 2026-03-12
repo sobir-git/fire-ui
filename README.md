@@ -10,19 +10,26 @@ App  (owns renderer + clipboard, handles platform events)
       ├── tabs: Vec<Tab>         rope-backed text buffers
       ├── scroll_state           per-tab scroll position
       ├── ui_state               hover, drag, cursor blink
-      └── render_frame()  →  RenderFrame  (pure data snapshot)
+      └── build_ui_tree()  →  UiTree  (geometry snapshot for renderer + hit-testing)
 
-Renderer  (femtovg/OpenGL, consumes Tab + UiState directly)
- ├── tab_bar/     tab strip + window chrome
- ├── text_content/  editor area, selection highlight, cursor
- └── scrollbar/
+ui  (pure geometry — no femtovg, no platform deps)
+ ├── UiTree          top-level compositor, owns TabBar + ContentArea + Option<NotesPicker>
+ ├── TabBar          tab strip + window chrome, impl Layout
+ ├── ContentArea     owns TextArea + ScrollbarWidget, impl Layout
+ ├── NotesPicker     overlay picker, impl Layout
+ └── Rect            the only place size arithmetic lives (cut_*, split_h/v, inset, …)
 
-Platform
- ├── winit event loop  →  App::handle_event()
- └── glutin/EGL        →  OpenGL context on Wayland or X11
+Renderer  (femtovg/OpenGL — reads UiTree geometry, never computes layout)
+ ├── tab_bar/        tab strip + window chrome
+ ├── text_content/   editor area, selection, cursor, flame effect
+ ├── notes_picker/   quick-open overlay
+ └── fonts.rs        shared measure_char_width + snap_to_pixel
 ```
 
-**Key design invariant:** `AppLogic` has zero platform dependencies. It can be constructed and driven entirely from test code — no window, no GPU.
+**Key design invariants:**
+- `AppLogic` has zero platform dependencies — testable with no window, no GPU.
+- `ui` module has zero renderer dependencies — pure geometry (`Rect`, `Layout` trait).
+- Renderers never compute layout coordinates — they only read widget rects.
 
 ## Stack
 
@@ -83,4 +90,4 @@ L1–L3 require no display server. L3 uses `EGL_PLATFORM_SURFACELESS_MESA`; test
 
 ## Shortcuts
 
-`Ctrl+N` new tab · `Ctrl+W` close · `Ctrl+Tab` switch · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Z/Y` undo/redo · `Escape` quit
+`Ctrl+N` new tab · `Ctrl+W` close · `Ctrl+Tab` switch · `Ctrl+O` open · `Ctrl+P` notes picker · `Ctrl+S` save · `Ctrl+Z/Y` undo/redo · `Escape` quit
