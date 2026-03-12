@@ -41,6 +41,28 @@ cargo build --release
 ./target/release/fire-notes
 ```
 
+## Dev Workflow
+
+```bash
+# Build (debug) + kill old instance + relaunch — the inner loop during dev
+./dev.sh
+
+# Run tests
+./dev.sh --test
+# or directly:
+cargo test
+
+# Auto-rebuild + relaunch on every src/ change (requires cargo-watch)
+cargo install cargo-watch   # one-time install
+./dev.sh --watch
+
+# Install release binary to ~/.local/bin + desktop entry
+./install.sh
+```
+
+> **Tip:** `./dev.sh` uses the debug binary (faster compile). Use `./install.sh` when you want
+> to run the optimised release build from anywhere.
+
 ## Testing
 
 Four layers, ordered by speed:
