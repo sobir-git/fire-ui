@@ -5,31 +5,41 @@ Native GPU-accelerated text editor for Linux. Single binary, no Electron.
 ## Architecture
 
 ```
-App  (owns renderer + clipboard, handles platform events)
- └── AppLogic  (all document and UI state — pure Rust, no platform deps)
-      ├── tabs: Vec<Tab>         rope-backed text buffers
-      ├── scroll_state           per-tab scroll position
-      ├── ui_state               hover, drag, cursor blink
-      └── build_ui_tree()  →  UiTree  (geometry snapshot for renderer + hit-testing)
+App  (src/app/)
+  Routes OS events → AppLogic methods
+  Calls renderer.render(frame)
 
-ui  (pure geometry — no femtovg, no platform deps)
- ├── UiTree          top-level compositor, owns TabBar + ContentArea + Option<NotesPicker>
- ├── TabBar          tab strip + window chrome, impl Layout
- ├── ContentArea     owns TextArea + ScrollbarWidget, impl Layout
- ├── NotesPicker     overlay picker, impl Layout
- └── Rect            the only place size arithmetic lives (cut_*, split_h/v, inset, …)
+AppLogic  (src/logic/)
+  Owns all state: tabs, focus, component instances
+  render_frame() → delegates to component.snapshot() → RenderFrame
+  Zero GPU imports. Fully headless-testable.
 
-Renderer  (femtovg/OpenGL — reads UiTree geometry, never computes layout)
- ├── tab_bar/        tab strip + window chrome
- ├── text_content/   editor area, selection, cursor, flame effect
- ├── notes_picker/   quick-open overlay
- └── fonts.rs        shared measure_char_width + snap_to_pixel
+Components  (src/components/)
+  One file per component. Owns state + geometry + snapshot baking.
+  NotesPicker — search input + result list + overlay geometry
+  TabBar      — tab strip + window chrome snapshot
+  TextEditor  — content area + scrollbar snapshot
+
+Primitives  (src/primitives/)
+  Button, Label, TextInput, Scrollbar, List<T>
+  One file each. Same state+snapshot contract as components.
+
+Layout  (src/layout/)
+  Column, Row — weight-based rect splitting + hit dispatch. No GPU.
+
+Renderer  (src/renderer/)
+  Reads RenderFrame (pure data). Calls femtovg. Never computes layout.
+
+ui/  (src/ui/)
+  Rect, WindowRect — all coordinate arithmetic lives here.
+  UiTree, TabBar, ContentArea — retained geometry widgets.
 ```
 
-**Key design invariants:**
-- `AppLogic` has zero platform dependencies — testable with no window, no GPU.
-- `ui` module has zero renderer dependencies — pure geometry (`Rect`, `Layout` trait).
-- Renderers never compute layout coordinates — they only read widget rects.
+**Key invariants:**
+- `AppLogic` has zero platform/GPU dependencies — testable with no window, no GPU.
+- `ui/types.rs` has zero widget imports — `Rect` is the only coordinate authority.
+- Renderers never compute layout coordinates — they only read pre-baked `RenderFrame` data.
+- See `UI_FRAMEWORK.md` for the full design guide.
 
 ## Stack
 
@@ -51,24 +61,19 @@ cargo build --release
 ## Dev Workflow
 
 ```bash
-# Build (debug) + kill old instance + relaunch — the inner loop during dev
+# Build (debug) + kill old instance + relaunch
 ./dev.sh
 
 # Run tests
-./dev.sh --test
-# or directly:
 cargo test
 
 # Auto-rebuild + relaunch on every src/ change (requires cargo-watch)
-cargo install cargo-watch   # one-time install
+cargo install cargo-watch
 ./dev.sh --watch
 
 # Install release binary to ~/.local/bin + desktop entry
 ./install.sh
 ```
-
-> **Tip:** `./dev.sh` uses the debug binary (faster compile). Use `./install.sh` when you want
-> to run the optimised release build from anywhere.
 
 ## Testing
 
@@ -79,7 +84,7 @@ Four layers, ordered by speed:
 | L1 | Logic unit tests (pure `AppLogic`) | `cargo test` |
 | L2 | `RenderFrame` structural snapshots | `cargo test` |
 | L3 | Headless pixel tests (EGL surfaceless + FBO) | `cargo test renderer::tests` |
-| L4 | Xvfb smoke tests (5 xdotool scenarios) | `./tests/visual/run_visual_tests.sh` |
+| L4 | Xvfb smoke tests | `./tests/visual/run_visual_tests.sh` |
 
 L1–L3 require no display server. L3 uses `EGL_PLATFORM_SURFACELESS_MESA`; tests skip gracefully if Mesa is absent.
 
