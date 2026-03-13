@@ -1,49 +1,60 @@
 # fire-notes
 
 Native GPU-accelerated text editor for Linux. Single binary, no Electron.
+This codebase is simultaneously the application **and** the framework being built.
+The app is a proving ground — perfecting the framework is the primary goal.
+
+> **Rule**: We do not make pragmatic fixes, minimal patches, or transitional compromises.
+> We identify the ideal architecture and implement it radically. The app serves the framework.
 
 ## Architecture
 
 ```
+Platform  (src/platform/)
+  Translates OS events (winit) → typed app events
+  Owns: GL context, window, event loop
+
 App  (src/app/)
-  Routes OS events → AppLogic methods
-  Calls renderer.render(&node, width, height)
+  Routes typed events → AppLogic methods
+  Owns: clipboard, file I/O, persistence
 
 AppLogic  (src/logic/)
-  Owns all state: tabs, focus, overlay, inline widget
+  Owns all state: tabs, focus, active overlay, inline widget
   render() → Node tree (pure data, no GPU)
-  Zero GPU imports. Fully headless-testable.
+  Zero GPU/platform imports. Fully headless-testable.
 
 Components  (src/components/)
-  One file per component. Implements Overlay or InlineWidget.
-  NotesPicker — search input + result list (Overlay)
-  SlashMenu   — command palette anchored to cursor (Overlay)
-  TabRename   — inline tab-title editor (InlineWidget)
+  One file per component.
+  NotesPicker — search input + filterable list (ActiveOverlay::NotesPicker)
+  SlashMenu   — command palette anchored to cursor (ActiveOverlay::SlashMenu)
+  TabRename   — inline tab-title editor (ActiveInline::TabRename)
+  Event interface: on_event(OverlayEvent) → OverlayResult / InlineResult
 
 Primitives  (src/primitives/)
-  Button, Label, TextInput, Scrollbar, List<T>
-  One file each. Render via render_at(rect, scale, placeholder, cursor_visible) → Node.
-  TextInput: full keyboard nav — insert, backspace, Left/Right/Ctrl±/Home/End, selection.
+  TextInput, List<T>, Scrollbar, Button, Label
+  Self-contained: own state + render + pointer/keyboard event methods
+  No external layout dependencies.
 
 Layout  (src/layout/)
-  Column, Row — weight-based rect splitting.
-  floating_rect() — anchored overlay positioning.
-  Overlay / InlineWidget / Component traits.
+  Column, Row — weight-based rect splitting
+  overlay_panel(), floating_rect() — overlay geometry helpers
 
-Renderer  (src/renderer/node_renderer.rs)
-  Single NodeRenderer walks the Node tree and calls femtovg.
-  Never computes layout. Zero coupling to AppLogic.
+Renderer  (src/renderer/)
+  Single NodeRenderer walks the Node tree → femtovg draw calls
+  The ONLY file that touches the GPU API.
 
-ui/  (src/ui/)
-  Rect, WindowRect — all coordinate arithmetic lives here.
-  UiTree — retained geometry for hit-testing and hover state.
+Runtime  (src/runtime/)
+  Lightweight framework for simple single-window apps (widget_demo)
+  App trait + ViewCtx + FocusManager
 ```
 
-**Key invariants:**
-- `AppLogic` has zero platform/GPU dependencies — testable with no window, no GPU.
-- `AppLogic::render()` is the only path that produces draw data — no intermediate snapshots.
-- `NodeRenderer` is the only file that calls femtovg — no per-subsystem renderers.
-- See `UI_FRAMEWORK.md` for the full design guide.
+**Absolute invariants** (must never break):
+- `src/logic/` never imports `femtovg` or any platform dep — enforced by headless tests
+- `AppLogic::render()` is the only path that produces draw data
+- `NodeRenderer` is the only caller of femtovg draw primitives
+- Components never hardcode colors — all visual values flow from `Theme`
+
+See `UI_FRAMEWORK.md` for the design philosophy, the current gaps, and the target vision.
 
 ## Stack
 
@@ -65,40 +76,21 @@ cargo build --release
 ## Dev Workflow
 
 ```bash
-# Build (debug) + kill old instance + relaunch
-./dev.sh
-
-# Run tests
-cargo test
-
-# Interactive widget testbed (live TextInput, selection, navigation)
-cargo run --bin widget-demo
-
-# Auto-rebuild + relaunch on every src/ change (requires cargo-watch)
-cargo install cargo-watch
-./dev.sh --watch
-
-# Install release binary to ~/.local/bin + desktop entry
-./install.sh
+./dev.sh                        # build (debug) + kill old instance + relaunch
+cargo test                      # all tests
+cargo run --bin widget-demo     # interactive primitive testbed
+./dev.sh --watch                # auto-rebuild on src/ change (requires cargo-watch)
+./install.sh                    # install release binary + desktop entry
 ```
 
 ## Testing
 
-Three layers, ordered by speed:
-
 | Layer | What | Command |
 |-------|------|---------|
-| L1 | Logic unit tests (pure `AppLogic` state) + `TextInput` QA (34 cases) | `cargo test` |
-| L2 | Headless pixel tests (EGL surfaceless + FBO) | `cargo test renderer::tests` |
+| L1 | Logic unit tests + TextInput QA | `cargo test` |
+| L2 | Headless pixel tests (EGL surfaceless) | `cargo test renderer::tests` |
 | L3 | Xvfb smoke tests | `./tests/visual/run_visual_tests.sh` |
-
-L1–L2 require no display server. L2 uses `EGL_PLATFORM_SURFACELESS_MESA`; tests skip gracefully if Mesa is absent.
-
-```bash
-# Update L3 baselines
-./tests/visual/run_visual_tests.sh --update-snapshots
-```
 
 ## Shortcuts
 
-`Ctrl+N` new tab · `Ctrl+W` close · `Ctrl+Tab` switch · `Ctrl+O` open · `Ctrl+P` notes picker · `Ctrl+/` command palette · `Ctrl+S` save · `Ctrl+Z/Y` undo/redo · `Alt+Z` word wrap · `Escape` quit
+`Ctrl+N` new tab · `Ctrl+W` close · `Ctrl+Tab` switch · `Ctrl+O` open · `Ctrl+P` notes picker · `Ctrl+/` command palette · `Ctrl+S` save · `Ctrl+Z/Y` undo/redo · `Alt+Z` word wrap · `Escape` cancel/quit
