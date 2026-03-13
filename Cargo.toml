@@ -44,6 +44,10 @@ proptest = "1"
 # GL context for headless pixel tests (same version femtovg uses)
 glow = { version = "0.13", default-features = false }
 
+[[bin]]
+name = "widget-demo"
+path = "src/bin/widget_demo.rs"
+
 [[bench]]
 name = "performance"
 harness = false

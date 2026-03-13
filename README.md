@@ -22,7 +22,8 @@ Components  (src/components/)
 
 Primitives  (src/primitives/)
   Button, Label, TextInput, Scrollbar, List<T>
-  One file each. Render via render_at(rect, scale) → Node.
+  One file each. Render via render_at(rect, scale, placeholder, cursor_visible) → Node.
+  TextInput: full keyboard nav — insert, backspace, Left/Right/Ctrl±/Home/End, selection.
 
 Layout  (src/layout/)
   Column, Row — weight-based rect splitting.
@@ -70,6 +71,9 @@ cargo build --release
 # Run tests
 cargo test
 
+# Interactive widget testbed (live TextInput, selection, navigation)
+cargo run --bin widget-demo
+
 # Auto-rebuild + relaunch on every src/ change (requires cargo-watch)
 cargo install cargo-watch
 ./dev.sh --watch
@@ -84,7 +88,7 @@ Three layers, ordered by speed:
 
 | Layer | What | Command |
 |-------|------|---------|
-| L1 | Logic unit tests (pure `AppLogic` state) | `cargo test` |
+| L1 | Logic unit tests (pure `AppLogic` state) + `TextInput` QA (34 cases) | `cargo test` |
 | L2 | Headless pixel tests (EGL surfaceless + FBO) | `cargo test renderer::tests` |
 | L3 | Xvfb smoke tests | `./tests/visual/run_visual_tests.sh` |
 
