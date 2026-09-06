@@ -1,174 +1,210 @@
 use fire_ui::*;
-
-#[derive(Clone, Copy)]
-pub enum Axis {
-    Horizontal,
-    Vertical,
-}
-/// Each child has an explicit main-axis size or a proportional share of remaining space.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Length {
-    Auto,
+    Natural,
     Fixed(f32),
     Fill(f32),
 }
-pub struct Flex {
-    pub axis: Axis,
-    pub gap: f32,
-    pub padding: f32,
-    pub lengths: Vec<Length>,
+#[derive(Clone, Copy, Debug)]
+pub struct Entry {
+    pub child: LayoutChild,
+    pub length: Length,
 }
-impl Flex {
-    pub fn column(gap: f32) -> Self {
+impl Entry {
+    pub fn new<W: Widget>(child: Child<W>, length: Length) -> Self {
         Self {
-            axis: Axis::Vertical,
-            gap,
-            padding: 0.,
-            lengths: vec![],
+            child: child.into(),
+            length,
         }
-    }
-    pub fn row(gap: f32) -> Self {
-        Self {
-            axis: Axis::Horizontal,
-            ..Self::column(gap)
-        }
-    }
-    pub fn padding(mut self, padding: f32) -> Self {
-        self.padding = padding;
-        self
-    }
-    pub fn lengths(mut self, lengths: impl IntoIterator<Item = Length>) -> Self {
-        self.lengths = lengths.into_iter().collect();
-        self
     }
 }
-impl Widget for Flex {
-    fn layout(&mut self, children: &mut [Node], c: Constraints, text: &mut dyn TextEngine) -> Size {
-        let vertical = matches!(self.axis, Axis::Vertical);
-        let main = |s: Size| if vertical { s.height } else { s.width };
-        let cross = |s: Size| if vertical { s.width } else { s.height };
-        let size = |m: f32, x: f32| {
-            if vertical {
-                Size::new(x, m)
-            } else {
-                Size::new(m, x)
+/// A borrowed layout policy, not a second ownership tree.
+pub fn column(cx: &mut Layout<'_>, c: Constraints, gap: f32, children: &[Entry]) -> Metrics {
+    linear(cx, c, gap, children, true)
+}
+pub fn row(cx: &mut Layout<'_>, c: Constraints, gap: f32, children: &[Entry]) -> Metrics {
+    linear(cx, c, gap, children, false)
+}
+fn linear(
+    cx: &mut Layout<'_>,
+    c: Constraints,
+    gap: f32,
+    children: &[Entry],
+    vertical: bool,
+) -> Metrics {
+    let main = |s: Size| if vertical { s.height } else { s.width };
+    let cross = |s: Size| if vertical { s.width } else { s.height };
+    let size = |m: f32, x: f32| {
+        if vertical {
+            Size::new(x, m)
+        } else {
+            Size::new(m, x)
+        }
+    };
+    let available = main(c.max);
+    let breadth = cross(c.max);
+    let mut used = gap * children.len().saturating_sub(1) as f32;
+    let mut weight = 0.;
+    let mut measured = vec![Metrics::default(); children.len()];
+    for (i, entry) in children.iter().enumerate() {
+        match entry.length {
+            Length::Fill(w) if available.is_finite() => weight += w.max(0.),
+            Length::Fixed(n) => {
+                let n = n.max(0.).min(available);
+                measured[i] = cx.measure_child(
+                    entry.child,
+                    Constraints {
+                        min: size(n, 0.),
+                        max: size(n, breadth),
+                    },
+                );
+                used += main(measured[i].size)
             }
-        };
-        let available = (main(c.max) - self.padding * 2.).max(0.);
-        let breadth = (cross(c.max) - self.padding * 2.).max(0.);
-        let visible = children.iter().filter(|n| !n.hidden).count();
-        let mut used = self.gap * visible.saturating_sub(1) as f32;
-        let mut weight = 0.;
-        for (i, child) in children.iter_mut().enumerate() {
-            if child.hidden {
-                continue;
-            }
-            match self.lengths.get(i).copied().unwrap_or(Length::Auto) {
-                Length::Fill(w) => weight += w.max(0.),
-                Length::Fixed(n) => {
-                    child.layout(Constraints::tight(size(n.max(0.), breadth)), text);
-                    used += n.max(0.);
-                }
-                Length::Auto => {
-                    let s = child.layout(Constraints::loose(size(available, breadth)), text);
-                    used += main(s);
-                }
+            _ => {
+                measured[i] = cx.measure_child(entry.child, Constraints::loose(c.max));
+                used += main(measured[i].size)
             }
         }
-        let mut cursor = self.padding;
-        for (i, child) in children.iter_mut().enumerate() {
-            if child.hidden {
-                continue;
-            }
-            if let Length::Fill(w) = self.lengths.get(i).copied().unwrap_or(Length::Auto) {
+    }
+    for (i, entry) in children.iter().enumerate() {
+        if let Length::Fill(w) = entry.length {
+            if available.is_finite() {
                 let n = if weight > 0. {
                     (available - used).max(0.) * w.max(0.) / weight
                 } else {
                     0.
                 };
-                child.layout(Constraints::tight(size(n, breadth)), text);
+                measured[i] = cx.measure_child(
+                    entry.child,
+                    Constraints {
+                        min: size(n, 0.),
+                        max: size(n, breadth),
+                    },
+                )
             }
+        }
+    }
+    let baseline = if vertical {
+        measured.first().and_then(|m| m.baseline)
+    } else {
+        measured
+            .iter()
+            .map(|m| m.baseline.unwrap_or(m.size.height))
+            .reduce(f32::max)
+    };
+    let mut cursor = 0.;
+    let mut widest: f32 = 0.;
+    for (entry, m) in children.iter().zip(&measured) {
+        let offset = if vertical {
+            0.
+        } else {
+            baseline.unwrap_or(0.) - m.baseline.unwrap_or(m.size.height)
+        };
+        cx.place_child(
+            entry.child,
             if vertical {
-                child.place(self.padding, cursor);
+                Point::new(0., cursor)
             } else {
-                child.place(cursor, self.padding);
-            }
-            cursor += main(child.rect.size()) + self.gap;
-        }
-        let desired = (cursor - self.gap + self.padding).max(self.padding * 2.);
-        c.constrain(size(desired, cross(c.max)))
-    }
-}
-
-pub struct Panel {
-    pub color: Color,
-    pub padding: f32,
-    pub radius: f32,
-}
-impl Widget for Panel {
-    fn layout(&mut self, children: &mut [Node], c: Constraints, text: &mut dyn TextEngine) -> Size {
-        let inner = Size::new(
-            (c.max.width - 2. * self.padding).max(0.),
-            (c.max.height - 2. * self.padding).max(0.),
+                Point::new(cursor, offset)
+            },
         );
-        for child in children {
-            child.layout(Constraints::tight(inner), text);
-            child.place(self.padding, self.padding);
+        cursor += main(m.size) + gap;
+        widest = widest.max(cross(m.size) + offset)
+    }
+    Metrics {
+        size: c.constrain(size(
+            if children.is_empty() {
+                0.
+            } else {
+                cursor - gap
+            },
+            widest,
+        )),
+        baseline,
+    }
+}
+pub struct Padding<C: Widget> {
+    child: Child<C>,
+    inset: f32,
+}
+impl<C: Widget> Padding<C> {
+    pub fn new(content: Element<C>, inset: f32) -> Element<Self> {
+        Element::build(|children| Self {
+            child: children.forward(content),
+            inset,
+        })
+    }
+}
+impl<C: Widget> Widget for Padding<C> {
+    type Command = C::Output;
+    type Output = C::Output;
+    fn update(&mut self, cx: &mut Update<'_, Self>, o: Self::Command) {
+        let _ = cx.emit(o);
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let inset = self
+            .inset
+            .max(0.)
+            .min(c.max.width / 2.)
+            .min(c.max.height / 2.);
+        let m = cx.measure(self.child, c.inset(inset));
+        cx.place(self.child, Point::new(inset, inset));
+        Metrics {
+            size: c.constrain(Size::new(
+                m.size.width + 2. * inset,
+                m.size.height + 2. * inset,
+            )),
+            baseline: m.baseline.map(|b| b + inset),
         }
-        c.max
-    }
-    fn paint(&self, ctx: &mut PaintCtx<'_>) {
-        ctx.painter.rect(ctx.bounds, self.radius, self.color.into());
     }
 }
-
-/// Children overlap in paint order. Useful for HUDs, popovers, and modal hosts.
-pub struct Stack;
-impl Widget for Stack {
-    fn layout(&mut self, children: &mut [Node], c: Constraints, text: &mut dyn TextEngine) -> Size {
-        for child in children {
-            child.layout(Constraints::tight(c.max), text);
-            child.place(0., 0.);
-        }
-        c.max
-    }
+/// The viewport derives content extent by measuring at its own width with unbounded height.
+pub struct Scroll<C: Widget> {
+    child: Child<C>,
+    offset: f32,
+    extent: f32,
+    height: f32,
 }
-
-/// Vertically scrolls one child with the same offset for painting and hit testing.
-pub struct ScrollView {
-    pub offset: f32,
-    pub content_height: f32,
-    max_scroll: f32,
-}
-impl ScrollView {
-    pub fn new(content_height: f32) -> Self {
-        Self {
+impl<C: Widget> Scroll<C> {
+    pub fn new(content: Element<C>) -> Element<Self> {
+        Element::build(|children| Self {
+            child: children.forward(content),
             offset: 0.,
-            content_height,
-            max_scroll: 0.,
-        }
+            extent: 0.,
+            height: 0.,
+        })
+    }
+    pub fn offset(&self) -> f32 {
+        self.offset
     }
 }
-impl Widget for ScrollView {
-    fn layout(&mut self, children: &mut [Node], c: Constraints, text: &mut dyn TextEngine) -> Size {
-        self.max_scroll = (self.content_height - c.max.height).max(0.);
-        self.offset = self.offset.clamp(0., self.max_scroll);
-        for child in children {
-            child.layout(
-                Constraints::tight(Size::new(c.max.width, self.content_height)),
-                text,
-            );
-            child.place(0., -self.offset);
-        }
-        c.max
+impl<C: Widget> Widget for Scroll<C> {
+    type Command = C::Output;
+    type Output = C::Output;
+    fn update(&mut self, cx: &mut Update<'_, Self>, o: Self::Command) {
+        let _ = cx.emit(o);
     }
-    fn event(&mut self, ctx: &mut EventCtx<'_>, event: &Event) {
-        if let Event::Scroll { delta, .. } = event {
-            let offset = (self.offset - delta.y).clamp(0., self.max_scroll);
-            if offset != self.offset {
-                self.offset = offset;
-                ctx.relayout();
-                ctx.handle();
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let m = cx.measure(
+            self.child,
+            Constraints::loose(Size::new(c.max.width, f32::INFINITY)),
+        );
+        let size = c.constrain(Size::new(m.size.width, m.size.height.min(c.max.height)));
+        self.extent = m.size.height;
+        self.height = size.height;
+        self.offset = self.offset.clamp(0., (self.extent - self.height).max(0.));
+        cx.place(self.child, Point::new(0., -self.offset));
+        Metrics::new(size)
+    }
+    fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
+        if phase != Phase::Preview {
+            if let Input::Scroll { delta, .. } = input {
+                let offset = (self.offset - delta.y).clamp(0., (self.extent - self.height).max(0.));
+                if offset != self.offset {
+                    self.offset = offset;
+                    cx.relayout();
+                    cx.stop()
+                }
             }
         }
     }

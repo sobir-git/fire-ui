@@ -1,325 +1,331 @@
 use crate::*;
 use std::{
     any::Any,
+    marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct WidgetId(u64);
-impl Default for WidgetId {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Id(pub u64);
+pub(crate) fn identity() -> Id {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    Id(NEXT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+        .expect("identity space exhausted"))
+}
+/// An opaque, invariant typed child reference. It does not borrow widget state.
+pub struct Child<W: Widget> {
+    pub(crate) id: Id,
+    marker: PhantomData<fn(W) -> W>,
+}
+impl<W: Widget> Copy for Child<W> {}
+impl<W: Widget> Clone for Child<W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: Widget> std::fmt::Debug for Child<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Child")
+    }
+}
+impl<W: Widget> Child<W> {
+    pub(crate) fn new(id: Id) -> Self {
+        Self {
+            id,
+            marker: PhantomData,
+        }
+    }
+}
+/// Queued payloads report owned storage. Implementations must include heap allocations they own.
+pub trait Data: Any {
+    fn bytes(&self) -> usize;
+}
+impl Data for () {
+    fn bytes(&self) -> usize {
+        0
+    }
+}
+impl Data for std::convert::Infallible {
+    fn bytes(&self) -> usize {
+        match *self {}
+    }
+}
+impl Data for String {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.capacity()
+    }
+}
+impl Data for usize {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+impl Data for bool {
+    fn bytes(&self) -> usize {
+        1
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub struct FrameTime {
+    pub now: Duration,
+    pub elapsed: Duration,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Generic,
+    Button,
+    Text,
+    TextInput,
+    List,
+    ListItem,
+    Dialog,
+    Canvas,
+}
+#[derive(Clone, Debug)]
+pub struct Semantics {
+    pub role: Role,
+    pub label: String,
+    pub value: Option<String>,
+    pub disabled: bool,
+    pub selected: bool,
+}
+impl Default for Semantics {
+    fn default() -> Self {
+        Self {
+            role: Role::Generic,
+            label: String::new(),
+            value: None,
+            disabled: false,
+            selected: false,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAction {
+    Focus,
+    Activate,
+}
+/// All custom and built-in widgets use this protocol. No runtime nodes are public.
+pub trait Widget: Any + Sized {
+    type Command: Data;
+    type Output: Data;
+    fn update(&mut self, _cx: &mut Update<'_, Self>, _command: Self::Command) {}
+    fn lifecycle(&mut self, _cx: &mut Update<'_, Self>, _event: Lifecycle) {}
+    fn input(&mut self, _cx: &mut Update<'_, Self>, _phase: Phase, _input: &Input) {}
+    fn frame(&mut self, _cx: &mut Update<'_, Self>, _time: FrameTime) {}
+    fn timer(&mut self, _cx: &mut Update<'_, Self>, _timer: Timer) {}
+    fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics {
+        cx.overlay(limits)
+    }
+    fn paint(&self, _cx: &mut Paint<'_>) {}
+    fn focusable(&self) -> bool {
+        false
+    }
+    fn ime_cursor(&self) -> Option<Rect> {
+        None
+    }
+    fn semantics(&self) -> Semantics {
+        Semantics::default()
+    }
+    fn accessibility(&mut self, cx: &mut Update<'_, Self>, action: SemanticAction) {
+        if action == SemanticAction::Focus {
+            let _ = cx.focus();
+        }
+    }
+}
+pub(crate) type Payload = Box<dyn Any>;
+type Mapper = dyn Fn(&dyn Any) -> (Payload, usize);
+pub(crate) enum OutputMap {
+    Forward,
+    Map(Box<Mapper>),
+}
+pub(crate) trait Erased {
+    fn state(&self) -> &dyn Any;
+    fn update(&mut self, cx: &mut crate::context::RawUpdate<'_>, payload: Payload);
+    fn lifecycle(&mut self, cx: &mut crate::context::RawUpdate<'_>, event: Lifecycle);
+    fn input(&mut self, cx: &mut crate::context::RawUpdate<'_>, phase: Phase, input: &Input);
+    fn frame(&mut self, cx: &mut crate::context::RawUpdate<'_>, time: FrameTime);
+    fn timer(&mut self, cx: &mut crate::context::RawUpdate<'_>, timer: Timer);
+    fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics;
+    fn paint(&self, cx: &mut Paint<'_>);
+    fn focusable(&self) -> bool;
+    fn ime_cursor(&self) -> Option<Rect>;
+    fn semantics(&self) -> Semantics;
+    fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction);
+}
+impl<W: Widget> Erased for W {
+    fn state(&self) -> &dyn Any {
+        self
+    }
+    fn update(&mut self, cx: &mut crate::context::RawUpdate<'_>, payload: Payload) {
+        self.update(
+            &mut cx.typed(),
+            *payload
+                .downcast::<W::Command>()
+                .expect("private command type invariant"),
+        );
+    }
+    fn lifecycle(&mut self, cx: &mut crate::context::RawUpdate<'_>, event: Lifecycle) {
+        self.lifecycle(&mut cx.typed(), event)
+    }
+    fn input(&mut self, cx: &mut crate::context::RawUpdate<'_>, phase: Phase, input: &Input) {
+        self.input(&mut cx.typed(), phase, input)
+    }
+    fn frame(&mut self, cx: &mut crate::context::RawUpdate<'_>, time: FrameTime) {
+        self.frame(&mut cx.typed(), time)
+    }
+    fn timer(&mut self, cx: &mut crate::context::RawUpdate<'_>, timer: Timer) {
+        self.timer(&mut cx.typed(), timer)
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics {
+        self.layout(cx, limits)
+    }
+    fn paint(&self, cx: &mut Paint<'_>) {
+        self.paint(cx)
+    }
+    fn focusable(&self) -> bool {
+        self.focusable()
+    }
+    fn ime_cursor(&self) -> Option<Rect> {
+        self.ime_cursor()
+    }
+    fn semantics(&self) -> Semantics {
+        self.semantics()
+    }
+    fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction) {
+        self.accessibility(&mut cx.typed(), action)
+    }
+}
+pub(crate) struct Prepared {
+    pub id: Id,
+    pub widget: Box<dyn Erased>,
+    pub children: Vec<Prepared>,
+    pub output: Option<OutputMap>,
+    pub count: usize,
+}
+pub struct Element<W: Widget> {
+    pub(crate) prepared: Prepared,
+    marker: PhantomData<fn(W) -> W>,
+}
+impl<W: Widget> Element<W> {
+    pub fn leaf(widget: W) -> Self {
+        Self::build(|_| widget)
+    }
+    pub fn build(build: impl FnOnce(&mut Children<W>) -> W) -> Self {
+        let mut children = Children {
+            nodes: vec![],
+            marker: PhantomData,
+        };
+        let widget = build(&mut children);
+        let count = 1 + children.nodes.iter().map(|n| n.count).sum::<usize>();
+        Self {
+            prepared: Prepared {
+                id: identity(),
+                widget: Box::new(widget),
+                children: children.nodes,
+                output: None,
+                count,
+            },
+            marker: PhantomData,
+        }
+    }
+    pub(crate) fn from_prepared(prepared: Prepared) -> Self {
+        Self {
+            prepared,
+            marker: PhantomData,
+        }
+    }
+}
+pub struct Children<P: Widget> {
+    nodes: Vec<Prepared>,
+    marker: PhantomData<fn(P) -> P>,
+}
+impl<P: Widget> Children<P> {
+    pub fn add<W: Widget<Output = std::convert::Infallible>>(
+        &mut self,
+        element: Element<W>,
+    ) -> Child<W> {
+        self.push(element.prepared)
+    }
+    pub fn discard<W: Widget>(&mut self, element: Element<W>) -> Child<W> {
+        self.push(element.prepared)
+    }
+    pub fn connect<W: Widget>(
+        &mut self,
+        element: Element<W>,
+        map: impl Fn(&W::Output) -> P::Command + 'static,
+    ) -> Child<W> {
+        let mut node = element.prepared;
+        node.output = Some(OutputMap::Map(Box::new(move |p| {
+            let command = map(p
+                .downcast_ref::<W::Output>()
+                .expect("private output type invariant"));
+            let bytes = command.bytes();
+            (Box::new(command), bytes)
+        })));
+        self.push(node)
+    }
+    pub fn forward<W: Widget<Output = P::Command>>(&mut self, element: Element<W>) -> Child<W> {
+        let mut node = element.prepared;
+        node.output = Some(OutputMap::Forward);
+        self.push(node)
+    }
+    fn push<W: Widget>(&mut self, node: Prepared) -> Child<W> {
+        let child = Child::new(node.id);
+        self.nodes.push(node);
+        child
+    }
+}
+/// A child reference erased only for layout. It cannot send or receive payloads.
+#[derive(Clone, Copy, Debug)]
+pub struct LayoutChild(pub(crate) Id);
+impl<W: Widget> From<Child<W>> for LayoutChild {
+    fn from(child: Child<W>) -> Self {
+        Self(child.id)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskSlot(pub(crate) Id);
+impl Default for TaskSlot {
     fn default() -> Self {
         Self::new()
     }
 }
-impl WidgetId {
+impl TaskSlot {
     pub fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+        Self(identity())
     }
 }
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Modifiers {
-    pub shift: bool,
-    pub control: bool,
-    pub alt: bool,
-    pub meta: bool,
+pub struct Ticket<W: Widget> {
+    pub(crate) owner: Id,
+    pub(crate) slot: TaskSlot,
+    pub(crate) epoch: u64,
+    marker: PhantomData<fn(W) -> W>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Key {
-    Left,
-    Right,
-    Up,
-    Down,
-    Home,
-    End,
-    Backspace,
-    Delete,
-    Enter,
-    Escape,
-    Tab,
-    Character(char),
+impl<W: Widget> Copy for Ticket<W> {}
+impl<W: Widget> Clone for Ticket<W> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
-#[derive(Clone, Debug)]
-pub enum Event {
-    PointerDown(Point),
-    PointerUp(Point),
-    PointerMove(Point),
-    PointerLeave,
-    Scroll { position: Point, delta: Point },
-    Key { key: Key, modifiers: Modifiers },
-    Text(String),
-    Paste(String),
-    Composition(String),
-    Focus(bool),
-    Cancel,
-    Frame,
-    User(UserEvent),
-}
-#[derive(Clone)]
-pub struct UserEvent(pub std::rc::Rc<dyn Any>);
-impl std::fmt::Debug for UserEvent {
+impl<W: Widget> std::fmt::Debug for Ticket<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("UserEvent")
+        f.write_str("Ticket")
     }
 }
-impl Event {
-    pub fn user<T: Any>(value: T) -> Self {
-        Self::User(UserEvent(std::rc::Rc::new(value)))
-    }
-    pub fn position(&self) -> Option<Point> {
-        match self {
-            Self::PointerDown(p) | Self::PointerUp(p) | Self::PointerMove(p) => Some(*p),
-            Self::Scroll { position, .. } => Some(*position),
-            _ => None,
-        }
-    }
-    pub(crate) fn local(&self, offset: Point) -> Self {
-        let p = |p: Point| Point::new(p.x - offset.x, p.y - offset.y);
-        match self {
-            Self::PointerDown(v) => Self::PointerDown(p(*v)),
-            Self::PointerUp(v) => Self::PointerUp(p(*v)),
-            Self::PointerMove(v) => Self::PointerMove(p(*v)),
-            Self::Scroll { position, delta } => Self::Scroll {
-                position: p(*position),
-                delta: *delta,
-            },
-            _ => self.clone(),
-        }
+impl<W: Widget> Data for Ticket<W> {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
     }
 }
-
-pub struct Message {
-    pub source: WidgetId,
-    pub value: Box<dyn Any>,
-}
-pub enum PlatformRequest {
-    Copy(String),
-    Paste(WidgetId),
-}
-#[derive(Default)]
-pub(crate) struct Requests {
-    pub layout: bool,
-    pub focus: Option<WidgetId>,
-    pub capture: Option<Option<WidgetId>>,
-    pub deadline: Option<(WidgetId, Option<Duration>)>,
-    pub messages: Vec<Message>,
-    pub platform: Vec<PlatformRequest>,
-    pub damage: Vec<(WidgetId, Option<Rect>)>,
-}
-
-pub struct EventCtx<'a> {
-    pub id: WidgetId,
-    pub bounds: Rect,
-    pub now: Duration,
-    pub focused: bool,
-    pub text: &'a mut dyn TextEngine,
-    pub(crate) requests: &'a mut Requests,
-    pub(crate) handled: bool,
-}
-impl EventCtx<'_> {
-    pub fn handle(&mut self) {
-        self.handled = true;
-    }
-    pub fn repaint(&mut self) {
-        self.requests.damage.push((self.id, None));
-    }
-    /// Invalidate a local rectangle when the rest of this widget is unchanged.
-    pub fn repaint_rect(&mut self, rect: Rect) {
-        self.requests.damage.push((self.id, Some(rect)));
-    }
-    pub fn relayout(&mut self) {
-        self.requests.layout = true;
-        self.repaint();
-    }
-    pub fn focus(&mut self) {
-        self.requests.focus = Some(self.id);
-    }
-    pub fn capture_pointer(&mut self) {
-        self.requests.capture = Some(Some(self.id));
-    }
-    pub fn release_pointer(&mut self) {
-        self.requests.capture = Some(None);
-    }
-    pub fn request_frame_after(&mut self, delay: Duration) {
-        self.requests.deadline = Some((
-            self.id,
-            Some(self.now + delay.max(Duration::from_millis(1))),
-        ));
-    }
-    pub fn cancel_frame(&mut self) {
-        self.requests.deadline = Some((self.id, None));
-    }
-    pub fn emit<T: Any>(&mut self, value: T) {
-        self.requests.messages.push(Message {
-            source: self.id,
-            value: Box::new(value),
-        });
-    }
-    pub fn copy(&mut self, text: String) {
-        self.requests.platform.push(PlatformRequest::Copy(text));
-    }
-    pub fn paste(&mut self) {
-        self.requests.platform.push(PlatformRequest::Paste(self.id));
-    }
-}
-
-pub struct PaintCtx<'a> {
-    pub bounds: Rect,
-    pub focused: bool,
-    pub hovered: bool,
-    pub painter: &'a mut dyn Painter,
-}
-
-/// Implemented by both low-level custom widgets and reusable composition layers.
-/// Containers lay out their children; the runtime handles traversal and routing.
-pub trait Widget: Any {
-    fn layout(
-        &mut self,
-        children: &mut [Node],
-        constraints: Constraints,
-        text: &mut dyn TextEngine,
-    ) -> Size;
-    fn event(&mut self, _ctx: &mut EventCtx<'_>, _event: &Event) {}
-    fn paint(&self, _ctx: &mut PaintCtx<'_>) {}
-    fn focusable(&self) -> bool {
-        false
-    }
-}
-
-pub struct Node {
-    pub id: WidgetId,
-    pub rect: Rect,
-    pub children: Vec<Node>,
-    pub hidden: bool,
-    pub clip: bool,
-    pub widget: Box<dyn Widget>,
-}
-impl Node {
-    pub fn window_rect(&self, id: WidgetId) -> Option<Rect> {
-        if self.id == id {
-            return Some(self.rect);
-        }
-        self.children
-            .iter()
-            .find_map(|n| n.window_rect(id))
-            .map(|r| r.translated(Point::new(self.rect.x, self.rect.y)))
-    }
-    pub fn new(widget: impl Widget) -> Self {
+impl<W: Widget> Ticket<W> {
+    pub(crate) fn new(owner: Id, slot: TaskSlot, epoch: u64) -> Self {
         Self {
-            id: WidgetId::new(),
-            rect: Rect::default(),
-            children: vec![],
-            hidden: false,
-            clip: true,
-            widget: Box::new(widget),
+            owner,
+            slot,
+            epoch,
+            marker: PhantomData,
         }
-    }
-    pub fn with_id(mut self, id: WidgetId) -> Self {
-        self.id = id;
-        self
-    }
-    pub fn child(mut self, child: Node) -> Self {
-        self.children.push(child);
-        self
-    }
-    pub fn children(mut self, children: impl IntoIterator<Item = Node>) -> Self {
-        self.children.extend(children);
-        self
-    }
-    pub fn layout(&mut self, constraints: Constraints, text: &mut dyn TextEngine) -> Size {
-        if self.hidden {
-            self.rect.width = 0.;
-            self.rect.height = 0.;
-            return Size::default();
-        }
-        let size = constraints.constrain(self.widget.layout(&mut self.children, constraints, text));
-        self.rect.width = size.width;
-        self.rect.height = size.height;
-        size
-    }
-    pub fn place(&mut self, x: f32, y: f32) {
-        self.rect.x = x;
-        self.rect.y = y;
-    }
-    pub fn find(&self, id: WidgetId) -> Option<&Node> {
-        if self.id == id {
-            return Some(self);
-        }
-        self.children.iter().find_map(|n| n.find(id))
-    }
-    pub fn find_mut(&mut self, id: WidgetId) -> Option<&mut Node> {
-        if self.id == id {
-            return Some(self);
-        }
-        self.children.iter_mut().find_map(|n| n.find_mut(id))
-    }
-    pub fn widget_mut<T: Widget>(&mut self) -> Option<&mut T> {
-        (&mut *self.widget as &mut dyn Any).downcast_mut()
-    }
-    pub fn widget<T: Widget>(&self) -> Option<&T> {
-        (&*self.widget as &dyn Any).downcast_ref()
-    }
-    pub(crate) fn active(&self, id: WidgetId) -> bool {
-        !self.hidden && (self.id == id || self.children.iter().any(|c| c.active(id)))
-    }
-    pub(crate) fn focus_order(&self, out: &mut Vec<WidgetId>) {
-        if self.hidden {
-            return;
-        }
-        if self.widget.focusable() {
-            out.push(self.id);
-        }
-        for c in &self.children {
-            c.focus_order(out);
-        }
-    }
-    pub(crate) fn hit(&self, point: Point) -> Option<WidgetId> {
-        if self.hidden {
-            return None;
-        }
-        let inside = self.rect.contains(point);
-        if self.clip && !inside {
-            return None;
-        }
-        let local = Point::new(point.x - self.rect.x, point.y - self.rect.y);
-        for child in self.children.iter().rev() {
-            if let Some(id) = child.hit(local) {
-                return Some(id);
-            }
-        }
-        inside.then_some(self.id)
-    }
-    pub(crate) fn paint_tree(
-        &self,
-        painter: &mut dyn Painter,
-        focus: Option<WidgetId>,
-        hover: Option<WidgetId>,
-        damage: Option<Rect>,
-    ) {
-        if self.hidden {
-            return;
-        }
-        if self.clip && damage.is_some_and(|r| !self.rect.intersects(r)) {
-            return;
-        }
-        let damage = damage.map(|r| r.translated(Point::new(-self.rect.x, -self.rect.y)));
-        painter.save();
-        painter.translate(Point::new(self.rect.x, self.rect.y));
-        let bounds = Rect::from_size(self.rect.size());
-        if self.clip {
-            painter.clip(bounds);
-        }
-        self.widget.paint(&mut PaintCtx {
-            bounds,
-            focused: focus == Some(self.id),
-            hovered: hover == Some(self.id),
-            painter,
-        });
-        for child in &self.children {
-            child.paint_tree(painter, focus, hover, damage);
-        }
-        painter.restore();
     }
 }

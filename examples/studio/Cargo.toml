@@ -1,9 +1,8 @@
 [package]
-name = "fire-ui-studio"
-version = "0.1.0"
-edition = "2021"
-
+name="fire-ui-studio"
+version="0.1.0"
+edition="2021"
 [dependencies]
-fire-ui = { path = "../../crates/fire-ui" }
-fire-ui-widgets = { path = "../../crates/fire-ui-widgets" }
-fire-ui-native = { path = "../../crates/fire-ui-native" }
+fire-ui={path="../../crates/fire-ui"}
+fire-ui-widgets={path="../../crates/fire-ui-widgets"}
+fire-ui-native={path="../../crates/fire-ui-native"}

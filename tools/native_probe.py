@@ -7,8 +7,10 @@ display or notes. Artifacts are screenshots and JSON, not golden-image approvals
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -20,15 +22,18 @@ def main():
     parser.add_argument("--binary", default="target/release/fire-ui-studio")
     parser.add_argument("--seconds", type=float, default=3.0)
     parser.add_argument("--output", default="artifacts", help="Directory for this run's measurements and screenshots")
-    parser.add_argument("--retained", action="store_true", help="Use the optional backing framebuffer")
+    parser.add_argument("--accessibility", action="store_true", help="Exercise AT-SPI on a private session bus; run under dbus-run-session")
     args = parser.parse_args()
+    if args.accessibility and os.environ.get("_FIRE_UI_PROBE_PRIVATE_BUS") != "1":
+        private_env = {**os.environ, "_FIRE_UI_PROBE_PRIVATE_BUS": "1", "GSETTINGS_BACKEND": "memory"}
+        raise SystemExit(subprocess.run(["dbus-run-session", "--", sys.executable, *sys.argv], env=private_env).returncode)
     if args.seconds <= 0:
         parser.error("--seconds must be positive")
     binary = Path(args.binary).resolve()
     artifacts = Path(args.output)
     artifacts.mkdir(parents=True, exist_ok=True)
     results = {"binary": str(binary), "binary_bytes": binary.stat().st_size,
-               "backend": "Xvfb / Mesa software GL", "retained_surface": args.retained, "samples": {}}
+               "backend": "Xvfb / Mesa software GL", "samples": {}}
     ticks = os.sysconf("SC_CLK_TCK")
 
     with tempfile.TemporaryDirectory(prefix="fire-ui-probe-") as directory:
@@ -53,8 +58,13 @@ def main():
                 env = {**os.environ, "DISPLAY": ":" + number,
                        "WINIT_UNIX_BACKEND": "x11", "LIBGL_ALWAYS_SOFTWARE": "1", "FIRE_UI_PROFILE": "1"}
                 env.pop("WAYLAND_DISPLAY", None)
+                if args.accessibility:
+                    runtime = Path(directory) / "runtime"
+                    runtime.mkdir(mode=0o700)
+                    env.update(XDG_RUNTIME_DIR=str(runtime), GSETTINGS_BACKEND="memory")
+                    subprocess.run(["dbus-update-activation-environment", "DISPLAY", "XDG_RUNTIME_DIR", "GSETTINGS_BACKEND"], env=env, check=True, timeout=5)
                 with open(artifacts / "native.log", "w") as log:
-                    app = subprocess.Popen([str(binary)] + (["--retained"] if args.retained else []), env=env, stdout=log, stderr=log)
+                    app = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
 
                     def x(*arguments):
                         return subprocess.check_output(
@@ -67,7 +77,7 @@ def main():
                         if app.poll() is not None:
                             raise RuntimeError((artifacts / "native.log").read_text())
                         try:
-                            window = x("search", "--name", "Fire UI / Studio").splitlines()[0]
+                            window = x("search", "--name", "Fire UI Studio").splitlines()[0]
                             break
                         except subprocess.CalledProcessError:
                             time.sleep(0.1)
@@ -106,37 +116,87 @@ def main():
                         x("mousemove", "--window", window, px, py)
                         x("click", 1)
 
+                    def accessibility_probe():
+                        def call(*arguments):
+                            return subprocess.check_output(["gdbus", "call", *arguments], env=env, stderr=subprocess.PIPE, timeout=5).decode()
+                        # The probe's private X display selects a separate AT-SPI bus.
+                        call("--session", "--dest", "org.a11y.Bus", "--object-path", "/org/a11y/bus", "--method", "org.freedesktop.DBus.Properties.Set", "org.a11y.Status", "IsEnabled", "<true>")
+                        address = call("--session", "--dest", "org.a11y.Bus", "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress").split("'")[1]
+                        def remote(bus, path, method, *arguments):
+                            return call("--address", address, "--dest", bus, "--object-path", path, "--method", method, *arguments)
+                        def children(bus, path):
+                            result = remote(bus, path, "org.a11y.atspi.Accessible.GetChildren")
+                            return re.findall(r"\('([^']+)', (?:objectpath )?'([^']+)'\)", result)
+                        applications = []
+                        for _ in range(40):
+                            applications = children("org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root")
+                            if applications: break
+                            time.sleep(0.05)
+                        queue = list(applications)
+                        visited = set()
+                        trace = []
+                        while queue:
+                            bus, path = queue.pop(0)
+                            if (bus, path) in visited: continue
+                            visited.add((bus, path))
+                            name = remote(bus, path, "org.freedesktop.DBus.Properties.Get", "org.a11y.atspi.Accessible", "Name")
+                            trace.append({"bus": bus, "path": path, "name": name})
+                            if "Add one" in name:
+                                interfaces = remote(bus, path, "org.a11y.atspi.Accessible.GetInterfaces")
+                                if "org.a11y.atspi.Action" in interfaces:
+                                    accepted = remote(bus, path, "org.a11y.atspi.Action.DoAction", "0")
+                                    if "true" not in accepted: raise RuntimeError("Accessibility activation was rejected")
+                                    for _ in range(20):
+                                        delivered = (artifacts / "native.log").read_text()
+                                        if "Left counter: 2" in delivered or "Right counter: 2" in delivered:
+                                            return {"nodes_visited": len(visited), "button_activation": "counter increment verified"}
+                                        time.sleep(0.05)
+                                    raise RuntimeError("Accessibility action did not reach the counter")
+                            queue.extend(children(bus, path))
+                        (artifacts / "accessibility-tree.json").write_text(json.dumps(trace, indent=2))
+                        raise RuntimeError("Accessible button was not published")
+
                     sample("idle")
                     shot("studio-initial.png")
-                    click(320, 163)
+                    click(700, 332)
+                    click(950, 332)
+                    click(100, 285)
                     x("key", "ctrl+a")
                     x("type", "--clearmodifiers", "ab")
                     x("key", "Left")
                     x("type", "X")
-                    time.sleep(0.15)
+                    time.sleep(0.2)
                     shot("studio-editing.png")
                     sample("focused_caret")
-                    click(1020, 55)
-                    time.sleep(0.15)
-                    shot("studio-modal.png")
-                    x("key", "Escape")
-                    click(945, 341)
+                    log.flush()
+                    output = (artifacts / "native.log").read_text()
+                    for expected in ["Left counter: 1", "Right counter: 1", "3 characters in your note"]:
+                        if expected not in output:
+                            raise RuntimeError("Missing interaction result: " + expected + "\n" + output)
+                    click(710, 526)
+                    x("type", "--clearmodifiers", "99999")
                     time.sleep(0.2)
-                    sample("fire_animation")
-                    shot("studio-fire.png")
-                    click(945, 341)
+                    click(710, 570)
+                    time.sleep(0.1)
+                    if "Selected material study 99999" not in (artifacts / "native.log").read_text():
+                        raise RuntimeError("Picker did not filter and emit the selected result")
+                    click(710, 526)
+                    x("key", "ctrl+a", "BackSpace")
+                    click(500, 605)
+                    time.sleep(0.2)
+                    sample("animation")
+                    shot("studio-animation.png")
+                    click(500, 605)
                     time.sleep(0.2)
                     sample("paused_again")
-                    click(935, 540)
-                    # End-to-end observation includes xdotool and screenshot overhead.
-                    # Alternating targets are farther apart than the paddle's width.
+                    # Includes injection and screenshot overhead, not physical display latency.
                     pointer_samples = []
-                    for target in [850, 1050] * 10:
+                    for target in [160, 470] * 10:
                         started = time.monotonic()
-                        x("mousemove", "--window", window, target, 540)
+                        x("mousemove", "--window", window, target, 690)
                         while True:
                             pixels = ImageGrab.grab(xdisplay=env["DISPLAY"])
-                            if pixels.getpixel((target, 674))[:3] == (238, 238, 221):
+                            if pixels.getpixel((target, 739))[:3] == (196, 217, 169):
                                 pointer_samples.append((time.monotonic() - started) * 1000)
                                 break
                             if time.monotonic() - started > 2:
@@ -149,7 +209,6 @@ def main():
                         "max": round(max(pointer_samples), 3),
                         "note": "Injected mouse command to observed paddle pixels; includes command and screenshot overhead on Xvfb.",
                     }
-                    sample("game", seconds=1.0)
                     shot("studio-game.png")
                     for step in range(60):
                         width = 940 + abs(30-step)*6
@@ -159,8 +218,19 @@ def main():
                     x("windowsize", window, 940, 720)
                     time.sleep(0.3)
                     shot("studio-resized.png")
+                    x("windowsize", window, 640, 780)
+                    time.sleep(0.3)
+                    shot("studio-narrow.png")
+                    x("mousemove", "--window", window, 620, 700)
+                    x("click", "--repeat", 15, "--delay", 20, 5)
+                    time.sleep(0.3)
+                    shot("studio-narrow-scrolled.png")
                     if app.poll() is not None:
                         raise RuntimeError("Studio exited during interaction")
+                    if args.accessibility:
+                        x("windowsize", window, 1140, 880)
+                        time.sleep(0.3)
+                        results["accessibility"] = accessibility_probe()
                     results["window_smoke"] = "completed"
             finally:
                 if app is not None and app.poll() is None:

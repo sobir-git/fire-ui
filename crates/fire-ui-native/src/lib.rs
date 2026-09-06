@@ -1,5 +1,8 @@
-//! Optional native window and OpenGL host. `fire-ui` can also be embedded elsewhere.
-mod render;
+//! Optional native window, text, clipboard and presentation services.
+mod accessibility;
+mod painter;
+mod text;
 mod window;
-pub use render::{GlPainter, NativeText};
-pub use window::{run, NativeApp, WakeHandle, WindowOptions};
+pub(crate) use painter::GlPainter;
+pub use text::NativeText;
+pub use window::{run, run_with, WakeHandle, WindowOptions};

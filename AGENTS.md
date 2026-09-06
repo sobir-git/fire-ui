@@ -10,7 +10,9 @@ requires it.
 Do not add compatibility shims, deprecated aliases, parallel old/new APIs, or
 migration machinery to preserve an earlier prototype. Update consumers directly.
 Keeping an existing demo running is not a constraint on architecture decisions.
-Previous implementations and the C7 design are evidence to examine, not contracts
+Remove superseded frameworks from the working tree. Git history is their archive;
+do not keep legacy directories, parallel implementations, or executable design skeletons.
+Previous implementations are evidence to examine in Git history, not contracts
 that future work must preserve. Preserve product requirements and useful behavioral
 counterexamples, not historical implementation choices.
 

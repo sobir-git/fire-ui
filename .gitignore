@@ -35,7 +35,4 @@ target/
 tmp/
 artifacts/
 
-# Vendored patch directories (reconstructed by patches/setup.sh)
-# Only the .patch files, setup.sh, and README.md are tracked
-legacy/fire-notes/patches/winit-0.30.12/
-legacy/fire-notes/patches/smithay-client-toolkit-0.19.2/
+__pycache__/

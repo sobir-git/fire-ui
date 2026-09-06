@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/fire-ui", "crates/fire-ui-widgets", "crates/fire-ui-native", "examples/studio"]
-exclude = ["legacy/fire-notes"]
 
 [profile.release]
 opt-level = 3
