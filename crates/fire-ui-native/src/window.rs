@@ -13,7 +13,7 @@ use raw_window_handle::HasWindowHandle;
 use std::{
     num::NonZeroU32,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -29,6 +29,9 @@ use winit::{
 #[derive(Clone)]
 pub struct WindowOptions {
     pub title: String,
+    pub decorations: bool,
+    pub position: Option<(i32, i32)>,
+    pub font: Option<std::path::PathBuf>,
     pub size: Size,
     pub background: Color,
     pub limits: Limits,
@@ -37,6 +40,9 @@ impl Default for WindowOptions {
     fn default() -> Self {
         Self {
             title: "Fire UI".into(),
+            decorations: true,
+            position: None,
+            font: None,
             size: Size::new(1100., 780.),
             background: Color::hex(0x171918),
             limits: Limits::default(),
@@ -65,6 +71,7 @@ struct Pending<W: Widget> {
 pub struct WakeHandle<W: Widget> {
     proxy: EventLoopProxy<HostEvent>,
     marker: std::marker::PhantomData<fn(W) -> W>,
+    alive: Arc<AtomicBool>,
     count: Arc<AtomicUsize>,
     bytes: Arc<AtomicUsize>,
 }
@@ -73,6 +80,7 @@ impl<W: Widget> Clone for WakeHandle<W> {
         Self {
             proxy: self.proxy.clone(),
             marker: std::marker::PhantomData,
+            alive: self.alive.clone(),
             count: self.count.clone(),
             bytes: self.bytes.clone(),
         }
@@ -94,6 +102,9 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
         ticket: Option<Ticket<W>>,
         command: W::Command,
     ) -> Result<(), (Error, W::Command)> {
+        if !self.alive.load(Ordering::Acquire) {
+            return Err((Error::Stale, command));
+        }
         let bytes = command.bytes();
         if self
             .count
@@ -164,6 +175,7 @@ struct Host<W: Widget, F> {
     ime_session: Option<u64>,
     ime_target: Option<u64>,
     clipboard: Option<arboard::Clipboard>,
+    cursor: Option<CursorIcon>,
     wake: WakeHandle<W>,
     output: F,
     error: Option<String>,
@@ -185,6 +197,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
     let wake = WakeHandle {
         proxy: event_loop.create_proxy(),
         marker: std::marker::PhantomData,
+        alive: Arc::new(AtomicBool::new(true)),
         count: Arc::new(AtomicUsize::new(0)),
         bytes: Arc::new(AtomicUsize::new(0)),
     };
@@ -201,6 +214,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         ime_session: None,
         ime_target: None,
         clipboard: None,
+        cursor: None,
         wake,
         output,
         error: None,
@@ -209,7 +223,9 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         pending_posts: std::collections::VecDeque::new(),
     };
     event_loop.set_control_flow(ControlFlow::Wait);
-    event_loop.run_app(&mut host).map_err(|e| e.to_string())?;
+    let result = event_loop.run_app(&mut host);
+    host.wake.alive.store(false, Ordering::Release);
+    result.map_err(|e| e.to_string())?;
     host.error.map_or(Ok(()), Err)
 }
 impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
@@ -224,11 +240,36 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             |request| requests.push(request),
         );
         for request in requests {
-            if !matches!(request, HostRequest::Close) && self.clipboard.is_none() {
+            if matches!(request, HostRequest::Copy(_) | HostRequest::Paste(_))
+                && self.clipboard.is_none()
+            {
                 self.clipboard = arboard::Clipboard::new().ok()
             }
             match request {
                 HostRequest::Close => self.close_requested = true,
+                HostRequest::Window(action) => match action {
+                    WindowAction::Minimize => s.window.set_minimized(true),
+                    WindowAction::ToggleMaximized => {
+                        s.window.set_maximized(!s.window.is_maximized())
+                    }
+                    WindowAction::Drag => {
+                        let _ = s.window.drag_window();
+                    }
+                    WindowAction::Resize(edge) => {
+                        use winit::window::ResizeDirection as R;
+                        let direction = match edge {
+                            ResizeEdge::North => R::North,
+                            ResizeEdge::South => R::South,
+                            ResizeEdge::East => R::East,
+                            ResizeEdge::West => R::West,
+                            ResizeEdge::NorthEast => R::NorthEast,
+                            ResizeEdge::NorthWest => R::NorthWest,
+                            ResizeEdge::SouthEast => R::SouthEast,
+                            ResizeEdge::SouthWest => R::SouthWest,
+                        };
+                        let _ = s.window.drag_resize_window(direction);
+                    }
+                },
                 HostRequest::Copy(text) => {
                     if let Some(clipboard) = &mut self.clipboard {
                         let _ = clipboard.set_text(text);
@@ -269,6 +310,30 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             }
         }
         s.ui.layout(&mut s.text);
+        let edge = if !self.options.decorations {
+            resize_edge(self.pointer, s.ui.size())
+        } else {
+            None
+        };
+        let cursor = edge
+            .map(CursorIcon::Resize)
+            .unwrap_or_else(|| s.ui.cursor(self.pointer));
+        if self.cursor != Some(cursor) {
+            use winit::window::CursorIcon as NativeCursor;
+            s.window.set_cursor(match cursor {
+                CursorIcon::Arrow => NativeCursor::Default,
+                CursorIcon::Text => NativeCursor::Text,
+                CursorIcon::Pointer => NativeCursor::Pointer,
+                CursorIcon::Resize(edge) => match edge {
+                    ResizeEdge::North | ResizeEdge::South => NativeCursor::NsResize,
+                    ResizeEdge::East | ResizeEdge::West => NativeCursor::EwResize,
+                    ResizeEdge::NorthEast | ResizeEdge::SouthWest => NativeCursor::NeswResize,
+                    ResizeEdge::NorthWest | ResizeEdge::SouthEast => NativeCursor::NwseResize,
+                },
+            });
+            self.cursor = Some(cursor);
+        }
+
         let revision = s.ui.semantic_revision();
         if s.semantic_revision != Some(revision) {
             s.accessibility.update_if_active(|| {
@@ -386,12 +451,28 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
         match event {
             WindowEvent::CloseRequested => {
                 if self.state.as_mut().is_none_or(|s| s.ui.request_close()) {
+                    self.service();
                     event_loop.exit();
                 } else {
                     self.service();
                 }
             }
-            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::Moved(position) => {
+                if let Some(s) = &mut self.state {
+                    s.ui.window_position(position.x, position.y);
+                }
+                self.service();
+            }
+            WindowEvent::DroppedFile(path) => self.input(Input::FileDropped(path)),
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+                self.input(Input::Modifiers(Modifiers {
+                    shift: self.modifiers.shift_key(),
+                    control: self.modifiers.control_key(),
+                    alt: self.modifiers.alt_key(),
+                    meta: self.modifiers.super_key(),
+                }));
+            }
             WindowEvent::Focused(focus) => {
                 if let Some(s) = &mut self.state {
                     s.ui.window_focus(focus)
@@ -560,6 +641,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
         if std::mem::take(&mut self.close_requested)
             && self.state.as_mut().is_none_or(|s| s.ui.request_close())
         {
+            self.service();
             event_loop.exit();
             return;
         }
@@ -616,9 +698,15 @@ fn create<W: Widget>(
 ) -> Result<State<W>, String> {
     let attrs = Window::default_attributes()
         .with_visible(false)
+        .with_decorations(options.decorations)
         .with_title(&options.title)
         .with_inner_size(LogicalSize::new(options.size.width, options.size.height))
         .with_min_inner_size(LogicalSize::new(420., 360.));
+    let attrs = if let Some((x, y)) = options.position {
+        attrs.with_position(winit::dpi::PhysicalPosition::new(x, y))
+    } else {
+        attrs
+    };
     let (window, config) = DisplayBuilder::new()
         .with_window_attributes(Some(attrs))
         .build(
@@ -661,7 +749,11 @@ fn create<W: Widget>(
     let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
     let renderer = unsafe { OpenGl::new_from_function_cstr(|name| display.get_proc_address(name)) }
         .map_err(|e| e.to_string())?;
-    let text = NativeText::new()?;
+    let text = if let Some(path) = &options.font {
+        NativeText::with_font(path)?
+    } else {
+        NativeText::new()?
+    };
     let canvas =
         Canvas::new_with_text_context(renderer, text.context.clone()).map_err(|e| e.to_string())?;
     let ui = Ui::new(root, options.size, options.limits)
@@ -721,4 +813,22 @@ fn render<W: Widget>(s: &mut State<W>, background: Color, profile: bool) -> Resu
         }
     }
     Ok(())
+}
+
+fn resize_edge(p: Point, size: Size) -> Option<ResizeEdge> {
+    let left = p.x < 4.;
+    let right = p.x >= size.width - 4.;
+    let top = p.y < 4.;
+    let bottom = p.y >= size.height - 4.;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some(ResizeEdge::NorthWest),
+        (_, true, true, _) => Some(ResizeEdge::NorthEast),
+        (true, _, _, true) => Some(ResizeEdge::SouthWest),
+        (_, true, _, true) => Some(ResizeEdge::SouthEast),
+        (true, _, _, _) => Some(ResizeEdge::West),
+        (_, true, _, _) => Some(ResizeEdge::East),
+        (_, _, true, _) => Some(ResizeEdge::North),
+        (_, _, _, true) => Some(ResizeEdge::South),
+        _ => None,
+    }
 }

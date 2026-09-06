@@ -52,12 +52,32 @@ pub struct PasteToken {
     owner: Id,
     session: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeEdge {
+    North,
+    South,
+    East,
+    West,
+    NorthEast,
+    NorthWest,
+    SouthEast,
+    SouthWest,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowAction {
+    Minimize,
+    ToggleMaximized,
+    Drag,
+    Resize(ResizeEdge),
+}
 pub enum HostRequest {
+    Window(WindowAction),
     Close,
     Copy(String),
     Paste(PasteToken),
 }
 pub(crate) enum Delivery {
+    Window(WindowAction),
     Close,
     Mount(Id),
     Command(Id, Payload, Option<(Id, u64)>),
@@ -433,8 +453,17 @@ impl<W: Widget> Ui<W> {
                 }
             }
             Mutation::Focus(id) => {
-                if self.eligible(id) && self.window_focused {
-                    self.change_focus(Some(id))
+                if self.eligible(id) {
+                    if self.window_focused {
+                        self.change_focus(Some(id))
+                    } else if self
+                        .tree
+                        .get(id)
+                        .and_then(|n| n.widget.as_ref())
+                        .is_some_and(|w| w.focusable())
+                    {
+                        self.window_saved_focus = Some(id);
+                    }
                 }
             }
             Mutation::Capture(pointer, true) => {
@@ -684,6 +713,7 @@ impl<W: Widget> Ui<W> {
             done += 1;
             match item {
                 Delivery::Close => platform(HostRequest::Close),
+                Delivery::Window(action) => platform(HostRequest::Window(action)),
                 Delivery::Mount(id) => {
                     if let Some(n) = self.tree.get_mut(id) {
                         n.mounted = true;
@@ -764,6 +794,14 @@ impl<W: Widget> Ui<W> {
                 true,
             );
         }
+    }
+    pub fn window_position(&mut self, x: i32, y: i32) {
+        self.invoke(self.root, false, false, |w, cx| {
+            w.lifecycle(cx, Lifecycle::Moved { x, y })
+        });
+    }
+    pub fn size(&self) -> Size {
+        self.size
     }
     pub fn resize(&mut self, size: Size) {
         if size.valid() && size != self.size {
@@ -950,6 +988,12 @@ impl<W: Widget> Ui<W> {
     }
     pub fn dispatch(&mut self, input: Input, text: &mut dyn TextEngine) {
         self.layout(text);
+        if matches!(input, Input::FileDropped(_)) {
+            self.invoke(self.root, false, false, |w, cx| {
+                w.input(cx, Phase::Target, &input)
+            });
+            return;
+        }
         if !self.window_focused {
             return;
         }
@@ -1212,6 +1256,24 @@ impl<W: Widget> Ui<W> {
                 })
             })
             .collect()
+    }
+    /// Resolve the pointer shape through the hovered widget and its ancestors.
+    pub fn cursor(&self, position: Point) -> CursorIcon {
+        let mut current = self.hover;
+        while let Some(id) = current {
+            let Some(node) = self.tree.get(id) else { break };
+            if let Some(local) = node.geometry.transform.inverse() {
+                if let Some(cursor) = node
+                    .widget
+                    .as_ref()
+                    .and_then(|w| w.cursor(local.point(position)))
+                {
+                    return cursor;
+                }
+            }
+            current = node.parent;
+        }
+        CursorIcon::Arrow
     }
     /// The focused editor's published caret rectangle, without allocating a semantic tree.
     pub fn ime_cursor(&self) -> Option<Rect> {

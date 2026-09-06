@@ -235,3 +235,246 @@ fn rejected_oversized_edit_preserves_selection_content_and_undo() {
     settle(&mut ui, &mut text);
     assert_eq!(ui.root().text(), "café");
 }
+
+#[test]
+fn focus_requested_before_window_activation_is_restored_on_activation() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("").caret_blink(false)),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    ui.window_focus(false);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus);
+    assert!(ui.ime_cursor().is_none());
+    ui.window_focus(true);
+    assert!(ui.ime_cursor().is_some());
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "ready immediately".into(),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "ready immediately");
+}
+
+fn modified_key(ui: &mut Ui<Editor>, key: Key, modifiers: Modifiers) {
+    ui.dispatch(
+        Input::Key {
+            key,
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers,
+        },
+        &mut TestText,
+    );
+    settle(ui, &mut TestText);
+}
+#[test]
+fn moving_selected_lines_preserves_selection_and_is_undoable() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("one\ntwo\nthree\nfour")),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus);
+    ui.send(Edit::Select {
+        anchor: 4,
+        caret: 8,
+    })
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    modified_key(
+        &mut ui,
+        Key::Down,
+        Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        },
+    );
+    assert_eq!(ui.root().text(), "one\nthree\ntwo\nfour");
+    assert_eq!(ui.root().selection(), Some(10..14));
+    modified_key(
+        &mut ui,
+        Key::Up,
+        Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        },
+    );
+    assert_eq!(ui.root().text(), "one\ntwo\nthree\nfour");
+    assert_eq!(ui.root().selection(), Some(4..8));
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "one\nthree\ntwo\nfour");
+}
+#[test]
+fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
+    let text = (0..200).map(|i| format!("line {i}\n")).collect::<String>();
+    let state = EditorState {
+        caret: Caret::at(0),
+        anchor: None,
+        scroll: Point::new(0., 600.),
+        wrap: false,
+    };
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new(text).padding(16., 8.).restore(state)),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().state().scroll.y, 600.);
+    ui.send(Edit::Wrap(false)).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().state().scroll.y, 600.);
+    ui.resize(Size::new(320., 240.));
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().state().scroll.y, 600.);
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(317., 210.),
+        },
+        &mut TestText,
+    );
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(317., 235.),
+        },
+        &mut TestText,
+    );
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: false,
+            position: Point::new(317., 235.),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    assert!(ui.root().state().scroll.y > 3000.);
+    assert_eq!(ui.root().state().caret.byte, 0);
+}
+#[test]
+fn shift_click_double_click_and_triple_click_select_expected_text() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("one two\nthree").padding(0., 0.)),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let p = ui.root().paragraph().unwrap().clone();
+    let position = p.caret_point(Caret::at(5));
+    for clicks in 1..=3 {
+        ui.advance(std::time::Duration::from_millis(clicks * 100), 100);
+        ui.dispatch(
+            Input::Button {
+                pointer: 0,
+                button: 1,
+                down: true,
+                position,
+            },
+            &mut TestText,
+        );
+        ui.dispatch(
+            Input::Button {
+                pointer: 0,
+                button: 1,
+                down: false,
+                position,
+            },
+            &mut TestText,
+        );
+        settle(&mut ui, &mut TestText);
+        if clicks == 2 {
+            assert_eq!(ui.root().selection(), Some(4..7));
+        }
+        if clicks == 3 {
+            assert_eq!(ui.root().selection(), Some(0..8));
+        }
+    }
+    ui.send(Edit::Select {
+        anchor: 0,
+        caret: 0,
+    })
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.dispatch(
+        Input::Modifiers(Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        }),
+        &mut TestText,
+    );
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position,
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.root().selection(), Some(0..5));
+}
+#[test]
+fn list_navigation_and_hover_update_the_selected_row_environment() {
+    let mut ui = Ui::new(
+        Element::leaf(
+            VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
+                Element::leaf(Label::new(k.to_string()))
+            })
+            .select_on_hover(true),
+        ),
+        Size::new(200., 90.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.send(ListCommand::Navigate(1)).unwrap();
+    ui.send(ListCommand::Navigate(1)).unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.send(ListCommand::Activate).unwrap();
+    let mut selected = None;
+    ui.pump(
+        100,
+        |o| {
+            let ListOutput::Selected(k) = o;
+            selected = Some(k);
+        },
+        |_| {},
+    );
+    assert_eq!(selected, Some(1));
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(10., 70.),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    ui.send(ListCommand::Activate).unwrap();
+    ui.pump(
+        100,
+        |o| {
+            let ListOutput::Selected(k) = o;
+            selected = Some(k);
+        },
+        |_| {},
+    );
+    assert_eq!(selected, Some(2));
+}

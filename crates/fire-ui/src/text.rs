@@ -54,15 +54,17 @@ pub struct Paragraph {
 }
 impl Paragraph {
     pub fn caret_point(&self, caret: Caret) -> Point {
-        let mut lines = self
+        let mut index = self
             .lines
-            .iter()
-            .filter(|l| l.range.contains(&caret.byte) || l.range.end == caret.byte);
-        let line = match caret.affinity {
-            Affinity::Upstream => lines.clone().next(),
-            Affinity::Downstream => lines.next_back(),
+            .partition_point(|line| line.range.start <= caret.byte)
+            .saturating_sub(1);
+        if caret.affinity == Affinity::Upstream
+            && index > 0
+            && self.lines[index - 1].range.end == caret.byte
+        {
+            index -= 1;
         }
-        .or(self.lines.last());
+        let line = self.lines.get(index);
         line.map(|l| {
             Point::new(
                 l.stops
@@ -86,8 +88,15 @@ impl Paragraph {
             .map_or(Caret::at(0), |s| s.caret)
     }
     pub fn selection(&self, range: Range<usize>) -> Vec<Rect> {
-        self.lines
+        self.selection_in(range, Rect::new(0., 0., f32::MAX, f32::MAX))
+    }
+    pub fn selection_in(&self, range: Range<usize>, viewport: Rect) -> Vec<Rect> {
+        let first = self
+            .lines
+            .partition_point(|l| l.y + self.line_height < viewport.y);
+        self.lines[first..]
             .iter()
+            .take_while(|l| l.y < viewport.y + viewport.height)
             .filter_map(|l| {
                 let start = range.start.max(l.range.start);
                 let end = range.end.min(l.range.end);

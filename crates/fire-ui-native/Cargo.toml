@@ -13,3 +13,4 @@ arboard={version="3",default-features=false}
 unicode-segmentation="1.12"
 accesskit_winit = "0.33.2"
 accesskit = "0.24"
+native-dialog = "0.7"

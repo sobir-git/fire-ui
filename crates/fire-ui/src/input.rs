@@ -36,6 +36,8 @@ pub enum Phase {
 }
 #[derive(Clone, Debug)]
 pub enum Input {
+    Modifiers(Modifiers),
+    FileDropped(std::path::PathBuf),
     Pointer {
         pointer: u32,
         position: Point,
@@ -90,6 +92,7 @@ impl Input {
 pub enum Lifecycle {
     Mount,
     Resized,
+    Moved { x: i32, y: i32 },
     Unmount,
     Visibility(bool),
     Focus(bool),
@@ -97,4 +100,14 @@ pub enum Lifecycle {
     CancelKeys,
     Hover(bool),
     Anchor(bool),
+}
+
+/// Native pointer shape, inherited from the nearest widget that supplies one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CursorIcon {
+    #[default]
+    Arrow,
+    Text,
+    Pointer,
+    Resize(crate::ResizeEdge),
 }

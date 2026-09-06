@@ -90,6 +90,7 @@ impl Painter for GlPainter<'_> {
     fn paragraph(&mut self, p: &Paragraph, origin: Point, b: Brush) {
         let mut paint = brush(b);
         self.text.configure(&mut paint, p.style);
+        paint.set_text_baseline(femtovg::Baseline::Alphabetic);
         let Some(inverse) = Transform(self.canvas.transform().0).inverse() else {
             return;
         };
@@ -98,12 +99,21 @@ impl Painter for GlPainter<'_> {
         let bottom = top + visible.height;
         let first = p.lines.partition_point(|line| line.y + p.line_height < top);
         for line in p.lines[first..].iter().take_while(|line| line.y < bottom) {
-            let _ = self.canvas.fill_text(
-                origin.x,
-                origin.y + line.y,
-                &p.text[line.range.clone()],
-                &paint,
-            );
+            let mut byte = line.range.start;
+            for run in p.text[line.range.clone()].split('\t') {
+                let x = line
+                    .stops
+                    .binary_search_by_key(&byte, |s| s.caret.byte)
+                    .ok()
+                    .map_or(0., |i| line.stops[i].x);
+                let _ = self.canvas.fill_text(
+                    origin.x + x,
+                    (origin.y + line.y + p.baseline).round(),
+                    run,
+                    &paint,
+                );
+                byte += run.len() + 1;
+            }
         }
     }
     fn custom(&mut self, paint: &dyn CustomPaint) -> bool {

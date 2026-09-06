@@ -1,42 +1,42 @@
 {
   "binary": "target/release/fire-ui-studio",
-  "binary_bytes": 7801784,
+  "binary_bytes": 7848160,
   "backend": "Xvfb / Mesa software GL",
   "samples": {
     "idle": {
       "seconds": 2.0,
       "cpu_percent_one_core": 0.0,
       "cpu_ticks": 0,
-      "rss_kib": 138788,
+      "rss_kib": 143724,
       "threads": 37
     },
     "focused_caret": {
       "seconds": 2.0,
-      "cpu_percent_one_core": 7.0,
-      "cpu_ticks": 14,
-      "rss_kib": 133540,
+      "cpu_percent_one_core": 4.5,
+      "cpu_ticks": 9,
+      "rss_kib": 135048,
       "threads": 37
     },
     "animation": {
       "seconds": 2.0,
-      "cpu_percent_one_core": 212.492,
-      "cpu_ticks": 425,
-      "rss_kib": 137456,
+      "cpu_percent_one_core": 139.487,
+      "cpu_ticks": 279,
+      "rss_kib": 139608,
       "threads": 37
     },
     "paused_again": {
       "seconds": 2.0,
       "cpu_percent_one_core": 0.0,
       "cpu_ticks": 0,
-      "rss_kib": 137456,
+      "rss_kib": 139608,
       "threads": 37
     }
   },
   "paddle_move_to_visible_ms": {
     "samples": 20,
-    "p50": 22.808,
-    "p95": 49.394,
-    "max": 49.394,
+    "p50": 12.836,
+    "p95": 15.321,
+    "max": 15.321,
     "note": "Injected mouse command to observed paddle pixels; includes command and screenshot overhead on Xvfb."
   },
   "accessibility": {
@@ -46,10 +46,11 @@
   "window_smoke": "completed",
   "resize_event_to_swap_ms": {
     "rendered_samples": 63,
-    "p50": 9.743,
-    "p95": 15.39,
-    "max": 21.663,
+    "p50": 6.361,
+    "p95": 7.521,
+    "max": 8.84,
     "note": "Latest resize event received by app to completed swap; software GL. Not compositor presentation latency."
   },
-  "binary_sha256": "e0c2c83236881e160bf7d9af67936db0200a781c85ee3c0a771664dd0a42d175"
+  "date": "2026-09-07",
+  "binary_sha256": "71293199fe79691c54b1e210153f8ba3c21f49c8062d28c48b4ab18b2b2b8bd2"
 }

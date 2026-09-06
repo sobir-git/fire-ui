@@ -1,8 +1,16 @@
 use fire_ui::*;
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, hash::Hash, rc::Rc};
+
+/// Inherited by row content so custom rows can style their current selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListRowState {
+    pub selected: bool,
+}
 #[derive(Clone, Debug)]
 pub enum ListCommand<K, O> {
     Keys(Vec<K>),
+    Navigate(i32),
+    Activate,
     ScrollTo(K),
     Row(K, O),
 }
@@ -11,6 +19,7 @@ impl<K: Data, O: Data> Data for ListCommand<K, O> {
         std::mem::size_of::<Self>()
             + match self {
                 Self::Keys(keys) => keys.iter().map(Data::bytes).sum(),
+                Self::Navigate(_) | Self::Activate => 0,
                 Self::ScrollTo(k) => k.bytes(),
                 Self::Row(k, o) => k.bytes() + o.bytes(),
             }
@@ -46,6 +55,9 @@ where
     height: f32,
     selected: Option<K>,
     pending: bool,
+    hover_selection: bool,
+    pressed: Option<u32>,
+    row_states: HashMap<K, bool>,
 }
 impl<K, R, F> VirtualList<K, R, F>
 where
@@ -66,7 +78,14 @@ where
             height: 0.,
             selected: None,
             pending: false,
+            hover_selection: false,
+            pressed: None,
+            row_states: HashMap::new(),
         }
+    }
+    pub fn select_on_hover(mut self, enabled: bool) -> Self {
+        self.hover_selection = enabled;
+        self
     }
     fn index(keys: &[K]) -> HashMap<K, usize> {
         let mut indices = HashMap::with_capacity(keys.len());
@@ -83,6 +102,26 @@ where
     }
     pub fn row(&self, key: &K) -> Option<Child<R>> {
         self.rows.iter().find(|(k, _)| k == key).map(|(_, c)| *c)
+    }
+    fn navigate(&mut self, cx: &mut Update<'_, Self>, delta: i32) {
+        if self.keys.is_empty() {
+            return;
+        }
+        let old = self
+            .selected
+            .as_ref()
+            .and_then(|k| self.indices.get(k).copied());
+        let index = old.map_or(0, |i| {
+            (i as i64 + delta as i64).clamp(0, self.keys.len() as i64 - 1) as usize
+        });
+        self.selected = Some(self.keys[index].clone());
+        if index as f32 * self.row_height < self.offset {
+            self.offset = index as f32 * self.row_height;
+        }
+        if (index + 1) as f32 * self.row_height > self.offset + self.height {
+            self.offset = (index + 1) as f32 * self.row_height - self.height;
+        }
+        self.sync(cx);
     }
     fn sync(&mut self, cx: &mut Update<'_, Self>) {
         let first = (self.offset / self.row_height).floor().max(0.) as usize;
@@ -117,6 +156,18 @@ where
                 }
             }
         }
+        self.row_states
+            .retain(|key, _| self.rows.iter().any(|(k, _)| k == key));
+        for (key, child) in &self.rows {
+            let selected = self.selected.as_ref() == Some(key);
+            if self.row_states.get(key) != Some(&selected)
+                && cx
+                    .set_environment(*child, Rc::new(ListRowState { selected }), false)
+                    .is_ok()
+            {
+                self.row_states.insert(key.clone(), selected);
+            }
+        }
         if self.pending {
             cx.request_frame();
         }
@@ -144,6 +195,12 @@ where
     }
     fn update(&mut self, cx: &mut Update<'_, Self>, command: Self::Command) {
         match command {
+            ListCommand::Navigate(delta) => self.navigate(cx, delta),
+            ListCommand::Activate => {
+                if let Some(key) = &self.selected {
+                    let _ = cx.emit(ListOutput::Selected(key.clone()));
+                }
+            }
             ListCommand::Keys(keys) => {
                 self.indices = Self::index(&keys);
                 self.keys = keys;
@@ -171,6 +228,9 @@ where
                 let _ = cx.emit(ListOutput::Row(key, output));
             }
         }
+    }
+    fn cursor(&self, _position: Point) -> Option<CursorIcon> {
+        Some(CursorIcon::Pointer)
     }
     fn focusable(&self) -> bool {
         true
@@ -200,6 +260,17 @@ where
             return;
         }
         match input {
+            Input::Pointer { position, .. } if self.hover_selection => {
+                let index = ((position.y + self.offset) / self.row_height)
+                    .floor()
+                    .max(0.) as usize;
+                if let Some(key) = self.keys.get(index) {
+                    if self.selected.as_ref() != Some(key) {
+                        self.selected = Some(key.clone());
+                        self.sync(cx);
+                    }
+                }
+            }
             Input::Scroll { delta, .. } => {
                 self.offset = (self.offset - delta.y).clamp(
                     0.,
@@ -211,17 +282,28 @@ where
             Input::Button {
                 button: 1,
                 down: true,
+                pointer,
                 ..
             } => {
+                self.pressed = Some(*pointer);
+                let _ = cx.capture(*pointer);
                 let _ = cx.focus();
                 cx.stop()
             }
             Input::Button {
                 button: 1,
                 down: false,
+                pointer,
                 position,
                 ..
             } => {
+                if self.pressed.take() != Some(*pointer) {
+                    return;
+                }
+                let _ = cx.release(*pointer);
+                if !cx.bounds().contains(*position) {
+                    return;
+                }
                 let index = ((position.y + self.offset) / self.row_height)
                     .floor()
                     .max(0.) as usize;
@@ -237,30 +319,15 @@ where
                 down: true,
                 ..
             } => {
-                if !self.keys.is_empty() {
-                    let i = self
-                        .selected
-                        .as_ref()
-                        .and_then(|k| self.indices.get(k).copied())
-                        .unwrap_or(0);
-                    let up = matches!(input, Input::Key { key: Key::Up, .. });
-                    let i = if self.selected.is_none() {
-                        0
-                    } else if up {
-                        i.saturating_sub(1)
+                self.navigate(
+                    cx,
+                    if matches!(input, Input::Key { key: Key::Up, .. }) {
+                        -1
                     } else {
-                        (i + 1).min(self.keys.len() - 1)
-                    };
-                    self.selected = Some(self.keys[i].clone());
-                    if i as f32 * self.row_height < self.offset {
-                        self.offset = i as f32 * self.row_height
-                    }
-                    if (i + 1) as f32 * self.row_height > self.offset + self.height {
-                        self.offset = (i + 1) as f32 * self.row_height - self.height
-                    }
-                    self.sync(cx);
-                    cx.stop()
-                }
+                        1
+                    },
+                );
+                cx.stop();
             }
             Input::Key {
                 key: Key::Enter,

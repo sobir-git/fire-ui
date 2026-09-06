@@ -68,3 +68,30 @@ fn wrapping_prefers_words_and_keeps_every_byte() {
     assert!(p.lines.len() > 5);
     assert!(p.lines.iter().all(|line| !line.range.is_empty()));
 }
+
+#[test]
+fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
+    let mut text = NativeText::new().unwrap();
+    let mut layout = |s: &str| {
+        text.layout(TextRequest {
+            text: Arc::from(s),
+            style: TextStyle::default(),
+            width: None,
+            revision: 0,
+        })
+    };
+    let space = layout(" ").size.width;
+    let prefix = layout("a").size.width;
+    let p = layout("a\tb\t");
+    assert_eq!(&*p.text, "a\tb\t");
+    assert!((p.caret_point(Caret::at(2)).x - prefix - 4. * space).abs() < 0.1);
+    assert_eq!(
+        p.lines[0]
+            .stops
+            .iter()
+            .map(|s| s.caret.byte)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4]
+    );
+    assert!((p.selection(1..2)[0].width - 4. * space).abs() < 0.1);
+}

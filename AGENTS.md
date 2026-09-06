@@ -34,3 +34,9 @@ Use architectural experiments and independent review when they answer a concrete
 question. Adapt the dry-run skill's reasoning; do not follow its ceremony blindly.
 Prefer a coherent smaller design over accumulated special cases or speculative
 generality. Passing correctness tests alone does not establish design elegance.
+
+Fire Notes must reproduce the original app's compact black-and-orange UI and useful
+behavior on the new framework. Animated fire on typed and selected text is mandatory.
+Use the original in Git history as visual and interaction evidence. Close framework
+gaps revealed by the app through reusable public capabilities, without restoring
+old framework implementations. Verify real native interactions and screenshots.

@@ -10,6 +10,16 @@ pub struct NativeText {
     pub layouts: u64,
 }
 impl NativeText {
+    pub fn with_font(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let context = TextContext::default();
+        let font = context.add_font_file(path).map_err(|e| e.to_string())?;
+        Ok(Self {
+            context,
+            fonts: vec![font],
+            revision: 0,
+            layouts: 0,
+        })
+    }
     pub fn new() -> Result<Self, String> {
         let context = TextContext::default();
         let mut fonts = vec![];
@@ -54,6 +64,27 @@ impl NativeText {
         paint.set_text_baseline(femtovg::Baseline::Top);
     }
     fn stops(&self, text: &str, style: TextStyle) -> (f32, Vec<Stop>) {
+        if text.contains('\t') {
+            let advance = self.stops(" ", style).0 * 4.;
+            let mut stops = vec![];
+            let mut x = 0.;
+            let mut base = 0;
+            for (index, run) in text.split('\t').enumerate() {
+                if index > 0 {
+                    x += advance;
+                    base += 1;
+                }
+                let (width, part) = self.stops(run, style);
+                stops.extend(part.into_iter().map(|s| Stop {
+                    caret: Caret::at(base + s.caret.byte),
+                    x: x + s.x,
+                }));
+                x += width;
+                base += run.len();
+            }
+            return (x, stops);
+        }
+
         let mut paint = femtovg::Paint::default();
         self.configure(&mut paint, style);
         let Ok(metrics) = self.context.measure_text(0., 0., text, &paint) else {

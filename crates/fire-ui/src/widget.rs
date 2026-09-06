@@ -125,6 +125,9 @@ pub trait Widget: Any + Sized {
     fn focusable(&self) -> bool {
         false
     }
+    fn cursor(&self, _position: Point) -> Option<CursorIcon> {
+        None
+    }
     fn ime_cursor(&self) -> Option<Rect> {
         None
     }
@@ -154,6 +157,7 @@ pub(crate) trait Erased {
     fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics;
     fn paint(&self, cx: &mut Paint<'_>);
     fn focusable(&self) -> bool;
+    fn cursor(&self, position: Point) -> Option<CursorIcon>;
     fn ime_cursor(&self) -> Option<Rect>;
     fn semantics(&self) -> Semantics;
     fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction);
@@ -193,6 +197,9 @@ impl<W: Widget> Erased for W {
     }
     fn focusable(&self) -> bool {
         self.focusable()
+    }
+    fn cursor(&self, position: Point) -> Option<CursorIcon> {
+        self.cursor(position)
     }
     fn ime_cursor(&self) -> Option<Rect> {
         self.ime_cursor()

@@ -73,7 +73,9 @@ content at viewport width and derives the extent.
 Buttons own arbitrary ordinary content and add activation, capture, focus, semantics
 and appearance. Decorative content leaves activation to the button. A virtual list
 accepts a row factory and unique stable keys, keeps visible rows plus overscan mounted,
-and owns selection/navigation. Its fixed row height is explicit. Key indexing avoids
+and owns selection/navigation. Selection is published to row content through
+`ListRowState`; optional hover selection supports pickers. Navigation can be driven
+by an owner while focus remains in its search field. Its fixed row height is explicit. Key indexing avoids
 scanning the entire dataset while laying out visible rows.
 
 Immutable theme values propagate through an affected subtree until a nested explicit
@@ -94,6 +96,18 @@ preedit, undo and redo. Programmatic `Set` is silent; actual edits emit a revisi
 text snapshot. Undo history is bounded. An optional byte limit rejects growth with
 an explicit output, preserving the previous text and selection. Caret blinking can
 be disabled without losing the visible caret, allowing a focused notes editor to sleep.
+`EditorState` restores caret, anchor, scroll and wrap together, without forcing the
+caret back into view. Selection and scrolling emit state updates separately from
+text edits. Focus changes are also observable by consumers such as inline rename.
+The editor supports word/line clicks, Shift-click, line movement and scrollbar drag.
+
+`EditorDecoration` receives the editor's shared paragraph, selection, caret and
+visible rectangle. It paints behind or above text through the ordinary `Painter`.
+Its frame callback asks for another frame only while needed. Fire Notes implements
+its bounded particle effect entirely through this public extension, without runtime
+or renderer access. Visible selection geometry and caret-line lookup avoid scanning
+the entire document on each animated frame.
+
 Native wrapping prefers whitespace boundaries and falls back to graphemes for long words.
 Shared immutable paragraphs provide drawing,
 caret hit testing, selection geometry and IME cursor position. Native measurement and
@@ -119,11 +133,19 @@ older result after its replacement.
 
 The host asks the root's `close_requested` hook before exiting. A root may defer
 closing while a save completes, then request another close with `Update::close_window`.
-Only the root can request window closure. Keyboard events with no focused child
+The host pumps outputs from that final hook before exiting and closes worker wake
+handles before dropping output handlers, so writer shutdown cannot wait forever on
+a full event queue. Only the root can request window closure or native window actions.
+`WindowAction` exposes minimize, maximize, drag and edge resize. `WindowOptions`
+controls native decorations, font and initial placement. Move events reach the root
+as lifecycle data. Widget cursor choices inherit through ownership; native pointer
+shapes update without relayout. File drops reach the root, and blocking system file
+choosers can run on a platform dialog thread. Keyboard events with no focused child
 target the root, so empty applications can still handle their shortcuts.
 
 Fire Notes keeps an editor subtree for each open tab and metadata for other notes.
-It loads closed notes on demand. One worker batches the latest save snapshot per
+It loads closed notes on demand. Raw file content is independent of title metadata;
+per-tab editor state and window placement live in the session. One worker batches the latest save snapshot per
 note and writes through a temporary file and rename. Revision acknowledgments
 prevent an older save from marking newer text clean. Unsaved closed notes retain
 their body until the latest write completes. This is local single-writer storage;

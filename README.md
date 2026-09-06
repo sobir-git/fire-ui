@@ -7,28 +7,46 @@ The framework and reusable widgets are the product. Fire Notes is a consumer.
 cargo run --release -p fire-notes
 ```
 
-Fire Notes has editable titles, independent editor state per tab, note search,
-a command palette, file opening, undo/redo and automatic Markdown saving. It uses
-the public framework and widgets throughout. Saves run on one background thread;
-closing waits for outstanding note saves and keeps the window open on failure.
+Fire Notes reproduces the original compact black-and-orange interface: inline tab
+titles, warm monospaced text, a caret-anchored command palette, and animated fire on
+typed and selected text. The app composes the new framework's public widgets and
+editor decoration API. The old renderer and widgets are not part of the build.
 
 Notes live in `tmp/fire-notes` by default. Set `FIRE_NOTES_DIR` or pass
-`--data-dir PATH` to choose another folder. A note is a Markdown file with its title
-in the first heading. Closing a tab keeps the file. Session state remembers open
-tabs and window size. This prototype has no earlier-format migration, file watching,
-or concurrent-writer conflict resolution. It supports up to 16 open tabs, a 2 MiB
-body and a 4 KiB title per note. Large-document editing still needs performance work.
+`--data-dir PATH` to choose another folder. Files contain raw Markdown or plain text;
+titles and session state are separate metadata. Closing a tab keeps its file. The
+session remembers tab order, active note, caret, selection, scroll, per-tab wrap,
+window size and position. Saves run on one background thread. Closing waits for
+outstanding note saves and keeps the window open if a note cannot be saved.
 
-| Shortcut | Action |
+| Shortcut or gesture | Action |
 | --- | --- |
-| Ctrl N / Ctrl W | New note / close tab |
-| Ctrl Tab / Ctrl Shift Tab | Next / previous tab |
-| Ctrl P / Ctrl O | Find note / open file path |
-| Ctrl / | Command palette |
-| Ctrl S | Save or retry a failed save |
+| Ctrl N / Ctrl W | New note / close tab; the last tab stays open |
+| Ctrl Tab / Ctrl Shift Tab / Ctrl 1–9 | Switch tabs |
+| Ctrl R / right or middle click tab | Rename; Enter or blur commits, Escape cancels |
+| Drag tab / wheel over tabs | Reorder / scroll tabs |
+| Ctrl P | Search saved notes |
+| Ctrl O / drop a file | Open a Markdown or text file |
+| Ctrl Shift O | Open by entering a path |
+| Ctrl / | Commands beside the caret |
+| Ctrl S / Ctrl Shift S | Save / system Save As dialog |
 | Ctrl Z / Ctrl Shift Z / Ctrl Y | Undo / redo |
-| Alt Z | Toggle word wrap |
+| Ctrl C / Ctrl X / Ctrl V | Clipboard |
+| Alt Z | Toggle this tab's word wrap, off by default |
+| Alt Up / Alt Down | Move the current or selected lines |
+| Double / triple click, Shift click | Select word / line, extend selection |
 | Ctrl Q | Save and quit |
+
+Arrow, word, line, document and page navigation support keyboard selection. Drag
+selection scrolls beyond the viewport; the scrollbar also supports dragging. Custom
+window controls support minimize, maximize/restore, drag and edge resizing. Fire
+animation stops after typing fades, when selection clears, or when the editor loses
+focus. It does not keep an idle editor repainting.
+
+This prototype has no format migration, file watching or concurrent-writer conflict
+resolution. Note bodies are limited to 2 MiB and titles to 4 KiB; the framework editor's
+byte limit is configurable. There is no app-specific open-tab cap, although framework
+node and message budgets still apply. Large-document editing needs further profiling.
 
 The framework studio is a separate consumer:
 
@@ -70,7 +88,8 @@ It exercises real input, verifies an accessibility-triggered counter increment, 
 idle CPU, memory, resizing and visible paddle response. `FIRE_UI_FONT` selects a
 TrueType font if the platform's default font cannot be found.
 
-The notes probe uses temporary files and its own display. It checks editing,
+The notes probe also requires xclip and a native file chooser such as Zenity. It
+uses temporary files, isolated chooser settings and its own display. It checks editing,
 autosave, independent tabs, pickers, external file loading, narrow layouts,
 save-before-close and restart, and records screenshots and process measurements.
 Its optional `--telegram` flag sends screenshots using the locally installed
