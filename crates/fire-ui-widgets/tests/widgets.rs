@@ -177,3 +177,61 @@ fn editor_focus_and_blink_recover_after_blur_and_occlusion() {
     assert!(ui.ime_cursor().is_some());
     assert!(ui.next_work().deadline.is_some());
 }
+
+#[test]
+fn quiet_editor_keeps_a_caret_without_scheduling_idle_work() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("Quiet writing").caret_blink(false)),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus);
+    ui.send(Edit::Insert("A".into())).unwrap();
+    settle(&mut ui, &mut text);
+    assert!(ui.ime_cursor().is_some());
+    assert!(ui.next_work().deadline.is_none());
+    assert!(!ui.next_work().ready);
+}
+
+#[test]
+fn rejected_oversized_edit_preserves_selection_content_and_undo() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("café").max_bytes(6)),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    ui.send(Edit::Select {
+        anchor: 5,
+        caret: 5,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    ui.send(Edit::Insert("!".into())).unwrap();
+    settle(&mut ui, &mut text);
+    ui.send(Edit::Select {
+        anchor: 0,
+        caret: 6,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    ui.send(Edit::Insert("too long".into())).unwrap();
+    let mut rejected = false;
+    ui.pump(
+        100,
+        |o| rejected |= matches!(o, EditorOutput::LimitReached),
+        |_| {},
+    );
+    assert!(rejected);
+    assert_eq!(ui.root().text(), "café!");
+    assert_eq!(ui.root().selection(), Some(0..6));
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "café");
+}

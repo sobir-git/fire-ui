@@ -1,9 +1,35 @@
 # Native measurements
 
-Measured on 2026-09-06 with the replacement framework, release optimization,
+The studio baseline was measured on 2026-09-06 at framework checkpoint `33ceebc`, with release optimization,
 Xvfb and Mesa software rendering. These are prototype measurements, not hardware
 GPU or physical display latency results. [Raw results](benchmarks/native.json)
 include the measured binary's SHA-256. Superseded measurements remain in Git history.
+
+## Fire Notes
+
+The rebuilt app was measured on 2026-09-07 using the same Xvfb/Mesa setup.
+[Raw app results](benchmarks/notes.json) include the binary fingerprint and checks.
+With the editor focused and its steady caret visible, a two-second idle sample
+used zero CPU ticks. Process RSS was 128.2 MiB, including software GL and native
+libraries. The release executable was 7.62 MiB.
+
+Across 63 rendered resize samples, event-to-swap time was 4.34 ms median,
+8.98 ms at the 95th percentile and 13.22 ms maximum. These are app-received resize
+events to completed swaps, not compositor presentation latency. The studio and
+notes app have different content, so their timings are not a controlled speedup comparison.
+
+The native app check passed typing with paragraph breaks, autosave, undo/redo,
+independent tabs, reopening closed notes, search, command and file pickers,
+420-pixel layouts, saving immediately before close, session restoration and
+shortcuts with no tabs open. Ten screenshots were visually inspected. The workspace
+now has 42 passing tests, including save failure handling and editor size limits.
+
+```sh
+cargo build --release -p fire-notes
+python3 tools/notes_probe.py --output artifacts/notes
+```
+
+## Studio baseline
 
 ```sh
 cargo build --release -p fire-ui-studio
@@ -53,7 +79,7 @@ scrolling and visible paddle position. It discovered the native AT-SPI button,
 invoked its action and checked that the counter increment reached the application.
 Normal, editing, animated and narrow-window screenshots were visually inspected.
 
-The workspace has 32 passing tests. These cover lifecycle/removal, input sessions,
+The framework checkpoint had 32 passing tests. These cover lifecycle/removal, input sessions,
 modal and anchor geometry, bounded messages/work, stale task results, native text
 measurement, editing/undo, appearance invalidation and virtual-list bounds.
 A 100,000-item list uses at most 14 mounted rows in the 300-pixel test viewport.

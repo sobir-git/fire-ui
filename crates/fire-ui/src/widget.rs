@@ -115,6 +115,9 @@ pub trait Widget: Any + Sized {
     fn input(&mut self, _cx: &mut Update<'_, Self>, _phase: Phase, _input: &Input) {}
     fn frame(&mut self, _cx: &mut Update<'_, Self>, _time: FrameTime) {}
     fn timer(&mut self, _cx: &mut Update<'_, Self>, _timer: Timer) {}
+    fn close_requested(&mut self, _cx: &mut Update<'_, Self>) -> bool {
+        true
+    }
     fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics {
         cx.overlay(limits)
     }
@@ -142,6 +145,7 @@ pub(crate) enum OutputMap {
 }
 pub(crate) trait Erased {
     fn state(&self) -> &dyn Any;
+    fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool;
     fn update(&mut self, cx: &mut crate::context::RawUpdate<'_>, payload: Payload);
     fn lifecycle(&mut self, cx: &mut crate::context::RawUpdate<'_>, event: Lifecycle);
     fn input(&mut self, cx: &mut crate::context::RawUpdate<'_>, phase: Phase, input: &Input);
@@ -155,6 +159,9 @@ pub(crate) trait Erased {
     fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction);
 }
 impl<W: Widget> Erased for W {
+    fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool {
+        self.close_requested(&mut cx.typed())
+    }
     fn state(&self) -> &dyn Any {
         self
     }

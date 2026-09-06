@@ -91,7 +91,11 @@ overlays publish their dependencies before their own geometry.
 The editor owns a `Document` adapter. `StringDocument` is the default; storage is not
 part of the kernel. Edits support selection, insertion, grapheme deletion, clipboard,
 preedit, undo and redo. Programmatic `Set` is silent; actual edits emit a revision and
-text snapshot. Undo history is bounded. Shared immutable paragraphs provide drawing,
+text snapshot. Undo history is bounded. An optional byte limit rejects growth with
+an explicit output, preserving the previous text and selection. Caret blinking can
+be disabled without losing the visible caret, allowing a focused notes editor to sleep.
+Native wrapping prefers whitespace boundaries and falls back to graphemes for long words.
+Shared immutable paragraphs provide drawing,
 caret hit testing, selection geometry and IME cursor position. Native measurement and
 drawing share the same font context. The renderer skips paragraphs outside the clip
 and selects visible lines before issuing text draws.
@@ -109,6 +113,21 @@ revalidates eligibility before each callback; requests during a callback apply t
 later frame. Independent timer handles replace deadlines and cancel on removal.
 Visible lifetime is the default; nonvisual mounted lifetime is explicit. Task tickets
 carry owner, slot and replacement epoch, checked at admission and delivery.
+`WakeHandle::complete` transports root task results through the same ticket checks;
+`post` sends ordinary root commands. A replaced file-open request cannot deliver an
+older result after its replacement.
+
+The host asks the root's `close_requested` hook before exiting. A root may defer
+closing while a save completes, then request another close with `Update::close_window`.
+Only the root can request window closure. Keyboard events with no focused child
+target the root, so empty applications can still handle their shortcuts.
+
+Fire Notes keeps an editor subtree for each open tab and metadata for other notes.
+It loads closed notes on demand. One worker batches the latest save snapshot per
+note and writes through a temporary file and rename. Revision acknowledgments
+prevent an older save from marking newer text clean. Unsaved closed notes retain
+their body until the latest write completes. This is local single-writer storage;
+external change detection and conflict resolution are not implemented.
 
 The native accessibility bridge publishes roles, values, focus and shared geometry
 through [AccessKit's winit adapter](https://docs.rs/accesskit_winit/0.33.2/accesskit_winit/struct.Adapter.html).

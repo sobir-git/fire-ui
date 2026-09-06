@@ -143,6 +143,17 @@ impl TextEngine for NativeText {
                         end += 1
                     }
                     let from = stops[start].caret.byte;
+                    // Prefer a whole word; an overlong word still breaks at a grapheme.
+                    if end + 1 < stops.len() {
+                        if let Some(boundary) = (start + 1..=end).rev().find(|i| {
+                            logical[..stops[*i].caret.byte]
+                                .chars()
+                                .next_back()
+                                .is_some_and(char::is_whitespace)
+                        }) {
+                            end = boundary;
+                        }
+                    }
                     let to = stops[end].caret.byte;
                     let (width, run) = self.stops(&logical[from..to], r.style);
                     lines.push(TextLine {

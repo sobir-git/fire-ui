@@ -53,10 +53,12 @@ pub struct PasteToken {
     session: u64,
 }
 pub enum HostRequest {
+    Close,
     Copy(String),
     Paste(PasteToken),
 }
 pub(crate) enum Delivery {
+    Close,
     Mount(Id),
     Command(Id, Payload, Option<(Id, u64)>),
     Output(Id, Payload),
@@ -681,6 +683,7 @@ impl<W: Widget> Ui<W> {
             };
             done += 1;
             match item {
+                Delivery::Close => platform(HostRequest::Close),
                 Delivery::Mount(id) => {
                     if let Some(n) = self.tree.get_mut(id) {
                         n.mounted = true;
@@ -997,7 +1000,9 @@ impl<W: Widget> Ui<W> {
                     })
             })
         } else {
-            self.focus.or(self.modals.last().map(|(id, _)| *id))
+            self.focus
+                .or(self.modals.last().map(|(id, _)| *id))
+                .or_else(|| matches!(input, Input::Key { .. }).then_some(self.root))
         };
         if matches!(input, Input::Pointer { .. }) && self.hover != target {
             if let Some(old) = self.hover {
@@ -1108,6 +1113,13 @@ impl<W: Widget> Ui<W> {
             (None, true) => order.len() - 1,
         };
         self.change_focus(Some(order[next]));
+    }
+    pub fn request_close(&mut self) -> bool {
+        let mut allowed = true;
+        self.invoke(self.root, false, false, |w, cx| {
+            allowed = w.close_requested(cx)
+        });
+        allowed
     }
     pub fn repaint(&mut self) {
         self.paint_dirty = true

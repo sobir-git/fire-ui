@@ -54,10 +54,12 @@ impl From<accesskit_winit::Event> for HostEvent {
 }
 struct Posted {
     command: Box<dyn std::any::Any + Send>,
+    ticket: Option<Box<dyn std::any::Any + Send>>,
     bytes: usize,
 }
 struct Pending<W: Widget> {
     command: W::Command,
+    ticket: Option<Ticket<W>>,
     bytes: usize,
 }
 pub struct WakeHandle<W: Widget> {
@@ -78,6 +80,20 @@ impl<W: Widget> Clone for WakeHandle<W> {
 }
 impl<W: Widget<Command: Send>> WakeHandle<W> {
     pub fn post(&self, command: W::Command) -> Result<(), (Error, W::Command)> {
+        self.enqueue(None, command)
+    }
+    pub fn complete(
+        &self,
+        ticket: Ticket<W>,
+        command: W::Command,
+    ) -> Result<(), (Error, W::Command)> {
+        self.enqueue(Some(ticket), command)
+    }
+    fn enqueue(
+        &self,
+        ticket: Option<Ticket<W>>,
+        command: W::Command,
+    ) -> Result<(), (Error, W::Command)> {
         let bytes = command.bytes();
         if self
             .count
@@ -100,6 +116,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
         }
         match self.proxy.send_event(HostEvent::Command(Posted {
             command: Box::new(command),
+            ticket: ticket.map(|ticket| Box::new(ticket) as Box<dyn std::any::Any + Send>),
             bytes,
         })) {
             Ok(()) => Ok(()),
@@ -150,6 +167,7 @@ struct Host<W: Widget, F> {
     wake: WakeHandle<W>,
     output: F,
     error: Option<String>,
+    close_requested: bool,
     profile: bool,
     pending_posts: std::collections::VecDeque<Pending<W>>,
 }
@@ -186,6 +204,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         wake,
         output,
         error: None,
+        close_requested: false,
         profile: std::env::var_os("FIRE_UI_PROFILE").is_some(),
         pending_posts: std::collections::VecDeque::new(),
     };
@@ -205,10 +224,11 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             |request| requests.push(request),
         );
         for request in requests {
-            if self.clipboard.is_none() {
+            if !matches!(request, HostRequest::Close) && self.clipboard.is_none() {
                 self.clipboard = arboard::Clipboard::new().ok()
             }
             match request {
+                HostRequest::Close => self.close_requested = true,
                 HostRequest::Copy(text) => {
                     if let Some(clipboard) = &mut self.clipboard {
                         let _ = clipboard.set_text(text);
@@ -224,7 +244,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             }
         }
         while let Some(post) = self.pending_posts.pop_front() {
-            match s.ui.send(post.command) {
+            let delivered = if let Some(ticket) = post.ticket {
+                s.ui.post(ticket, post.command)
+            } else {
+                s.ui.send(post.command)
+            };
+            match delivered {
                 Ok(()) => {
                     self.wake.count.fetch_sub(1, Ordering::AcqRel);
                     self.wake.bytes.fetch_sub(post.bytes, Ordering::AcqRel);
@@ -232,11 +257,15 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
                 Err((Error::Full, command)) => {
                     self.pending_posts.push_front(Pending {
                         command,
+                        ticket: post.ticket,
                         bytes: post.bytes,
                     });
                     break;
                 }
-                Err(_) => unreachable!(),
+                Err(_) => {
+                    self.wake.count.fetch_sub(1, Ordering::AcqRel);
+                    self.wake.bytes.fetch_sub(post.bytes, Ordering::AcqRel);
+                }
             }
         }
         s.ui.layout(&mut s.text);
@@ -317,6 +346,11 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                     .command
                     .downcast::<W::Command>()
                     .expect("private native command type"),
+                ticket: post.ticket.map(|ticket| {
+                    *ticket
+                        .downcast::<Ticket<W>>()
+                        .expect("private native task type")
+                }),
                 bytes: post.bytes,
             }),
             HostEvent::Accessibility(event) => {
@@ -350,7 +384,13 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
             self.flush_pointer()
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if self.state.as_mut().is_none_or(|s| s.ui.request_close()) {
+                    event_loop.exit();
+                } else {
+                    self.service();
+                }
+            }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::Focused(focus) => {
                 if let Some(s) = &mut self.state {
@@ -517,6 +557,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_pointer();
         self.service();
+        if std::mem::take(&mut self.close_requested)
+            && self.state.as_mut().is_none_or(|s| s.ui.request_close())
+        {
+            event_loop.exit();
+            return;
+        }
         let work = self
             .state
             .as_ref()

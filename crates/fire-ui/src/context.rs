@@ -394,6 +394,24 @@ impl<W: Widget> Update<'_, W> {
             self.raw.effects().timers.insert(timer, None);
         }
     }
+    pub fn close_window(&mut self) -> Result<(), Error> {
+        if self.raw.cleanup() {
+            return Err(Error::Stale);
+        }
+        if self
+            .raw
+            .tree()
+            .get(self.raw.me())
+            .is_some_and(|n| n.parent.is_some())
+        {
+            return Err(Error::NotOwned);
+        }
+        if !self.raw.mailbox().reserve(1, 0) {
+            return Err(Error::Full);
+        }
+        self.raw.mailbox().push_reserved(Delivery::Close, 0);
+        Ok(())
+    }
     pub fn copy(&mut self, text: String) -> Result<(), (Error, String)> {
         if self.raw.cleanup() {
             return Err((Error::Stale, text));

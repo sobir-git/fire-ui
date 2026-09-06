@@ -54,13 +54,14 @@ impl Data for Edit {
 pub enum EditorOutput {
     Changed { revision: u64, text: Arc<str> },
     Submitted,
+    LimitReached,
 }
 impl Data for EditorOutput {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
                 Self::Changed { text, .. } => text.len(),
-                Self::Submitted => 0,
+                Self::Submitted | Self::LimitReached => 0,
             }
     }
 }
@@ -86,6 +87,9 @@ pub struct Editor<D: Document = StringDocument> {
     history_bytes: usize,
     blink: Timer,
     caret_on: bool,
+    caret_blink: bool,
+    max_bytes: usize,
+    limit_reached: bool,
     drag: Option<u32>,
     preedit: String,
     preedit_layout: Option<Arc<Paragraph>>,
@@ -122,6 +126,9 @@ impl<D: Document> Editor<D> {
             history_bytes: 0,
             blink: Timer::new(),
             caret_on: true,
+            caret_blink: true,
+            max_bytes: usize::MAX,
+            limit_reached: false,
             drag: None,
             preedit: String::new(),
             preedit_layout: None,
@@ -131,6 +138,16 @@ impl<D: Document> Editor<D> {
     }
     pub fn placeholder(mut self, text: impl Into<Arc<str>>) -> Self {
         self.placeholder = text.into();
+        self
+    }
+    pub fn caret_blink(mut self, enabled: bool) -> Self {
+        self.caret_blink = enabled;
+        self
+    }
+    /// Reject edits that grow beyond this size. Initial text and `Edit::Set`
+    /// remain application-controlled; existing oversized text can be reduced.
+    pub fn max_bytes(mut self, bytes: usize) -> Self {
+        self.max_bytes = bytes;
         self
     }
     pub fn chrome(mut self, chrome: bool) -> Self {
@@ -202,6 +219,11 @@ impl<D: Document> Editor<D> {
         } else {
             inserted.replace('\n', " ")
         };
+        let next_len = self.text().len() - range.len() + inserted.len();
+        if next_len > self.max_bytes && next_len > self.text().len() {
+            self.limit_reached = true;
+            return;
+        }
         self.document.replace(range.clone(), &inserted);
         self.caret = Caret::at(range.start + inserted.len());
         self.anchor = None;
@@ -250,12 +272,15 @@ impl<D: Document> Editor<D> {
     }
     fn reset_blink(&mut self, cx: &mut Update<'_, Self>) {
         self.caret_on = true;
-        if cx.focused() {
+        if cx.focused() && self.caret_blink {
             let _ = cx.after(self.blink, Duration::from_millis(530));
         }
         cx.repaint()
     }
     fn changed(&mut self, cx: &mut Update<'_, Self>, before: u64) {
+        if std::mem::take(&mut self.limit_reached) {
+            let _ = cx.emit(EditorOutput::LimitReached);
+        }
         if self.document.revision() != before {
             let _ = cx.emit(EditorOutput::Changed {
                 revision: self.document.revision(),
@@ -348,7 +373,7 @@ impl<D: Document> Widget for Editor<D> {
         }
     }
     fn timer(&mut self, cx: &mut Update<'_, Self>, timer: Timer) {
-        if timer == self.blink && cx.focused() {
+        if timer == self.blink && cx.focused() && self.caret_blink {
             self.caret_on = !self.caret_on;
             cx.repaint();
             let _ = cx.after(self.blink, Duration::from_millis(530));

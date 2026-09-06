@@ -442,3 +442,85 @@ fn dropping_the_host_unmounts_children_before_their_owner() {
     drop(ui);
     assert_eq!(*log.borrow(), ["child", "owner"]);
 }
+
+#[derive(Default)]
+struct CloseGate {
+    saved: bool,
+    requests: usize,
+    keys: usize,
+}
+impl Widget for CloseGate {
+    type Command = bool;
+    type Output = Infallible;
+    fn update(&mut self, cx: &mut Update<'_, Self>, saved: bool) {
+        self.saved = saved;
+        if saved {
+            cx.close_window().unwrap();
+        }
+    }
+    fn close_requested(&mut self, _: &mut Update<'_, Self>) -> bool {
+        self.requests += 1;
+        self.saved
+    }
+    fn input(&mut self, _: &mut Update<'_, Self>, phase: Phase, input: &Input) {
+        if phase == Phase::Target && matches!(input, Input::Key { down: true, .. }) {
+            self.keys += 1;
+        }
+    }
+}
+#[test]
+fn root_can_defer_close_until_async_work_completes() {
+    let mut ui = Ui::new(
+        Element::leaf(CloseGate::default()),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    drain(&mut ui);
+    assert!(!ui.request_close());
+    ui.send(true).unwrap();
+    let mut close = false;
+    ui.pump(
+        100,
+        |v| match v {},
+        |request| {
+            close |= matches!(request, HostRequest::Close);
+        },
+    );
+    assert!(close);
+    assert!(ui.request_close());
+    assert_eq!(ui.root().requests, 2);
+}
+#[test]
+fn root_receives_keys_without_a_focused_child() {
+    let mut ui = Ui::new(
+        Element::leaf(CloseGate::default()),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    drain(&mut ui);
+    ui.dispatch(
+        Input::Key {
+            key: Key::Character('n'),
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.root().keys, 1);
+    ui.window_focus(false);
+    ui.dispatch(
+        Input::Key {
+            key: Key::Character('n'),
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.root().keys, 1);
+}
