@@ -33,8 +33,9 @@ target/
 
 # Local dev storage
 tmp/
+artifacts/
 
 # Vendored patch directories (reconstructed by patches/setup.sh)
 # Only the .patch files, setup.sh, and README.md are tracked
-patches/winit-0.30.12/
-patches/smithay-client-toolkit-0.19.2/
+legacy/fire-notes/patches/winit-0.30.12/
+legacy/fire-notes/patches/smithay-client-toolkit-0.19.2/

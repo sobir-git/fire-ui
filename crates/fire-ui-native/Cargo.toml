@@ -1,0 +1,14 @@
+[package]
+name = "fire-ui-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fire-ui = { path = "../fire-ui" }
+winit = "0.30"
+glutin = "0.32"
+glutin-winit = "0.5"
+raw-window-handle = "0.6"
+femtovg = { version = "0.9", default-features = false }
+arboard = { version = "3", default-features = false }
+unicode-segmentation = "1.12"

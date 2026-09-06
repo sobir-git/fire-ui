@@ -1,67 +1,13 @@
-[package]
-name = "fire-notes"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Window & Input
-winit = "0.30"
-raw-window-handle = "0.6"
-
-# OpenGL context
-glutin = "0.32"
-glutin-winit = "0.5"
-
-# GPU rendering
-femtovg = "0.9"
-
-# Efficient text buffer
-ropey = "1.6"
-
-# File dialogs - using native-dialog instead of rfd for lighter weight
-native-dialog = "0.7"
-
-# Clipboard support
-arboard = "3"
-
-# User directories (XDG)
-dirs = "5"
-
-# Structured state persistence
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Random number generation for flame effects
-rand = "0.8"
-
-[dev-dependencies]
-# Benchmarking
-criterion = { version = "0.5", features = ["html_reports"] }
-# Structural snapshot testing
-insta = { version = "1", features = ["ron"] }
-# Property-based / fuzz testing
-proptest = "1"
-# GL context for headless pixel tests (same version femtovg uses)
-glow = { version = "0.13", default-features = false }
-
-[[bin]]
-name = "widget-demo"
-path = "src/bin/widget_demo.rs"
-
-[[bench]]
-name = "performance"
-harness = false
+[workspace]
+resolver = "2"
+members = ["crates/fire-ui", "crates/fire-ui-widgets", "crates/fire-ui-native", "examples/studio"]
+exclude = ["legacy/fire-notes"]
 
 [profile.release]
 opt-level = 3
-lto = "fat"
+lto = "thin"
 codegen-units = 1
-panic = "abort"
 strip = true
 
 [profile.dev]
 opt-level = 1
-
-[patch.crates-io]
-winit = { path = "patches/winit-0.30.12" }
-smithay-client-toolkit = { path = "patches/smithay-client-toolkit-0.19.2" }
