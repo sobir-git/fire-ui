@@ -1,4 +1,4 @@
-//! Stateful widgets with typed owned children. No native host or renderer dependency.
+#![doc = include_str!("../README.md")]
 mod context;
 mod geometry;
 mod input;

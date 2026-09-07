@@ -1,8 +1,12 @@
 [package]
-name="fire-ui-studio"
-version="0.1.0"
-edition="2021"
+name = "fire-ui-studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
 [dependencies]
-fire-ui={path="../../crates/fire-ui"}
-fire-ui-widgets={path="../../crates/fire-ui-widgets"}
-fire-ui-native={path="../../crates/fire-ui-native"}
+fire-ui.workspace = true
+fire-ui-widgets.workspace = true
+fire-ui-native.workspace = true

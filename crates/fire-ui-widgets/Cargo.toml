@@ -1,7 +1,16 @@
 [package]
 name = "fire-ui-widgets"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Composable controls, text editing, menus and virtual lists for Fire UI"
+readme = "README.md"
+include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "Cargo.toml"]
+
 [dependencies]
-fire-ui={path="../fire-ui"}
-unicode-segmentation="1.12"
+fire-ui.workspace = true
+unicode-segmentation = "1.12"

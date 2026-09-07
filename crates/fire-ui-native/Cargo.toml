@@ -1,16 +1,28 @@
 [package]
 name = "fire-ui-native"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Native desktop windows, OpenGL rendering and platform services for Fire UI"
+readme = "README.md"
+include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "Cargo.toml"]
+
 [dependencies]
-fire-ui={path="../fire-ui"}
-winit="0.30"
-glutin="0.32"
-glutin-winit="0.5"
-raw-window-handle="0.6"
-femtovg={version="0.9",default-features=false}
-arboard={version="3",default-features=false}
-unicode-segmentation="1.12"
+fire-ui.workspace = true
+winit = "0.30"
+glutin = "0.32"
+glutin-winit = "0.5"
+raw-window-handle = "0.6"
+femtovg = { version = "0.9", default-features = false }
+arboard = { version = "3", default-features = false }
+unicode-segmentation = "1.12"
 accesskit_winit = "0.33.2"
 accesskit = "0.24"
 native-dialog = "0.7"
+
+[dev-dependencies]
+fire-ui-widgets.workspace = true

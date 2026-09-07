@@ -50,3 +50,12 @@ without the app checkout. Keep app persistence, actions and visual tokens in the
 app repository. Use its original Git history for original Fire Notes references.
 
 Run framework checks here and the app checks when a public capability changes.
+
+## Distribution
+
+Fire UI is MIT licensed. Library versions and the Rust baseline are inherited from
+`workspace.package`; internal dependency versions must match. Never publish the
+studio. Each crate includes its own README and an exact copy of the root LICENSE.
+Breaking design changes remain welcome; increase the 0.x minor version instead of
+preserving an obsolete API. Test the actual packages. Keep docs concise; this is early ideation and the design
+may change radically. Document usage and constraints without adding process manuals.

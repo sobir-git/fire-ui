@@ -791,6 +791,7 @@ dependencies = [
  "arboard",
  "femtovg",
  "fire-ui",
+ "fire-ui-widgets",
  "glutin",
  "glutin-winit",
  "native-dialog",

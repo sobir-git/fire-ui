@@ -1,4 +1,4 @@
-//! Optional native window, text, clipboard and presentation services.
+#![doc = include_str!("../README.md")]
 mod accessibility;
 mod painter;
 mod text;

@@ -1,4 +1,4 @@
-//! Optional layout policies and reusable controls on the public widget protocol.
+#![doc = include_str!("../README.md")]
 mod appearance;
 mod controls;
 mod editor;
