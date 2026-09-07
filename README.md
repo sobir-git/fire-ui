@@ -53,6 +53,7 @@ Close tab only closes the tab; it does not trash the note.
 New empty Untitled tabs stay in memory and are discarded on close or quit, including
 the last tab. They create no note file and are excluded from the saved session.
 Typing content, changing the name, or explicitly saving makes a note persistent.
+New tabs use the lowest available Untitled number; discarded drafts do not consume numbers.
 
 Trash expires after 30 days. Cleanup runs at startup and hourly while the app is
 open. The installed Linux user timer also runs hourly while the app is closed and
