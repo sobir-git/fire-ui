@@ -104,7 +104,7 @@ impl<K: Data + Clone> Menu<K> {
         let len = self.items.len();
         for n in 1..=len {
             let index = if forward {
-                (self.selected.map_or(len - 1, |i| i) + n) % len
+                (self.selected.unwrap_or(len - 1) + n) % len
             } else {
                 (self.selected.unwrap_or(0) + len - n) % len
             };
