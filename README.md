@@ -27,6 +27,7 @@ outstanding note saves and keeps the window open if a note cannot be saved.
 | Ctrl R / middle click tab | Rename; Enter or blur commits, Escape cancels |
 | Drag tab / wheel over tabs | Reorder / scroll tabs |
 | Ctrl P | Search saved notes |
+| Ctrl Shift T | Open Trash and restore a note |
 | Ctrl O / drop a file | Open a Markdown or text file |
 | Ctrl Shift O | Open by entering a path |
 | Ctrl / | Commands beside the caret |
@@ -43,6 +44,26 @@ selection scrolls beyond the viewport; the scrollbar also supports dragging. Cus
 window controls support minimize, maximize/restore, drag and edge resizing. Fire
 animation stops after typing fades, when selection clears, or when the editor loses
 focus. It does not keep an idle editor repainting.
+
+Right-click a tab and choose **Move to Trash** to remove its note from the library.
+**Open Trash**, also available in the command palette, lists recoverable notes with
+their remaining time. Select one to restore its title, text, cursor and wrapping.
+Restoring never overwrites a file that has appeared at its original location.
+Close tab only closes the tab; it does not trash the note.
+
+Trash expires after 30 days. Cleanup runs at startup and hourly while the app is
+open. The installed Linux user timer also runs hourly while the app is closed and
+catches up after login. Install it after installing the app launcher:
+
+```sh
+install -Dm644 tools/systemd/fire-notes-trash.service ~/.config/systemd/user/fire-notes-trash.service
+install -Dm644 tools/systemd/fire-notes-trash.timer ~/.config/systemd/user/fire-notes-trash.timer
+systemctl --user daemon-reload
+systemctl --user enable --now fire-notes-trash.timer
+```
+
+`fire-notes --purge-trash` performs the same expiry check without opening a window.
+Recovery copies and timestamps live in the library's `trash/` directory.
 
 This prototype has no format migration, file watching or concurrent-writer conflict
 resolution. Note bodies are limited to 2 MiB and titles to 4 KiB; the framework editor's
