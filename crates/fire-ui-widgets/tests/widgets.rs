@@ -478,3 +478,94 @@ fn list_navigation_and_hover_update_the_selected_row_environment() {
     );
     assert_eq!(selected, Some(2));
 }
+
+#[test]
+fn menu_keyboard_skips_disabled_actions_and_stays_inside_the_window() {
+    let mut ui = Ui::new(
+        Menu::new(
+            vec![
+                MenuItem::new(0usize, "Disabled").enabled(false),
+                MenuItem::new(1, "Rename"),
+                MenuItem::new(2, "Close"),
+            ],
+            Point::new(298., 190.),
+        ),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.frame(std::time::Duration::ZERO, 100);
+    settle(&mut ui, &mut TestText);
+    for node in ui.semantics() {
+        assert!(
+            node.bounds.x >= 0.
+                && node.bounds.y >= 0.
+                && node.bounds.x + node.bounds.width <= 300.
+                && node.bounds.y + node.bounds.height <= 200.
+        );
+    }
+    key(&mut ui, &mut TestText, Key::Down);
+    key(&mut ui, &mut TestText, Key::Enter);
+    let mut selected = vec![];
+    ui.pump(
+        100,
+        |o| {
+            if let MenuOutput::Selected(k) = o {
+                selected.push(k)
+            }
+        },
+        |_| {},
+    );
+    assert_eq!(selected, vec![1]);
+    key(&mut ui, &mut TestText, Key::Up);
+    key(&mut ui, &mut TestText, Key::Enter);
+    ui.pump(
+        100,
+        |o| {
+            if let MenuOutput::Selected(k) = o {
+                selected.push(k)
+            }
+        },
+        |_| {},
+    );
+    assert_eq!(selected, vec![1, 2]);
+    let disabled = ui
+        .semantics()
+        .into_iter()
+        .find(|n| n.semantics.disabled)
+        .unwrap()
+        .id;
+    ui.accessibility(disabled, SemanticAction::Activate);
+    ui.pump(100, |_| panic!("Disabled menu action fired"), |_| {});
+    key(&mut ui, &mut TestText, Key::Escape);
+    let mut dismissed = false;
+    ui.pump(
+        100,
+        |o| dismissed = matches!(o, MenuOutput::Dismissed),
+        |_| {},
+    );
+    assert!(dismissed);
+}
+#[test]
+fn menu_outside_click_dismisses_without_activating_an_action() {
+    let mut ui = Ui::new(
+        Menu::new(vec![MenuItem::new(1usize, "Save")], Point::new(20., 20.)),
+        Size::new(400., 300.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(390., 290.),
+        },
+        &mut TestText,
+    );
+    let mut outputs = vec![];
+    ui.pump(100, |o| outputs.push(o), |_| {});
+    assert!(matches!(&outputs[..], [MenuOutput::Dismissed]));
+}

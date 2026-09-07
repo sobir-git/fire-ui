@@ -24,6 +24,10 @@ Element::build(|children| Counter {
 The [studio](../examples/studio/src/main.rs) contains the complete counter, composed
 panel, picker and custom canvas consumers. None has access to private runtime nodes.
 The picker owns search/filtering; its parent receives a selected key.
+`Menu` accepts action keys, labels, shortcut hints, checked and enabled states.
+It owns keyboard navigation and accessible action rows; its parent receives the
+chosen key or dismissal and controls the modal overlay. Fire Notes uses it for
+tab actions without adding app commands to the framework.
 
 `Children::add` accepts children that cannot emit output. `connect` maps a borrowed
 output to an owner command; `forward` transfers an owned output unchanged; `discard`

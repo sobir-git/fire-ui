@@ -23,7 +23,8 @@ outstanding note saves and keeps the window open if a note cannot be saved.
 | --- | --- |
 | Ctrl N / Ctrl W | New note / close tab; the last tab stays open |
 | Ctrl Tab / Ctrl Shift Tab / Ctrl 1–9 | Switch tabs |
-| Ctrl R / right or middle click tab | Rename; Enter or blur commits, Escape cancels |
+| Right click tab | Rename, Save, Word wrap and Close actions |
+| Ctrl R / middle click tab | Rename; Enter or blur commits, Escape cancels |
 | Drag tab / wheel over tabs | Reorder / scroll tabs |
 | Ctrl P | Search saved notes |
 | Ctrl O / drop a file | Open a Markdown or text file |
@@ -80,6 +81,7 @@ cargo build --release -p fire-ui-studio
 python3 tools/native_probe.py --accessibility --output artifacts/native
 cargo build --release -p fire-notes
 python3 tools/notes_probe.py --output artifacts/notes
+python3 tools/tab_menu_probe.py --output artifacts/tab-menu
 ```
 
 The native probe requires Linux, Xvfb, xdotool and Pillow with XCB support. It runs
