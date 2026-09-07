@@ -147,6 +147,7 @@ pub struct Ui<W: Widget> {
     last_frame: Duration,
     focus: Option<Id>,
     hover: Option<Id>,
+    hover_path: Vec<Id>,
     captures: BTreeMap<u32, Id>,
     buttons: BTreeSet<(u32, u16)>,
     pressed: BTreeSet<u32>,
@@ -201,6 +202,7 @@ impl<W: Widget> Ui<W> {
             last_frame: Duration::ZERO,
             focus: None,
             hover: None,
+            hover_path: vec![],
             captures: BTreeMap::new(),
             buttons: BTreeSet::new(),
             pressed: BTreeSet::new(),
@@ -580,6 +582,33 @@ impl<W: Widget> Ui<W> {
         }
         self.paint_dirty = true
     }
+    fn change_hover(&mut self, next: Option<Id>) {
+        let next = next.filter(|id| self.eligible(*id));
+        let mut path = vec![];
+        let mut current = next;
+        while let Some(id) = current.filter(|id| self.eligible(*id)) {
+            path.push(id);
+            current = self.tree.get(id).and_then(|n| n.parent);
+        }
+        path.reverse();
+        if path == self.hover_path {
+            return;
+        }
+        let shared = path
+            .iter()
+            .zip(&self.hover_path)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let previous = std::mem::replace(&mut self.hover_path, path.clone());
+        self.hover = next;
+        for id in previous[shared..].iter().rev() {
+            self.notice(*id, Lifecycle::Hover(false));
+        }
+        for id in &path[shared..] {
+            self.notice(*id, Lifecycle::Hover(true));
+        }
+        self.paint_dirty = true;
+    }
     fn reconcile(&mut self) {
         while self
             .modals
@@ -603,12 +632,7 @@ impl<W: Widget> Ui<W> {
         }) {
             self.change_focus(None)
         }
-        if self.hover.is_some_and(|id| !self.eligible(id)) {
-            if let Some(id) = self.hover.take() {
-                self.notice(id, Lifecycle::Hover(false));
-                self.paint_dirty = true
-            }
-        }
+        self.change_hover(self.hover);
         let captures: Vec<_> = self
             .captures
             .iter()
@@ -1049,14 +1073,7 @@ impl<W: Widget> Ui<W> {
                 .or_else(|| matches!(input, Input::Key { .. }).then_some(self.root))
         };
         if matches!(input, Input::Pointer { .. }) && self.hover != target {
-            if let Some(old) = self.hover {
-                self.notice(old, Lifecycle::Hover(false))
-            }
-            self.hover = target;
-            if let Some(id) = target {
-                self.notice(id, Lifecycle::Hover(true))
-            }
-            self.paint_dirty = true
+            self.change_hover(target);
         }
         let handled = target.is_some_and(|id| {
             self.route(
@@ -1174,7 +1191,7 @@ impl<W: Widget> Ui<W> {
             id: Id,
             painter: &mut dyn Painter,
             focus: Option<Id>,
-            hover: Option<Id>,
+            hover: &[Id],
             absolute: bool,
             count: &mut u64,
         ) {
@@ -1195,7 +1212,7 @@ impl<W: Widget> Ui<W> {
                 widget.paint(&mut Paint {
                     bounds: Rect::from_size(n.size),
                     focused: focus == Some(id),
-                    hovered: hover == Some(id),
+                    hovered: hover.contains(&id),
                     painter,
                     environment: n.environment.as_deref(),
                 });
@@ -1213,7 +1230,7 @@ impl<W: Widget> Ui<W> {
             self.root,
             painter,
             self.focus,
-            self.hover,
+            &self.hover_path,
             false,
             &mut self.painted,
         );
@@ -1229,7 +1246,7 @@ impl<W: Widget> Ui<W> {
                 id,
                 painter,
                 self.focus,
-                self.hover,
+                &self.hover_path,
                 true,
                 &mut self.painted,
             )

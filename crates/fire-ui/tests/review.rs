@@ -525,3 +525,80 @@ fn nested_modal_hide_or_remove_finds_fallback_when_saved_focus_is_hidden() {
         );
     }
 }
+
+struct HoverContainer {
+    children: [Child<Probe>; 2],
+    log: Log,
+}
+impl Widget for HoverContainer {
+    type Command = ();
+    type Output = Infallible;
+    fn lifecycle(&mut self, _: &mut Update<'_, Self>, event: Lifecycle) {
+        self.log.borrow_mut().push((9, event));
+    }
+    fn update(&mut self, cx: &mut Update<'_, Self>, _: ()) {
+        cx.show(self.children[0], false).unwrap();
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        for (i, child) in self.children.iter().enumerate() {
+            cx.measure(*child, Constraints::tight(Size::new(10., 10.)));
+            cx.place(*child, Point::new(10. + i as f32 * 20., 0.));
+        }
+        Metrics::new(c.max)
+    }
+}
+#[test]
+fn hover_includes_the_container_without_flickering_between_its_children() {
+    let log: Log = Rc::default();
+    let root = Element::build(|c| HoverContainer {
+        children: std::array::from_fn(|number| {
+            c.add(Element::leaf(Probe {
+                number,
+                log: log.clone(),
+                insert_on_hover: false,
+            }))
+        }),
+        log: log.clone(),
+    });
+    let mut ui = Ui::new(root, Size::new(100., 100.), Limits::default()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    log.borrow_mut().clear();
+    for x in [2., 12., 32., 2., 120.] {
+        ui.dispatch(
+            Input::Pointer {
+                pointer: 1,
+                position: Point::new(x, 2.),
+            },
+            &mut TestText,
+        );
+    }
+    let hover: Vec<_> = log
+        .borrow()
+        .iter()
+        .copied()
+        .filter(|(_, e)| matches!(e, Lifecycle::Hover(_)))
+        .collect();
+    assert_eq!(
+        hover,
+        vec![
+            (9, Lifecycle::Hover(true)),
+            (0, Lifecycle::Hover(true)),
+            (0, Lifecycle::Hover(false)),
+            (1, Lifecycle::Hover(true)),
+            (1, Lifecycle::Hover(false)),
+            (9, Lifecycle::Hover(false)),
+        ]
+    );
+    log.borrow_mut().clear();
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 1,
+            position: Point::new(12., 2.),
+        },
+        &mut TestText,
+    );
+    ui.send(()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    assert!(log.borrow().contains(&(0, Lifecycle::Hover(false))));
+    assert!(log.borrow().contains(&(9, Lifecycle::Hover(false))));
+}

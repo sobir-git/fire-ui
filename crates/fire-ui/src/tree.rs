@@ -305,6 +305,7 @@ impl Layout<'_> {
 pub struct Paint<'a> {
     pub bounds: Rect,
     pub focused: bool,
+    /// True when this widget or an owned descendant is hovered in the active modal scope.
     pub hovered: bool,
     pub painter: &'a mut dyn Painter,
     pub(crate) environment: Option<&'a dyn Any>,

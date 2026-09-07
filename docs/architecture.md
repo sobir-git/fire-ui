@@ -93,6 +93,9 @@ Input routes through preview, target and bubble phases. Each pointer has indepen
 capture. Focus sessions invalidate stale keyboard routes and paste delivery. Modal
 scopes restrict input and restore eligible focus on close, hide and removal. Anchored
 overlays publish their dependencies before their own geometry.
+Hover includes the target and its eligible ancestors. Moving between a control's
+label and padding keeps that control hovered; shared ancestors receive no spurious
+leave/enter events. Paint state and hover lifecycle notifications use the same path.
 
 The editor owns a `Document` adapter. `StringDocument` is the default; storage is not
 part of the kernel. Edits support selection, insertion, grapheme deletion, clipboard,
