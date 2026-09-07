@@ -4,6 +4,8 @@ The framework and reusable widgets are the product. Fire Notes and games consume
 its supported interfaces. The replacement is implemented directly in `crates/`.
 Previous frameworks and executable design models exist only in Git history.
 [Project rules](../AGENTS.md) explicitly reject backward compatibility.
+Fire Notes is a separate repository at `../fire-notes`; this workspace contains
+only the framework crates and studio. Dependency direction is app to framework.
 
 ## Authoring
 
@@ -149,14 +151,6 @@ as lifecycle data. Widget cursor choices inherit through ownership; native point
 shapes update without relayout. File drops reach the root, and blocking system file
 choosers can run on a platform dialog thread. Keyboard events with no focused child
 target the root, so empty applications can still handle their shortcuts.
-
-Fire Notes keeps an editor subtree for each open tab and metadata for other notes.
-It loads closed notes on demand. Raw file content is independent of title metadata;
-per-tab editor state and window placement live in the session. One worker batches the latest save snapshot per
-note and writes through a temporary file and rename. Revision acknowledgments
-prevent an older save from marking newer text clean. Unsaved closed notes retain
-their body until the latest write completes. This is local single-writer storage;
-external change detection and conflict resolution are not implemented.
 
 The native accessibility bridge publishes roles, values, focus and shared geometry
 through [AccessKit's winit adapter](https://docs.rs/accesskit_winit/0.33.2/accesskit_winit/struct.Adapter.html).

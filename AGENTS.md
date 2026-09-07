@@ -40,3 +40,13 @@ behavior on the new framework. Animated fire on typed and selected text is manda
 Use the original in Git history as visual and interaction evidence. Close framework
 gaps revealed by the app through reusable public capabilities, without restoring
 old framework implementations. Verify real native interactions and screenshots.
+
+## Repository boundary
+
+This repository owns the framework crates, reusable widgets, native host, studio,
+architecture docs and framework probes. Fire Notes lives in `../fire-notes` and
+uses these crates through path dependencies. The framework must build and test
+without the app checkout. Keep app persistence, actions and visual tokens in the
+app repository. Use its original Git history for original Fire Notes references.
+
+Run framework checks here and the app checks when a public capability changes.
