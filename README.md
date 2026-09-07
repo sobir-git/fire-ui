@@ -97,5 +97,6 @@ save-before-close and restart, and records screenshots and process measurements.
 Its optional `--telegram` flag sends screenshots using the locally installed
 telegram-notify skill; use it only when the user has requested delivery.
 
-See [architecture](docs/architecture.md) for the design and implementation limits,
+See [visual design](DESIGN.md) for Fire Notes’ appearance and interaction rules,
+[architecture](docs/architecture.md) for the framework design and implementation limits,
 [measurements](docs/performance.md) for native evidence, and [project rules](AGENTS.md).
