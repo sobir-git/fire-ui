@@ -569,3 +569,28 @@ fn menu_outside_click_dismisses_without_activating_an_action() {
     ui.pump(100, |o| outputs.push(o), |_| {});
     assert!(matches!(&outputs[..], [MenuOutput::Dismissed]));
 }
+
+#[test]
+fn button_content_and_accessible_name_update_without_remounting() {
+    let mut ui = Ui::new(
+        Button::new(Element::leaf(Label::new("Pause")), "Pause"),
+        Size::new(180., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let ids: Vec<_> = ui.semantics().iter().map(|n| n.id).collect();
+    ui.send(ButtonCommand::Content("Resume".to_owned()))
+        .unwrap();
+    ui.send(ButtonCommand::Label("Resume".to_owned())).unwrap();
+    settle(&mut ui, &mut text);
+    let nodes = ui.semantics();
+    assert_eq!(ids, nodes.iter().map(|n| n.id).collect::<Vec<_>>());
+    assert!(nodes
+        .iter()
+        .any(|n| n.semantics.role == Role::Button && n.semantics.label == "Resume"));
+    assert!(nodes
+        .iter()
+        .any(|n| n.semantics.role == Role::Text && n.semantics.label == "Resume"));
+}

@@ -82,13 +82,22 @@ impl Widget for Label {
         }
     }
 }
-#[derive(Clone, Copy, Debug)]
-pub enum ButtonCommand {
+#[derive(Clone, Debug)]
+pub enum ButtonCommand<C: Data> {
     Disabled(bool),
+    /// Update the owned content through its ordinary command protocol.
+    Content(C),
+    /// Update the button's accessible action name.
+    Label(String),
 }
-impl Data for ButtonCommand {
+impl<C: Data> Data for ButtonCommand<C> {
     fn bytes(&self) -> usize {
-        1
+        std::mem::size_of::<Self>()
+            + match self {
+                Self::Content(command) => command.bytes(),
+                Self::Label(label) => label.capacity(),
+                Self::Disabled(_) => 0,
+            }
     }
 }
 /// Content is an ordinary owned widget. Decorative content does not consume activation.
@@ -112,10 +121,17 @@ impl<C: Widget<Output = Infallible>> Button<C> {
     }
 }
 impl<C: Widget<Output = Infallible>> Widget for Button<C> {
-    type Command = ButtonCommand;
+    type Command = ButtonCommand<C::Command>;
     type Output = ();
-    fn update(&mut self, cx: &mut Update<'_, Self>, command: ButtonCommand) {
+    fn update(&mut self, cx: &mut Update<'_, Self>, command: Self::Command) {
         match command {
+            ButtonCommand::Content(command) => {
+                let _ = cx.send(self.content, command);
+            }
+            ButtonCommand::Label(label) => {
+                self.label = label;
+                cx.repaint();
+            }
             ButtonCommand::Disabled(value) => {
                 self.disabled = value;
                 self.pressed = None;

@@ -33,7 +33,7 @@ commands. Use `Update` for state changes, `Layout` for measuring and placing
 children, and `Paint` for drawing. The host sleeps unless input, queued work, a
 deadline or an explicit frame request needs attention.
 
-Custom hosts implement `Painter` and `TextService` and drive `Runtime`.
+Custom hosts implement `Painter` and `TextEngine` and drive `Ui`.
 Use `fire-ui-widgets` for optional composition helpers and `fire-ui-native` for
 native desktop hosting. No app storage or app-specific theme lives in this crate.
 
