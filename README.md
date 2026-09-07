@@ -21,9 +21,9 @@ outstanding note saves and keeps the window open if a note cannot be saved.
 
 | Shortcut or gesture | Action |
 | --- | --- |
-| Ctrl N / Ctrl W | New note / close tab; the last tab stays open |
+| Ctrl N / Ctrl W | New note / close tab; the last saved tab stays open |
 | Ctrl Tab / Ctrl Shift Tab / Ctrl 1–9 | Switch tabs |
-| Right click tab | Rename, Save, Word wrap and Close actions |
+| Right click tab | Rename, Save, Word wrap, Close and Trash actions |
 | Ctrl R / middle click tab | Rename; Enter or blur commits, Escape cancels |
 | Drag tab / wheel over tabs | Reorder / scroll tabs |
 | Ctrl P | Search saved notes |
@@ -50,6 +50,9 @@ Right-click a tab and choose **Move to Trash** to remove its note from the libra
 their remaining time. Select one to restore its title, text, cursor and wrapping.
 Restoring never overwrites a file that has appeared at its original location.
 Close tab only closes the tab; it does not trash the note.
+New empty Untitled tabs stay in memory and are discarded on close or quit, including
+the last tab. They create no note file and are excluded from the saved session.
+Typing content, changing the name, or explicitly saving makes a note persistent.
 
 Trash expires after 30 days. Cleanup runs at startup and hourly while the app is
 open. The installed Linux user timer also runs hourly while the app is closed and
