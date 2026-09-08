@@ -113,8 +113,14 @@ One `Scrollbar` serves every scrolling surface — viewport, virtual list and ed
 and reserves its own strip rather than floating above content, so a bar is always
 clickable and never steals the pointer shape from what is beneath it.
 
-Immutable theme values propagate through an affected subtree until a nested explicit
-scope. A theme is a semantic `Palette` and a `Scale`, two axes that vary
+Ambient values propagate through a subtree keyed by type. Publishing one type for a
+child replaces only that type: the child keeps every other value its ancestors
+installed, and inheritance of that one type stops there. A virtual list can therefore
+publish selection to a row without costing the row its view of the theme, which a
+single-slot environment did. Nodes share one map until something publishes its own,
+so installing a value for a subtree usually allocates once rather than per node.
+
+Theme values propagate this way like any other, until a nested explicit scope. A theme is a semantic `Palette` and a `Scale`, two axes that vary
 independently; widgets name a role and never a literal value, which is what allows
 one swap to restyle a whole window correctly. Shipped pairings are conveniences over
 public structs, not a closed set, and a subtree can install its own. Local label appearance can override the type-scale step or the colour

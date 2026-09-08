@@ -3,10 +3,45 @@ use crate::{
     *,
 };
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     collections::{BTreeMap, BTreeSet, HashMap},
     rc::Rc,
 };
+/// Ambient values for a subtree, keyed by type.
+///
+/// A widget reads a type; it never sees the others. Two owners publishing different
+/// types to the same node no longer evict one another, which is what a single slot
+/// did. Entry counts are tiny, so a linear scan beats hashing here.
+#[derive(Default)]
+pub struct Environment {
+    entries: Vec<(TypeId, Rc<dyn Any>)>,
+}
+impl Environment {
+    pub fn get<T: Any>(&self) -> Option<&T> {
+        let wanted = TypeId::of::<T>();
+        self.entries
+            .iter()
+            .find(|(id, _)| *id == wanted)
+            .and_then(|(_, value)| value.downcast_ref())
+    }
+    /// The value stored for a type, without knowing the type statically.
+    pub fn get_any(&self, type_id: TypeId) -> Option<Rc<dyn Any>> {
+        self.entries
+            .iter()
+            .find(|(id, _)| *id == type_id)
+            .map(|(_, value)| value.clone())
+    }
+    /// This map with `type_id` set to `value`, leaving every other type in place.
+    pub fn with(&self, type_id: TypeId, value: Rc<dyn Any>) -> Rc<Self> {
+        let mut entries = self.entries.clone();
+        match entries.iter_mut().find(|(id, _)| *id == type_id) {
+            Some(slot) => slot.1 = value,
+            None => entries.push((type_id, value)),
+        }
+        Rc::new(Self { entries })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Geometry {
     pub transform: Transform,
@@ -38,8 +73,13 @@ pub(crate) struct Node {
     pub dirty: bool,
     pub geometry_dirty: bool,
     pub geometry: Geometry,
-    pub environment: Option<Rc<dyn Any>>,
-    pub environment_boundary: bool,
+    /// Every ambient value this node and its descendants can read. Nodes share one
+    /// map until something publishes a value of its own, so installing a value for a
+    /// subtree usually allocates once for the whole subtree.
+    pub environment: Rc<Environment>,
+    /// Types this node publishes for itself. Inheritance of those types stops here;
+    /// every other type still flows through.
+    pub overrides: Vec<TypeId>,
 }
 #[derive(Default)]
 pub(crate) struct Tree {
@@ -100,7 +140,8 @@ impl Tree {
         let ids = children.iter().map(|n| n.id).collect();
         let environment = parent
             .and_then(|p| self.get(p))
-            .and_then(|n| n.environment.clone());
+            .map(|n| n.environment.clone())
+            .unwrap_or_default();
         let node = Node {
             timers: BTreeSet::new(),
             tasks: BTreeMap::new(),
@@ -123,7 +164,7 @@ impl Tree {
             geometry_dirty: true,
             geometry: Geometry::default(),
             environment,
-            environment_boundary: false,
+            overrides: vec![],
         };
         let slot = self.free.pop().unwrap_or(self.slots.len());
         if slot == self.slots.len() {
@@ -297,7 +338,7 @@ impl Layout<'_> {
         self.tree.viewport
     }
     pub fn environment<T: Any>(&self) -> Option<&T> {
-        self.tree.get(self.me)?.environment.as_ref()?.downcast_ref()
+        self.tree.get(self.me)?.environment.get::<T>()
     }
     pub fn overlay(&mut self, limits: Constraints) -> Metrics {
         let children = self.tree.get(self.me).unwrap().children.clone();
@@ -318,11 +359,11 @@ pub struct Paint<'a> {
     /// True when this widget or an owned descendant is hovered in the active modal scope.
     pub hovered: bool,
     pub painter: &'a mut dyn Painter,
-    pub(crate) environment: Option<&'a dyn Any>,
+    pub(crate) environment: Option<&'a Environment>,
 }
 impl Paint<'_> {
     pub fn environment<T: Any>(&self) -> Option<&T> {
-        self.environment?.downcast_ref()
+        self.environment?.get::<T>()
     }
 }
 impl Layout<'_> {

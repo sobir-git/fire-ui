@@ -1,9 +1,11 @@
 use crate::{
     context::{Effects, Mutation, RawUpdate},
+    tree::Environment,
     tree::Tree,
     widget::{Erased, Id, Payload},
     *,
 };
+use std::any::{Any, TypeId};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     marker::PhantomData,
@@ -321,39 +323,72 @@ impl<W: Widget> Ui<W> {
         self.pressed.contains(&physical)
     }
     pub fn set_environment<T: 'static>(&mut self, value: Rc<T>, layout: bool) {
-        self.environment(self.root, value, layout)
+        self.environment(self.root, TypeId::of::<T>(), value, layout)
     }
-    fn environment(&mut self, id: Id, value: Rc<dyn std::any::Any>, layout: bool) {
+    /// Publish one ambient type for `id` and everything beneath it.
+    fn environment(&mut self, id: Id, type_id: TypeId, value: Rc<dyn Any>, layout: bool) {
+        let Some(node) = self.tree.get(id) else {
+            return;
+        };
+        let old = node.environment.clone();
+        let new = old.with(type_id, value);
         if let Some(n) = self.tree.get_mut(id) {
-            n.environment_boundary = true;
+            n.environment = new.clone();
+            // This node now answers for the type itself, so an ancestor publishing it
+            // later stops here. Other types still flow through.
+            if !n.overrides.contains(&type_id) {
+                n.overrides.push(type_id)
+            }
+            if layout {
+                self.tree.invalidate(id)
+            }
         }
-        self.inherit_environment(id, value, layout);
+        self.inherit_environment(id, type_id, &old, &new, layout);
+        self.notice(id, Lifecycle::Inherited);
+        self.repaint();
     }
-    fn inherit_environment(&mut self, id: Id, value: Rc<dyn std::any::Any>, layout: bool) {
+    /// Hand `new` down to descendants that were sharing `old`, stopping wherever a
+    /// node publishes `type_id` for itself.
+    fn inherit_environment(
+        &mut self,
+        id: Id,
+        type_id: TypeId,
+        old: &Rc<Environment>,
+        new: &Rc<Environment>,
+        layout: bool,
+    ) {
         let children = self
             .tree
             .get(id)
             .map(|n| n.children.clone())
             .unwrap_or_default();
-        if let Some(n) = self.tree.get_mut(id) {
-            n.environment = Some(value.clone());
-            if layout {
-                self.tree.invalidate(id);
-            }
-        }
         for child in children {
-            if self
-                .tree
-                .get(child)
-                .is_some_and(|n| !n.environment_boundary)
-            {
-                self.inherit_environment(child, value.clone(), layout);
+            let Some(n) = self.tree.get(child) else {
+                continue;
+            };
+            if n.overrides.contains(&type_id) {
+                continue;
             }
+            // Sharing the parent's old map means sharing its new one, so installing a
+            // value for a whole subtree allocates once rather than once per node.
+            let (previous, next) = if Rc::ptr_eq(&n.environment, old) {
+                (old.clone(), new.clone())
+            } else {
+                let previous = n.environment.clone();
+                let value = new
+                    .get_any(type_id)
+                    .expect("the published type is present in the new map");
+                (previous.clone(), previous.with(type_id, value))
+            };
+            if let Some(n) = self.tree.get_mut(child) {
+                n.environment = next.clone();
+                if layout {
+                    self.tree.invalidate(child)
+                }
+            }
+            self.inherit_environment(child, type_id, &previous, &next, layout);
+            self.notice(child, Lifecycle::Inherited);
         }
-        // The node's own value is already in place, so a widget reading it here sees
-        // the new one. This is a direct call, not a queued message.
-        self.notice(id, Lifecycle::Inherited);
-        self.repaint();
     }
     fn invoke(
         &mut self,
@@ -552,7 +587,9 @@ impl<W: Widget> Ui<W> {
                     self.reconcile()
                 }
             }
-            Mutation::Environment(id, value, layout) => self.environment(id, value, layout),
+            Mutation::Environment(id, type_id, value, layout) => {
+                self.environment(id, type_id, value, layout)
+            }
         }
     }
     fn cancel_timer(&mut self, id: Id, timer: Timer) {
@@ -1295,7 +1332,7 @@ impl<W: Widget> Ui<W> {
                     focused: interaction.0 == Some(id),
                     hovered: interaction.1.contains(&id),
                     painter,
-                    environment: n.environment.as_deref(),
+                    environment: Some(&n.environment),
                 });
                 *count += 1;
             }

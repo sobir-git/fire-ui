@@ -7,6 +7,13 @@
   scale stay independent axes, so any pairing works —
   `Theme { color: Palette::ember_dark(), scale: Scale::compact() }` is a compact
   ember panel — and nothing in the framework prefers a shipped pair.
+- A node's ambient values are now keyed by type instead of held in a single slot.
+  Publishing one type to a child no longer evicts the others or blocks them from
+  ever reaching it: a virtual list's row can hold the selection its owner published
+  *and* still read the theme, which it could not before. Inheritance stops per type,
+  at the node that publishes that type. Nodes share one map until something
+  publishes, so installing a value for a subtree usually allocates once for the
+  whole subtree.
 - `VirtualList` takes a `RowHeight`: a number, or a rule read from the theme so rows
   tighten with it. `Scrollbar` geometry takes the strip width rather than a theme,
   so a scrolling widget remembers one number between layouts instead of a palette.

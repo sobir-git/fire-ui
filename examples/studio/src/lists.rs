@@ -15,11 +15,7 @@ impl Widget for Row {
     type Command = Infallible;
     type Output = Infallible;
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        // A constant, not the theme's rhythm: a virtual list publishes selection
-        // state to each row, and a node holds one ambient value of one type, so a
-        // row cannot also see the theme. Row height is chosen by the list itself,
-        // which can see it, and does follow a theme change.
-        let inset = 10.;
+        let inset = gap(cx, 1.75);
         // Only the sides are inset: the row's height is fixed by the list, and
         // insetting it too would clamp the label to whatever was left over.
         let m = cx.measure(

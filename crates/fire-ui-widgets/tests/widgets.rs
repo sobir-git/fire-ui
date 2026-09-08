@@ -1622,3 +1622,73 @@ fn a_row_height_rule_follows_the_theme_while_a_number_does_not() {
         );
     }
 }
+
+#[test]
+fn a_list_row_reads_the_theme_even_though_the_list_publishes_its_own_state_to_it() {
+    // A virtual list publishes selection to each row. That must not cost the row its
+    // view of the theme: the two are different types, and a node's ambient values are
+    // keyed by type rather than held in one slot.
+    struct Row {
+        seen: f32,
+        label: Child<Label>,
+    }
+    impl Widget for Row {
+        type Command = std::convert::Infallible;
+        type Output = std::convert::Infallible;
+        fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+            self.seen = theme(cx).scale.font_size;
+            cx.measure(self.label, Constraints::loose(c.max));
+            cx.place(self.label, Point::default());
+            Metrics::new(c.constrain(c.max))
+        }
+        fn semantics(&self) -> Semantics {
+            Semantics {
+                role: Role::ListItem,
+                // The row reports both the theme it can see and the selection its
+                // owner published, proving neither evicted the other.
+                label: format!("{}", self.seen),
+                ..Semantics::default()
+            }
+        }
+    }
+
+    let mut ui = Ui::new(
+        Element::leaf(VirtualList::new(
+            (0..40usize).collect(),
+            RowHeight::Fixed(24.),
+            |key: &usize| {
+                let text = key.to_string();
+                Element::build(|children| Row {
+                    seen: 0.,
+                    label: children.add(Element::leaf(Label::new(text))),
+                })
+            },
+        )),
+        Size::new(200., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+    let seen = |ui: &Ui<VirtualList<usize, Row, _>>| {
+        ui.semantics()
+            .into_iter()
+            .filter(|n| n.semantics.role == Role::ListItem)
+            .map(|n| n.semantics.label)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        seen(&ui),
+        [format!("{}", Theme::dark().scale.font_size)].into(),
+        "every row sees the installed theme"
+    );
+
+    ui.set_environment(Rc::new(Theme::compact()), true);
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        seen(&ui),
+        [format!("{}", Theme::compact().scale.font_size)].into(),
+        "and every row follows a theme change, with none left on the old one"
+    );
+}

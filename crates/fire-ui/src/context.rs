@@ -49,7 +49,7 @@ pub(crate) enum Mutation {
     Capture(u32, bool),
     Modal(Option<Id>),
     Anchor(Id, Option<Option<Id>>),
-    Environment(Id, Rc<dyn Any>, bool),
+    Environment(Id, std::any::TypeId, Rc<dyn Any>, bool),
 }
 pub(crate) struct Effects {
     pub tasks: BTreeMap<TaskSlot, Option<u64>>,
@@ -178,12 +178,7 @@ impl<W: Widget> Update<'_, W> {
             .unwrap_or_default()
     }
     pub fn environment<T: Any>(&self) -> Option<&T> {
-        self.raw
-            .tree()
-            .get(self.raw.me())?
-            .environment
-            .as_ref()?
-            .downcast_ref()
+        self.raw.tree().get(self.raw.me())?.environment.get::<T>()
     }
     fn owned<C: Widget>(&self, child: Child<C>) -> Result<(), Error> {
         match self.raw.tree().get(child.id) {
@@ -353,6 +348,11 @@ impl<W: Widget> Update<'_, W> {
             .mutate(Mutation::Anchor(child.id, anchor))
             .map_err(|(e, _)| e)
     }
+    /// Publish an ambient value of type `T` for a child and everything beneath it.
+    ///
+    /// Only `T` is replaced: a child can hold a value from its owner and still read
+    /// every other type its ancestors installed. Inheritance of `T` alone stops at
+    /// that child, so an ancestor changing `T` later will not overwrite this.
     pub fn set_environment<C: Widget, T: Any>(
         &mut self,
         child: Child<C>,
@@ -361,7 +361,12 @@ impl<W: Widget> Update<'_, W> {
     ) -> Result<(), Error> {
         self.owned(child)?;
         self.raw
-            .mutate(Mutation::Environment(child.id, value, layout))
+            .mutate(Mutation::Environment(
+                child.id,
+                std::any::TypeId::of::<T>(),
+                value,
+                layout,
+            ))
             .map_err(|(e, _)| e)
     }
     pub fn replace_task(&mut self, slot: TaskSlot) -> Result<Ticket<W>, Error> {
