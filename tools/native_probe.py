@@ -49,14 +49,18 @@ def main():
             app = None
             try:
                 number = ""
-                for _ in range(100):
+                # A loaded CI runner can take several seconds to hand back the
+                # display number; five was not enough.
+                for _ in range(600):
                     display_file.seek(0)
                     number = display_file.read().strip()
                     if number:
                         break
+                    if display.poll() is not None:
+                        raise RuntimeError(f"Xvfb exited with {display.returncode}")
                     time.sleep(0.05)
                 if not number:
-                    raise RuntimeError("Xvfb did not start")
+                    raise RuntimeError("Xvfb did not start within 30s")
                 env = {**os.environ, "DISPLAY": ":" + number,
                        "WINIT_UNIX_BACKEND": "x11", "LIBGL_ALWAYS_SOFTWARE": "1", "FIRE_UI_PROFILE": "1", "FIRE_UI_INSPECT": str(Path(directory) / "ui.sock")}
                 env.pop("WAYLAND_DISPLAY", None)

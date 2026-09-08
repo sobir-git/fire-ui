@@ -144,6 +144,18 @@ def main():
             start("studio", binary)
             window = wait_for(lambda: run("xdotool", "search", "--name", "Fire UI Studio"), "Studio window").splitlines()[0]
             run("xdotool", "windowfocus", window)
+            # The studio publishes only the section that is showing, so a widget
+            # exists once its own section is selected. Navigating uses the same
+            # semantic action assistive technology would.
+            def select_section(name):
+                def tab():
+                    return next((n for n in snapshot().get("nodes", [])
+                                 if n.get("role") == "Tab" and n.get("label") == name), None)
+                section = wait_for(tab, f"{name} section")
+                if not section.get("selected"):
+                    action(section["id"], "activate")
+                    wait_for(lambda: tab().get("selected"), f"{name} section selected")
+            select_section("Text")
             def ready_snapshot():
                 value = snapshot()
                 return value if any(n.get("text") for n in value.get("nodes", [])) else None
@@ -259,14 +271,17 @@ def main():
             spoken("insertion", lambda: run("xdotool", "type", "z"), ["'z'"])
             spoken("deletion", lambda: key("BackSpace"), ["'z'"])
             spoken("selection", lambda: key("shift+Left"), ["selected"])
-            button = next(n["id"] for n in snapshot()["nodes"] if n["role"] == "Button" and n["label"] == "Add one")
-            spoken("button_focus", lambda: action(button, "focus"), ["Add one", "button"])
-            spoken("tab_navigation", lambda: key("Tab"), ["Add one", "button"])
+            # Buttons live on their own section, which republishes the whole tree.
+            select_section("Controls")
+            button = next(n["id"] for n in snapshot()["nodes"]
+                          if n["role"] == "Button" and n["label"] == "Primary")
+            spoken("button_focus", lambda: action(button, "focus"), ["Primary", "button"])
+            spoken("tab_navigation", lambda: key("Tab"), ["Secondary", "button"])
             focused = next(n for n in snapshot()["nodes"] if n["focused"])
             assert focused["id"] != button and focused["role"] == "Button", "Tab did not move native keyboard focus"
             key("Return")
-            wait_for(lambda: "Right counter: 1" in (output / "studio.log").read_text(), "native activation while Orca runs")
-            results["checks"]["orca_button_activation"] = "Tab to second counter and Enter increments it"
+            wait_for(lambda: "Pressed Secondary" in (output / "studio.log").read_text(), "native activation while Orca runs")
+            results["checks"]["orca_button_activation"] = "Tab from Primary to Secondary and Enter presses it"
             speech = [line for line in debug_log.read_text().splitlines() if "SPEECH OUTPUT:" in line]
             (output / "orca-speech.log").write_text("\n".join(speech) + "\n")
             results["passed"] = True

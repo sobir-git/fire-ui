@@ -106,14 +106,16 @@ def sample(binary, directory, seconds):
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             app = None
             try:
-                for _ in range(100):
+                # A loaded CI runner can take several seconds to hand back the
+                # display number; five was not enough.
+                for _ in range(600):
                     display_file.seek(0)
                     number = display_file.read().strip()
                     if number:
                         break
                     time.sleep(0.05)
                 else:
-                    raise RuntimeError("Xvfb did not start")
+                    raise RuntimeError("Xvfb did not start within 30s")
                 env = {**os.environ, "DISPLAY": ":" + number, "HOME": str(temporary),
                        "XDG_RUNTIME_DIR": str(runtime), "XDG_CONFIG_HOME": str(temporary / "config"),
                        "XDG_DATA_HOME": str(temporary / "data"), "XDG_CACHE_HOME": str(temporary / "cache"),
