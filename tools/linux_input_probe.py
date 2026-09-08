@@ -144,7 +144,10 @@ def main():
             start("studio", binary)
             window = wait_for(lambda: run("xdotool", "search", "--name", "Fire UI Studio"), "Studio window").splitlines()[0]
             run("xdotool", "windowfocus", window)
-            initial = wait_for(snapshot, "inspector")
+            def ready_snapshot():
+                value = snapshot()
+                return value if any(n.get("text") for n in value.get("nodes", [])) else None
+            initial = wait_for(ready_snapshot, "mounted editor semantics")
             (output / "initial.json").write_text(json.dumps(initial, indent=2))
             editor = next(n for n in initial["nodes"] if n["text"] and n["text"]["multiline"])["id"]
             other = next(n for n in initial["nodes"] if n["text"] and not n["text"]["multiline"])["id"]
