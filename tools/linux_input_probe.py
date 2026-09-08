@@ -125,10 +125,22 @@ def main():
                 env["DISPLAY"] = ":" + wait_for(display_number, "Xvfb display")
             run("dbus-update-activation-environment", "DISPLAY", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "HOME", "GSETTINGS_BACKEND")
             results["versions"] = {"ibus": run("ibus", "version"), "orca": run("orca", "--version")}
-            start("ibus", "ibus-daemon", "--xim", "--config=disable", "--emoji-extension=disable", "--cache=none")
+            start("ibus", "ibus-daemon", "--config=disable", "--emoji-extension=disable", "--cache=none")
             wait_for(lambda: run("ibus", "address"), "IBus bus")
             wait_for(lambda: run("ibus", "engine", "xkb:us::eng") or True, "IBus engine")
-            wait_for(lambda: "ibus" in run("xprop", "-root", "XIM_SERVERS"), "IBus XIM registration")
+            # IBus daemon redirects child errors to /dev/null. Own the XIM process
+            # explicitly so startup failures remain visible on minimal CI desktops.
+            xim_binary = next((Path(path) for path in (
+                "/usr/libexec/ibus-x11", "/usr/lib/ibus/ibus-x11", "/usr/lib64/ibus/ibus-x11"
+            ) if Path(path).is_file()), None)
+            if xim_binary is None:
+                raise RuntimeError("Install the IBus X11 frontend (ibus-x11)")
+            xim = start("ibus-xim", xim_binary, "--kill-daemon")
+            def xim_ready():
+                if xim.poll() is not None:
+                    raise RuntimeError("IBus XIM exited: " + (output / "ibus-xim.log").read_text())
+                return "ibus" in run("xprop", "-root", "XIM_SERVERS")
+            wait_for(xim_ready, "IBus XIM registration")
             start("studio", binary)
             window = wait_for(lambda: run("xdotool", "search", "--name", "Fire UI Studio"), "Studio window").splitlines()[0]
             run("xdotool", "windowfocus", window)
