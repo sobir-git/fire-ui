@@ -33,10 +33,13 @@ commands. Use `Update` for state changes, `Layout` for measuring and placing
 children, and `Paint` for drawing. The host sleeps unless input, queued work, a
 deadline or an explicit frame request needs attention.
 
-Custom hosts implement `Painter` and `TextEngine` and drive `Ui`.
+Custom hosts implement `Painter` and `TextEngine` and drive `Ui`. Clipboard requests
+are disabled by default. Hosts that handle `HostRequest::Copy` and `HostRequest::Paste`
+call `Ui::set_clipboard_enabled(true)` before delivering input; unsupported requests
+return `Error::Unsupported` before widgets mutate a cut selection.
 Use `fire-ui-widgets` for optional composition helpers and `fire-ui-native` for
 native desktop hosting. No app storage or app-specific theme lives in this crate.
 
-See the [architecture](https://github.com/sobir-git/fire-ui/blob/master/docs/architecture.md)
-and [studio](https://github.com/sobir-git/fire-ui/tree/master/examples/studio).
+See the [architecture](https://github.com/sobir-git/fire-ui/blob/v0.4.0/docs/architecture.md)
+and [studio](https://github.com/sobir-git/fire-ui/tree/v0.4.0/examples/studio).
 Experimental 0.x API; MIT licensed.

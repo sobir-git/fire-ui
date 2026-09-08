@@ -469,21 +469,57 @@ impl Widget for Studio {
         );
     }
 }
-fn main() {
-    let result = run_with(
+fn main() -> Result<(), String> {
+    run_with(
         AppearanceScope::new(
             Scroll::new(Studio::new()),
             std::rc::Rc::new(Theme::default()),
         ),
         WindowOptions {
             title: "Fire UI Studio".into(),
+            font: Some(
+                fire_ui_native::system_font().ok_or("Studio requires a font; set FIRE_UI_FONT")?,
+            ),
+            fallback_fonts: fallback_fonts(),
+            partial_repaint: true,
             size: Size::new(1140., 880.),
             ..WindowOptions::default()
         },
         |output, _| println!("{output}"),
-    );
-    if let Err(error) = result {
-        eprintln!("{error}");
-        std::process::exit(1);
+    )
+}
+
+// This application chooses multilingual coverage; the framework loads no defaults.
+fn fallback_fonts() -> Vec<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        [
+            &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            ][..],
+            &[
+                "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            ][..],
+            &[
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+            ][..],
+        ]
+        .into_iter()
+        .filter_map(|choices| {
+            choices
+                .iter()
+                .map(std::path::PathBuf::from)
+                .find(|p| p.is_file())
+        })
+        .collect()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        vec![]
     }
 }

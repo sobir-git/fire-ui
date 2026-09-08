@@ -8,6 +8,7 @@ fn main() -> Result<(), String> {
         content,
         WindowOptions {
             title: "Hello, Fire UI".into(),
+            font: Some(fire_ui_native::system_font().ok_or("Choose a font file")?),
             ..WindowOptions::default()
         },
     )

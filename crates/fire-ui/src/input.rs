@@ -66,6 +66,7 @@ pub enum Input {
     Preedit {
         session: u64,
         text: String,
+        selection: Option<(usize, usize)>,
     },
 }
 impl Input {

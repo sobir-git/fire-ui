@@ -99,20 +99,13 @@ impl Painter for GlPainter<'_> {
         let bottom = top + visible.height;
         let first = p.lines.partition_point(|line| line.y + p.line_height < top);
         for line in p.lines[first..].iter().take_while(|line| line.y < bottom) {
-            let mut byte = line.range.start;
-            for run in p.text[line.range.clone()].split('\t') {
-                let x = line
-                    .stops
-                    .binary_search_by_key(&byte, |s| s.caret.byte)
-                    .ok()
-                    .map_or(0., |i| line.stops[i].x);
+            for run in &line.runs {
                 let _ = self.canvas.fill_text(
-                    origin.x + x,
+                    origin.x + run.x,
                     (origin.y + line.y + p.baseline).round(),
-                    run,
+                    &run.display,
                     &paint,
                 );
-                byte += run.len() + 1;
             }
         }
     }

@@ -1,13 +1,24 @@
 #![doc = include_str!("../README.md")]
+#[cfg(feature = "accessibility")]
 mod accessibility;
+#[cfg(all(unix, feature = "inspection"))]
+mod inspection;
+#[cfg(all(target_os = "linux", feature = "accessibility"))]
+mod linux_atspi;
+#[cfg(all(target_os = "linux", feature = "accessibility"))]
+mod linux_edit;
 mod painter;
+#[cfg(feature = "accessibility")]
+mod platform_accessibility;
+mod present;
 mod text;
 mod window;
 pub(crate) use painter::GlPainter;
-pub use text::NativeText;
+pub use text::{system_font, NativeText};
 pub use window::{run, run_with, WakeHandle, WindowOptions};
 
 /// Blocking system file chooser. Hosts may call this from their platform's dialog thread.
+#[cfg(feature = "dialogs")]
 pub fn open_file(filters: &[(&str, &[&str])]) -> Result<Option<std::path::PathBuf>, String> {
     let mut dialog = native_dialog::FileDialog::new();
     for (label, extensions) in filters {
@@ -17,6 +28,7 @@ pub fn open_file(filters: &[(&str, &[&str])]) -> Result<Option<std::path::PathBu
 }
 
 /// Blocking system save chooser, including the platform's overwrite confirmation.
+#[cfg(feature = "dialogs")]
 pub fn save_file(
     filename: &str,
     filters: &[(&str, &[&str])],

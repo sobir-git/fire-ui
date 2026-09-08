@@ -95,3 +95,66 @@ fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
     );
     assert!((p.selection(1..2)[0].width - 4. * space).abs() < 0.1);
 }
+
+#[test]
+fn bidi_geometry_selection_and_visual_navigation_agree() {
+    let mut engine = NativeText::new().unwrap();
+    for source in [
+        "abc אבג def",
+        "שלום world 123!",
+        "مرحبا بالعالم hello",
+        "אבג\txyz",
+        "אבג (abc) דהו",
+        "\u{202e}abc\u{202c}",
+        "\u{2067}אבג\u{2069} test",
+        "لا e\u{301} אב",
+    ] {
+        for width in [None, Some(65.)] {
+            let p = engine.layout(TextRequest {
+                text: Arc::from(source),
+                style: TextStyle::default(),
+                width,
+                revision: 1,
+            });
+            let reconstructed: String = p.lines.iter().map(|l| &p.text[l.range.clone()]).collect();
+            assert_eq!(reconstructed, source);
+            for line in &p.lines {
+                for stop in &line.stops {
+                    let point = p.caret_point(stop.caret);
+                    assert!(
+                        (point.x - stop.x).abs() < 0.1,
+                        "{source}: {stop:?} resolved to {point:?}"
+                    );
+                    assert_eq!(point.y, line.y);
+                    assert!((p.caret_point(p.hit(point)).x - point.x).abs() < 0.1);
+                }
+                for cell in &line.cells {
+                    let rects = p.selection(cell.range.clone());
+                    assert_eq!(rects.len(), 1);
+                    assert!((rects[0].width - cell.width).abs() < 0.1);
+                }
+                let mut caret = p.line_edge(line.stops[0].caret, false);
+                let mut x = p.caret_point(caret).x;
+                for _ in 0..line.stops.len() {
+                    let next = p.visual_move(caret, true);
+                    let point = p.caret_point(next);
+                    if point.y != line.y || next == caret {
+                        break;
+                    }
+                    assert!(point.x > x, "visual right must advance");
+                    x = point.x;
+                    caret = next;
+                }
+            }
+        }
+    }
+    let p = engine.layout(TextRequest {
+        text: Arc::from("אבג"),
+        style: TextStyle::default(),
+        width: None,
+        revision: 0,
+    });
+    assert!(p.caret_point(Caret::at(0)).x > p.caret_point(Caret::at(2)).x);
+    assert!(p.caret_point(Caret::at(2)).x > p.caret_point(Caret::at(4)).x);
+    assert!(p.caret_point(Caret::at(4)).x > p.caret_point(Caret::at(6)).x);
+}

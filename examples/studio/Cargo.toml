@@ -9,4 +9,4 @@ publish = false
 [dependencies]
 fire-ui.workspace = true
 fire-ui-widgets.workspace = true
-fire-ui-native.workspace = true
+fire-ui-native = { workspace = true, features = ["accessibility", "inspection", "clipboard", "bitmap-fonts"] }

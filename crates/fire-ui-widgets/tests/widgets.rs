@@ -40,7 +40,7 @@ fn editor_grapheme_delete_undo_and_silent_set() {
         .find(|n| n.semantics.role == Role::TextInput)
         .unwrap()
         .id;
-    ui.accessibility(id, SemanticAction::Focus);
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
     let end = ui.root().text().len();
     ui.send(Edit::Select {
         anchor: end,
@@ -160,7 +160,7 @@ fn editor_focus_and_blink_recover_after_blur_and_occlusion() {
     let mut text = TestText;
     settle(&mut ui, &mut text);
     let id = ui.semantics()[0].id;
-    ui.accessibility(id, SemanticAction::Focus);
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
     assert!(ui.ime_cursor().is_some());
     assert!(ui.next_work().deadline.is_some());
     ui.window_focus(false);
@@ -189,7 +189,7 @@ fn quiet_editor_keeps_a_caret_without_scheduling_idle_work() {
     let mut text = TestText;
     settle(&mut ui, &mut text);
     let id = ui.semantics()[0].id;
-    ui.accessibility(id, SemanticAction::Focus);
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
     ui.send(Edit::Insert("A".into())).unwrap();
     settle(&mut ui, &mut text);
     assert!(ui.ime_cursor().is_some());
@@ -248,7 +248,7 @@ fn focus_requested_before_window_activation_is_restored_on_activation() {
     settle(&mut ui, &mut text);
     ui.window_focus(false);
     let id = ui.semantics()[0].id;
-    ui.accessibility(id, SemanticAction::Focus);
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
     assert!(ui.ime_cursor().is_none());
     ui.window_focus(true);
     assert!(ui.ime_cursor().is_some());
@@ -285,7 +285,8 @@ fn moving_selected_lines_preserves_selection_and_is_undoable() {
     )
     .unwrap();
     settle(&mut ui, &mut TestText);
-    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus);
+    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
+        .unwrap();
     ui.send(Edit::Select {
         anchor: 4,
         caret: 8,
@@ -536,7 +537,10 @@ fn menu_keyboard_skips_disabled_actions_and_stays_inside_the_window() {
         .find(|n| n.semantics.disabled)
         .unwrap()
         .id;
-    ui.accessibility(disabled, SemanticAction::Activate);
+    assert_eq!(
+        ui.accessibility(disabled, SemanticAction::Activate),
+        Err(SemanticError::Unavailable)
+    );
     ui.pump(100, |_| panic!("Disabled menu action fired"), |_| {});
     key(&mut ui, &mut TestText, Key::Escape);
     let mut dismissed = false;
@@ -593,4 +597,322 @@ fn button_content_and_accessible_name_update_without_remounting() {
     assert!(nodes
         .iter()
         .any(|n| n.semantics.role == Role::Text && n.semantics.label == "Resume"));
+}
+
+#[test]
+fn semantic_edits_preserve_direction_validate_graphemes_and_use_editor_history() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("aé e\u{301}!").label("Body").key("body")),
+        Size::new(400., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.pump(100, |_| {}, |_| {});
+    ui.layout(&mut TestText);
+    let id = ui.semantics()[0].id;
+    assert_eq!(
+        ui.accessibility(
+            id,
+            SemanticAction::SetSelection {
+                anchor: 0,
+                caret: 2
+            }
+        ),
+        Err(SemanticError::InvalidSelection)
+    );
+    ui.accessibility(
+        id,
+        SemanticAction::SetSelection {
+            anchor: 3,
+            caret: 1,
+        },
+    )
+    .unwrap();
+    let text = ui.semantics()[0].semantics.text.clone().unwrap();
+    assert_eq!((text.anchor, text.caret.byte), (3, 1));
+    ui.accessibility(id, SemanticAction::ReplaceSelectedText("שלום".into()))
+        .unwrap();
+    assert_eq!(
+        ui.semantics()[0].semantics.value.as_deref(),
+        Some("aשלום e\u{301}!")
+    );
+    ui.send(Edit::Undo).unwrap();
+    ui.pump(100, |_| {}, |_| {});
+    assert_eq!(
+        ui.semantics()[0].semantics.value.as_deref(),
+        Some("aé e\u{301}!")
+    );
+    assert_eq!(
+        ui.accessibility(u64::MAX, SemanticAction::Focus),
+        Err(SemanticError::Unavailable)
+    );
+    assert_eq!(
+        ui.accessibility(id, SemanticAction::Activate),
+        Err(SemanticError::Unsupported)
+    );
+}
+
+#[test]
+fn ime_selection_is_exposed_and_cancelled_without_changing_document() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("original")),
+        Size::new(400., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.pump(100, |_| {}, |_| {});
+    ui.layout(&mut TestText);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    let session = ui.session();
+    ui.dispatch(
+        Input::Preedit {
+            session,
+            text: "日本".into(),
+            selection: Some((0, 3)),
+        },
+        &mut TestText,
+    );
+    let node = &ui.semantics()[0];
+    assert_eq!(node.semantics.value.as_deref(), Some("original"));
+    assert_eq!(
+        node.semantics
+            .text
+            .as_ref()
+            .unwrap()
+            .composition
+            .as_ref()
+            .unwrap()
+            .selection,
+        Some((0, 3))
+    );
+    ui.dispatch(
+        Input::Preedit {
+            session,
+            text: String::new(),
+            selection: None,
+        },
+        &mut TestText,
+    );
+    assert!(ui.semantics()[0]
+        .semantics
+        .text
+        .as_ref()
+        .unwrap()
+        .composition
+        .is_none());
+}
+
+#[test]
+fn semantic_range_edits_and_set_value_are_atomic_undoable_and_report_limits() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("aé e\u{301}!").max_bytes(32)),
+        Size::new(400., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let id = ui.semantics()[0].id;
+    let before = ui.semantics()[0].semantics.clone();
+    for action in [
+        SemanticAction::ReplaceText {
+            start: 2,
+            end: 3,
+            text: "x".into(),
+        },
+        SemanticAction::ReplaceText {
+            start: 3,
+            end: 1,
+            text: "x".into(),
+        },
+    ] {
+        assert_eq!(
+            ui.accessibility(id, action),
+            Err(SemanticError::InvalidSelection)
+        );
+    }
+    assert_eq!(
+        ui.accessibility(id, SemanticAction::SetValue("x".repeat(33))),
+        Err(SemanticError::LimitReached)
+    );
+    let unchanged = ui.semantics()[0].semantics.clone();
+    assert_eq!(unchanged.value, before.value);
+    assert_eq!(unchanged.text.unwrap().caret, before.text.unwrap().caret);
+    // AT-SPI offsets count Unicode scalars. Deleting a combining mark is legal,
+    // while keyboard caret movement continues to use complete graphemes.
+    ui.accessibility(
+        id,
+        SemanticAction::ReplaceText {
+            start: 5,
+            end: 7,
+            text: String::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(ui.semantics()[0].semantics.value.as_deref(), Some("aé e!"));
+    ui.accessibility(id, SemanticAction::SetValue("שלום".into()))
+        .unwrap();
+    assert_eq!(ui.semantics()[0].semantics.value.as_deref(), Some("שלום"));
+    for expected in ["aé e!", "aé e\u{301}!"] {
+        ui.send(Edit::Undo).unwrap();
+        settle(&mut ui, &mut TestText);
+        assert_eq!(ui.semantics()[0].semantics.value.as_deref(), Some(expected));
+    }
+    // Inserting a base before a combining mark must not leave a caret inside it.
+    ui.accessibility(
+        id,
+        SemanticAction::ReplaceText {
+            start: 5,
+            end: 5,
+            text: "x".into(),
+        },
+    )
+    .unwrap();
+    let s = ui.semantics()[0].semantics.clone();
+    assert_eq!(s.value.as_deref(), Some("aé ex\u{301}!"));
+    assert_eq!(s.text.unwrap().caret.byte, 5);
+    assert_eq!(
+        ui.accessibility(
+            id,
+            SemanticAction::SetSelection {
+                anchor: 6,
+                caret: 6
+            }
+        ),
+        Err(SemanticError::InvalidSelection)
+    );
+    // Consecutive semantic operations are valid before the next layout pass.
+    ui.accessibility(id, SemanticAction::SetValue("a longer value".into()))
+        .unwrap();
+    ui.accessibility(
+        id,
+        SemanticAction::SetSelection {
+            anchor: 14,
+            caret: 14,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn external_edits_invalidate_old_ime_input_only_after_success() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("old").max_bytes(16)),
+        Size::new(400., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    let session = ui.session();
+    ui.dispatch(
+        Input::Preedit {
+            session,
+            text: "日".into(),
+            selection: Some((3, 3)),
+        },
+        &mut TestText,
+    );
+    assert_eq!(
+        ui.accessibility(id, SemanticAction::SetValue("x".repeat(17))),
+        Err(SemanticError::LimitReached)
+    );
+    assert_eq!(ui.session(), session);
+    assert!(ui.semantics()[0]
+        .semantics
+        .text
+        .as_ref()
+        .unwrap()
+        .composition
+        .is_some());
+    ui.accessibility(id, SemanticAction::SetValue("new".into()))
+        .unwrap();
+    assert_ne!(ui.session(), session);
+    ui.dispatch(
+        Input::Text {
+            session,
+            text: "日".into(),
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.semantics()[0].semantics.value.as_deref(), Some("new"));
+    assert!(ui.semantics()[0]
+        .semantics
+        .text
+        .as_ref()
+        .unwrap()
+        .composition
+        .is_none());
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "!".into(),
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.semantics()[0].semantics.value.as_deref(), Some("new!"));
+}
+
+#[test]
+fn clipboard_requires_host_opt_in_before_cut_can_mutate_text() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("aé🔥z")),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    ui.accessibility(
+        id,
+        SemanticAction::SetSelection {
+            anchor: 7,
+            caret: 1,
+        },
+    )
+    .unwrap();
+    let selection = || Input::Key {
+        key: Key::Character('x'),
+        physical: 1,
+        down: true,
+        repeat: false,
+        modifiers: Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+    };
+    for ch in ['x', 'c', 'v'] {
+        let mut event = selection();
+        if let Input::Key { key, .. } = &mut event {
+            *key = Key::Character(ch);
+        }
+        ui.dispatch(event, &mut TestText);
+        ui.pump(
+            100,
+            |_| {},
+            |_| panic!("disabled clipboard queued a request"),
+        );
+        assert_eq!(ui.root().text(), "aé🔥z");
+        let text = ui.semantics()[0].semantics.text.clone().unwrap();
+        assert_eq!((text.anchor, text.caret.byte), (7, 1));
+    }
+
+    ui.set_clipboard_enabled(true);
+    ui.dispatch(selection(), &mut TestText);
+    let mut copied = vec![];
+    ui.pump(
+        100,
+        |_| {},
+        |request| match request {
+            HostRequest::Copy(value) => copied.push(value),
+            _ => panic!("cut queued an unexpected request"),
+        },
+    );
+    assert_eq!(copied, ["é🔥"]);
+    assert_eq!(ui.root().text(), "az");
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "aé🔥z");
 }

@@ -7,6 +7,7 @@ use crate::{
 use std::{any::Any, collections::BTreeMap, marker::PhantomData, rc::Rc, time::Duration};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    Unsupported,
     Full,
     Stale,
     NotOwned,
@@ -45,6 +46,7 @@ pub(crate) struct Effects {
     pub frame: Option<bool>,
     pub timers: BTreeMap<Timer, Option<(Duration, Lifetime)>>,
     pub repaint: bool,
+    pub damage: Option<Rect>,
     pub layout: bool,
     pub stop: bool,
 }
@@ -56,6 +58,7 @@ impl Effects {
             frame: None,
             timers: BTreeMap::new(),
             repaint: false,
+            damage: None,
             layout: false,
             stop: false,
         }
@@ -339,7 +342,22 @@ impl<W: Widget> Update<'_, W> {
         }
     }
     pub fn repaint(&mut self) {
-        self.raw.effects().repaint = true
+        let effects = self.raw.effects();
+        effects.repaint = true;
+        effects.damage = None;
+    }
+    /// Invalidate local pixels, including the old and new extent of anything that moved.
+    pub fn repaint_rect(&mut self, rect: Rect) {
+        if !rect.x.is_finite() || !rect.y.is_finite() || !rect.size().valid() {
+            return;
+        }
+        let effects = self.raw.effects();
+        effects.damage = if effects.repaint {
+            effects.damage.map(|old| old.union(rect))
+        } else {
+            Some(rect)
+        };
+        effects.repaint = true;
     }
     pub fn relayout(&mut self) {
         self.raw.effects().layout = true;
@@ -433,6 +451,9 @@ impl<W: Widget> Update<'_, W> {
         Ok(())
     }
     pub fn copy(&mut self, text: String) -> Result<(), (Error, String)> {
+        if !self.raw.mailbox().clipboard_enabled {
+            return Err((Error::Unsupported, text));
+        }
         if self.raw.cleanup() {
             return Err((Error::Stale, text));
         }
@@ -446,6 +467,9 @@ impl<W: Widget> Update<'_, W> {
         Ok(())
     }
     pub fn paste(&mut self) -> Result<(), Error> {
+        if !self.raw.mailbox().clipboard_enabled {
+            return Err(Error::Unsupported);
+        }
         if self.raw.cleanup() {
             return Err(Error::Stale);
         }

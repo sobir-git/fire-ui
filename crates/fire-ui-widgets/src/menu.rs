@@ -223,7 +223,7 @@ impl<K: Data + Clone> Widget for Menu<K> {
     }
     fn semantics(&self) -> Semantics {
         Semantics {
-            role: Role::Dialog,
+            role: Role::Menu,
             label: "Actions".into(),
             ..Semantics::default()
         }
@@ -363,23 +363,26 @@ impl Widget for MenuRow {
     }
     fn semantics(&self) -> Semantics {
         Semantics {
-            role: Role::Button,
+            role: Role::MenuItem,
+            actions: vec![SemanticActionKind::Activate],
             label: self.label.to_string(),
             disabled: !self.enabled,
-            selected: self.checked,
+            checked: Some(self.checked),
             ..Semantics::default()
         }
     }
-    fn accessibility(&mut self, cx: &mut Update<'_, Self>, action: SemanticAction) {
-        if self.enabled {
-            match action {
-                SemanticAction::Activate => {
-                    let _ = cx.emit(());
-                }
-                SemanticAction::Focus => {
-                    let _ = cx.focus();
-                }
-            }
+    fn accessibility(
+        &mut self,
+        cx: &mut Update<'_, Self>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
+        if !self.enabled {
+            return Err(SemanticError::Unavailable);
+        }
+        match action {
+            SemanticAction::Activate => cx.emit(()).map_err(|_| SemanticError::Unavailable),
+            SemanticAction::Focus => cx.focus().map_err(|_| SemanticError::Unavailable),
+            _ => Err(SemanticError::Unsupported),
         }
     }
 }

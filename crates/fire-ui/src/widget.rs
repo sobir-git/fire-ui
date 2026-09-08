@@ -81,6 +81,10 @@ pub enum Role {
     ListItem,
     Dialog,
     Canvas,
+    CheckBox,
+    Menu,
+    MenuItem,
+    Tab,
 }
 #[derive(Clone, Debug)]
 pub struct Semantics {
@@ -89,6 +93,11 @@ pub struct Semantics {
     pub value: Option<String>,
     pub disabled: bool,
     pub selected: bool,
+    /// Stable application-supplied identifier for inspection and tests.
+    pub key: Option<String>,
+    pub checked: Option<bool>,
+    pub actions: Vec<SemanticActionKind>,
+    pub text: Option<TextSemantics>,
 }
 impl Default for Semantics {
     fn default() -> Self {
@@ -98,13 +107,76 @@ impl Default for Semantics {
             value: None,
             disabled: false,
             selected: false,
+            key: None,
+            checked: None,
+            actions: vec![],
+            text: None,
         }
     }
 }
+/// Actions advertised by widgets, shared by assistive technology and automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticActionKind {
+    Focus,
+    Activate,
+    SetValue,
+    ReplaceSelectedText,
+    ReplaceText,
+    SetSelection,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticAction {
     Focus,
     Activate,
+    SetValue(String),
+    ReplaceSelectedText(String),
+    /// Replace a UTF-8 byte range atomically, without changing selection first.
+    /// Endpoints must be scalar boundaries; the resulting caret is a grapheme boundary.
+    ReplaceText {
+        start: usize,
+        end: usize,
+        text: String,
+    },
+    /// UTF-8 byte offsets, preserving selection direction.
+    SetSelection {
+        anchor: usize,
+        caret: usize,
+    },
+}
+impl SemanticAction {
+    pub fn kind(&self) -> SemanticActionKind {
+        match self {
+            Self::Focus => SemanticActionKind::Focus,
+            Self::Activate => SemanticActionKind::Activate,
+            Self::SetValue(_) => SemanticActionKind::SetValue,
+            Self::ReplaceSelectedText(_) => SemanticActionKind::ReplaceSelectedText,
+            Self::ReplaceText { .. } => SemanticActionKind::ReplaceText,
+            Self::SetSelection { .. } => SemanticActionKind::SetSelection,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Composition {
+    pub text: String,
+    /// UTF-8 byte offsets within the uncommitted text. None hides the IME caret.
+    pub selection: Option<(usize, usize)>,
+}
+#[derive(Clone, Debug)]
+pub struct TextSemantics {
+    pub anchor: usize,
+    pub caret: Caret,
+    pub multiline: bool,
+    pub composition: Option<Composition>,
+    pub paragraph: Option<std::sync::Arc<Paragraph>>,
+    /// Paragraph origin in widget coordinates.
+    pub origin: Point,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticError {
+    Unavailable,
+    Unsupported,
+    InvalidSelection,
+    LimitReached,
 }
 /// All custom and built-in widgets use this protocol. No runtime nodes are public.
 pub trait Widget: Any + Sized {
@@ -134,9 +206,15 @@ pub trait Widget: Any + Sized {
     fn semantics(&self) -> Semantics {
         Semantics::default()
     }
-    fn accessibility(&mut self, cx: &mut Update<'_, Self>, action: SemanticAction) {
+    fn accessibility(
+        &mut self,
+        cx: &mut Update<'_, Self>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
         if action == SemanticAction::Focus {
-            let _ = cx.focus();
+            cx.focus().map_err(|_| SemanticError::Unavailable)
+        } else {
+            Err(SemanticError::Unsupported)
         }
     }
 }
@@ -160,7 +238,11 @@ pub(crate) trait Erased {
     fn cursor(&self, position: Point) -> Option<CursorIcon>;
     fn ime_cursor(&self) -> Option<Rect>;
     fn semantics(&self) -> Semantics;
-    fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction);
+    fn accessibility(
+        &mut self,
+        cx: &mut crate::context::RawUpdate<'_>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError>;
 }
 impl<W: Widget> Erased for W {
     fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool {
@@ -207,7 +289,11 @@ impl<W: Widget> Erased for W {
     fn semantics(&self) -> Semantics {
         self.semantics()
     }
-    fn accessibility(&mut self, cx: &mut crate::context::RawUpdate<'_>, action: SemanticAction) {
+    fn accessibility(
+        &mut self,
+        cx: &mut crate::context::RawUpdate<'_>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
         self.accessibility(&mut cx.typed(), action)
     }
 }

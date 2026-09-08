@@ -107,16 +107,28 @@ pub struct Button<C: Widget<Output = Infallible>> {
     disabled: bool,
     theme: Theme,
     label: String,
+    appearance: Option<Theme>,
 }
 impl<C: Widget<Output = Infallible>> Button<C> {
     pub fn new(content: Element<C>, label: impl Into<String>) -> Element<Self> {
-        let label = label.into();
+        Self::build(content, label.into(), None)
+    }
+    /// Per-control styling without replacing keyboard, pointer or accessibility behavior.
+    pub fn styled(
+        content: Element<C>,
+        label: impl Into<String>,
+        appearance: Theme,
+    ) -> Element<Self> {
+        Self::build(content, label.into(), Some(appearance))
+    }
+    fn build(content: Element<C>, label: String, appearance: Option<Theme>) -> Element<Self> {
         Element::build(|children| Self {
             content: children.add(content),
             pressed: None,
             disabled: false,
             theme: Theme::default(),
             label,
+            appearance,
         })
     }
 }
@@ -134,7 +146,9 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
             }
             ButtonCommand::Disabled(value) => {
                 self.disabled = value;
-                self.pressed = None;
+                if let Some(pointer) = self.pressed.take() {
+                    let _ = cx.release(pointer);
+                }
                 cx.repaint()
             }
         }
@@ -142,8 +156,15 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
     fn focusable(&self) -> bool {
         !self.disabled
     }
+    fn cursor(&self, _position: Point) -> Option<CursorIcon> {
+        Some(if self.disabled {
+            CursorIcon::Arrow
+        } else {
+            CursorIcon::Pointer
+        })
+    }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        self.theme = theme(cx);
+        self.theme = self.appearance.clone().unwrap_or_else(|| theme(cx));
         let inset = self.theme.inset;
         let m = cx.measure(self.content, c.inset(inset));
         let size = c.constrain(Size::new(
@@ -212,9 +233,10 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
         }
     }
     fn paint(&self, cx: &mut Paint<'_>) {
-        let t = cx
-            .environment::<Theme>()
-            .cloned()
+        let t = self
+            .appearance
+            .clone()
+            .or_else(|| cx.environment::<Theme>().cloned())
             .unwrap_or_else(|| self.theme.clone());
         cx.painter.rect(
             cx.bounds,
@@ -238,21 +260,24 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
     fn semantics(&self) -> Semantics {
         Semantics {
             role: Role::Button,
+            actions: vec![SemanticActionKind::Activate],
             label: self.label.clone(),
             disabled: self.disabled,
             ..Semantics::default()
         }
     }
-    fn accessibility(&mut self, cx: &mut Update<'_, Self>, action: SemanticAction) {
-        if !self.disabled {
-            match action {
-                SemanticAction::Activate => {
-                    let _ = cx.emit(());
-                }
-                SemanticAction::Focus => {
-                    let _ = cx.focus();
-                }
-            }
+    fn accessibility(
+        &mut self,
+        cx: &mut Update<'_, Self>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
+        if self.disabled {
+            return Err(SemanticError::Unavailable);
+        }
+        match action {
+            SemanticAction::Activate => cx.emit(()).map_err(|_| SemanticError::Unavailable),
+            SemanticAction::Focus => cx.focus().map_err(|_| SemanticError::Unavailable),
+            _ => Err(SemanticError::Unsupported),
         }
     }
 }

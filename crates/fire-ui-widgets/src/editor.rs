@@ -119,6 +119,10 @@ pub enum EditorLayer {
 /// Optional consumer-owned effects. Returning true schedules another visible frame.
 pub trait EditorDecoration: 'static {
     fn frame(&mut self, view: &EditorView<'_>, time: FrameTime, edited: bool) -> bool;
+    /// Bounds of all decoration pixels in paragraph coordinates. None invalidates the editor.
+    fn damage(&self, _view: &EditorView<'_>) -> Option<Rect> {
+        None
+    }
     fn paint(&self, view: &EditorView<'_>, layer: EditorLayer, painter: &mut dyn Painter);
 }
 /// A retained editor. Edits are public commands, while pointer/key input uses the same operations.
@@ -145,7 +149,10 @@ pub struct Editor<D: Document = StringDocument> {
     drag_position: Point,
     state_pending: bool,
     preedit: String,
-    preedit_layout: Option<Arc<Paragraph>>,
+    preedit_selection: Option<(usize, usize)>,
+    label: Option<String>,
+    key: Option<String>,
+    composition_layout: Option<Arc<Paragraph>>,
     last_click: Option<(Duration, Point)>,
     click_count: u8,
     modifiers: Modifiers,
@@ -194,7 +201,10 @@ impl<D: Document> Editor<D> {
             drag_position: Point::default(),
             state_pending: false,
             preedit: String::new(),
-            preedit_layout: None,
+            preedit_selection: None,
+            label: None,
+            key: None,
+            composition_layout: None,
             last_click: None,
             click_count: 0,
             modifiers: Modifiers::default(),
@@ -206,6 +216,14 @@ impl<D: Document> Editor<D> {
             restore_pending: false,
             scrollbar_drag: None,
         }
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+    pub fn key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
     }
     pub fn state(&self) -> EditorState {
         EditorState {
@@ -368,7 +386,7 @@ impl<D: Document> Editor<D> {
             return;
         }
         self.document.replace(range.clone(), &inserted);
-        self.caret = Caret::at(range.start + inserted.len());
+        self.caret = Caret::at(self.boundary(range.start + inserted.len()));
         self.anchor = None;
         self.history_bytes += removed.len() + inserted.len();
         for e in self.redo.drain(..) {
@@ -438,16 +456,24 @@ impl<D: Document> Editor<D> {
             if let Some(e) = self.redo.pop() {
                 self.document
                     .replace(e.start..e.start + e.removed.len(), &e.inserted);
-                self.caret = Caret::at(e.start + e.inserted.len());
+                self.caret = Caret::at(self.boundary(e.start + e.inserted.len()));
                 self.undo.push_back(e)
             }
         } else if let Some(e) = self.undo.pop_back() {
             self.document
                 .replace(e.start..e.start + e.inserted.len(), &e.removed);
-            self.caret = Caret::at(e.start + e.removed.len());
+            self.caret = Caret::at(self.boundary(e.start + e.removed.len()));
             self.redo.push(e)
         }
         self.anchor = None;
+    }
+    fn clear_preedit(&mut self) {
+        self.preedit.clear();
+        self.preedit_selection = None;
+        self.composition_layout = None;
+    }
+    fn composition_start(&self) -> usize {
+        self.selection().map_or(self.caret.byte, |r| r.start)
     }
     fn reset_blink(&mut self, cx: &mut Update<'_, Self>) {
         self.caret_on = true;
@@ -551,7 +577,7 @@ impl<D: Document> Widget for Editor<D> {
                 self.history_bytes = 0;
                 self.scroll = Point::default();
                 self.reveal_pending = true;
-                self.preedit.clear();
+                self.clear_preedit();
                 cx.relayout();
                 self.reset_blink(cx);
                 return;
@@ -571,6 +597,7 @@ impl<D: Document> Widget for Editor<D> {
                 cx.relayout()
             }
         }
+        self.reveal(cx.bounds().size());
         self.changed(cx, before)
     }
     fn frame(&mut self, cx: &mut Update<'_, Self>, time: FrameTime) {
@@ -604,10 +631,27 @@ impl<D: Document> Widget for Editor<D> {
         if let Some(mut decoration) = self.decoration.take() {
             let edited = std::mem::take(&mut self.edited);
             if let Some(view) = self.view(cx.bounds(), cx.focused()) {
+                let before = decoration.damage(&view);
                 if decoration.frame(&view, time, edited) {
                     cx.request_frame();
                 }
-                cx.repaint();
+                if let (Some(before), Some(after)) = (before, decoration.damage(&view)) {
+                    let damage = if before.width <= 0. || before.height <= 0. {
+                        after
+                    } else if after.width <= 0. || after.height <= 0. {
+                        before
+                    } else {
+                        before.union(after)
+                    };
+                    cx.repaint_rect(Rect::new(
+                        damage.x + self.insets().x - self.scroll.x,
+                        damage.y + self.insets().y - self.scroll.y,
+                        damage.width,
+                        damage.height,
+                    ));
+                } else {
+                    cx.repaint();
+                }
             }
             self.decoration = Some(decoration);
         }
@@ -632,7 +676,7 @@ impl<D: Document> Widget for Editor<D> {
                     let _ = cx.emit(EditorOutput::FocusChanged(false));
                 }
                 self.drag = None;
-                self.preedit.clear();
+                self.clear_preedit();
                 cx.cancel_timer(self.blink);
                 cx.repaint()
             }
@@ -650,7 +694,9 @@ impl<D: Document> Widget for Editor<D> {
     fn timer(&mut self, cx: &mut Update<'_, Self>, timer: Timer) {
         if timer == self.blink && cx.focused() && self.caret_blink {
             self.caret_on = !self.caret_on;
-            cx.repaint();
+            if let Some(rect) = self.ime_cursor() {
+                cx.repaint_rect(rect.inset(-2.));
+            }
             let _ = cx.after(self.blink, Duration::from_millis(530));
         }
     }
@@ -691,14 +737,22 @@ impl<D: Document> Widget for Editor<D> {
                 revision: 0,
             }));
         }
-        self.preedit_layout = if self.preedit.is_empty() {
+        self.composition_layout = if self.preedit.is_empty() {
             None
         } else {
+            let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
+            let display: Arc<str> = format!(
+                "{}{}{}",
+                &self.text()[..range.start],
+                self.preedit,
+                &self.text()[range.end..]
+            )
+            .into();
             Some(cx.paragraph(TextRequest {
-                text: Arc::from(self.preedit.as_str()),
+                text: display,
                 style,
-                width: None,
-                revision: 0,
+                width,
+                revision,
             }))
         };
         let p = self.paragraph.as_ref().unwrap();
@@ -839,10 +893,14 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Text { text, .. } => {
                 self.insert(text);
-                self.preedit.clear();
+                self.clear_preedit();
             }
-            Input::Preedit { text, .. } => {
+            Input::Preedit {
+                text, selection, ..
+            } => {
                 self.preedit = text.clone();
+                self.preedit_selection = selection
+                    .filter(|(a, b)| text.is_char_boundary(*a) && text.is_char_boundary(*b));
                 cx.relayout();
             }
             Input::Scroll { delta, .. } if self.multiline => {
@@ -887,46 +945,48 @@ impl<D: Document> Widget for Editor<D> {
                     }
                     Key::Character('z') if ctrl => self.history(m.shift),
                     Key::Character('y') if ctrl => self.history(true),
-                    Key::Left => {
-                        let byte = if !m.shift && self.selection().is_some() {
-                            self.selection().unwrap().start
-                        } else if ctrl {
-                            self.word_left()
+                    Key::Left | Key::Right => {
+                        let right = *key == Key::Right;
+                        let caret = if ctrl {
+                            Caret::at(if right {
+                                self.word_right()
+                            } else {
+                                self.word_left()
+                            })
+                        } else if let Some(p) = &self.paragraph {
+                            if !m.shift && self.selection().is_some() {
+                                let anchor = Caret::at(self.anchor.unwrap());
+                                let a = p.caret_point(anchor);
+                                let b = p.caret_point(self.caret);
+                                let anchor_before = (a.y, a.x) < (b.y, b.x);
+                                if anchor_before == right {
+                                    self.caret
+                                } else {
+                                    anchor
+                                }
+                            } else {
+                                p.visual_move(self.caret, right)
+                            }
                         } else {
-                            self.prev()
+                            Caret::at(if right { self.next() } else { self.prev() })
                         };
-                        self.move_to(byte, m.shift)
-                    }
-                    Key::Right => {
-                        let byte = if !m.shift && self.selection().is_some() {
-                            self.selection().unwrap().end
-                        } else if ctrl {
-                            self.word_right()
-                        } else {
-                            self.next()
-                        };
-                        self.move_to(byte, m.shift)
+                        self.move_to(caret.byte, m.shift);
+                        self.caret.affinity = caret.affinity;
                     }
                     Key::Home | Key::End => {
-                        let byte = if ctrl {
-                            if *key == Key::Home {
+                        let caret = if ctrl {
+                            Caret::at(if *key == Key::Home {
                                 0
                             } else {
                                 self.text().len()
-                            }
+                            })
                         } else {
-                            let start = self.text()[..self.caret.byte]
-                                .rfind('\n')
-                                .map_or(0, |i| i + 1);
-                            if *key == Key::Home {
-                                start
-                            } else {
-                                self.text()[self.caret.byte..]
-                                    .find('\n')
-                                    .map_or(self.text().len(), |i| self.caret.byte + i)
-                            }
+                            self.paragraph
+                                .as_ref()
+                                .map_or(self.caret, |p| p.line_edge(self.caret, *key == Key::End))
                         };
-                        self.move_to(byte, m.shift)
+                        self.move_to(caret.byte, m.shift);
+                        self.caret.affinity = caret.affinity;
                     }
                     Key::Up | Key::Down if m.alt && self.multiline => {
                         self.move_lines(*key == Key::Down)
@@ -946,7 +1006,8 @@ impl<D: Document> Widget for Editor<D> {
                                     step
                                 };
                             let caret = p.hit(Point::new(point.x, y));
-                            self.move_to(caret.byte, m.shift)
+                            self.move_to(caret.byte, m.shift);
+                            self.caret.affinity = caret.affinity;
                         }
                     }
                     Key::Backspace => {
@@ -975,7 +1036,7 @@ impl<D: Document> Widget for Editor<D> {
                     Key::Tab if self.multiline && !ctrl => self.insert("\t"),
                     Key::Escape if self.selection().is_some() || !self.preedit.is_empty() => {
                         self.anchor = None;
-                        self.preedit.clear();
+                        self.clear_preedit();
                         cx.relayout()
                     }
                     _ => return,
@@ -1018,7 +1079,7 @@ impl<D: Document> Widget for Editor<D> {
             {
                 decoration.paint(&view, EditorLayer::BehindText, cx.painter);
             }
-            if let Some(selection) = self.selection() {
+            if let Some(selection) = self.selection().filter(|_| self.preedit.is_empty()) {
                 for rect in p.selection_in(
                     selection,
                     Rect::new(
@@ -1031,7 +1092,10 @@ impl<D: Document> Widget for Editor<D> {
                     cx.painter.rect(rect, 0., t.selection.into())
                 }
             }
-            if self.text().is_empty() {
+            if let Some(composition) = &self.composition_layout {
+                cx.painter
+                    .paragraph(composition, Point::default(), t.foreground.into());
+            } else if self.text().is_empty() {
                 if let Some(placeholder) = &self.placeholder_layout {
                     cx.painter
                         .paragraph(placeholder, Point::default(), t.muted.into())
@@ -1047,25 +1111,35 @@ impl<D: Document> Widget for Editor<D> {
             }
             if cx.focused {
                 let point = p.caret_point(self.caret);
-                if self.caret_on {
+                if self.caret_on && self.preedit.is_empty() {
                     cx.painter.rect(
                         Rect::new(point.x, point.y, 1.5, p.line_height),
                         0.,
                         t.accent.into(),
                     )
                 }
-                if let Some(preedit) = &self.preedit_layout {
-                    cx.painter.paragraph(preedit, point, t.accent.into());
-                    cx.painter.rect(
-                        Rect::new(
-                            point.x,
-                            point.y + p.line_height - 1.,
-                            preedit.size.width,
-                            1.,
-                        ),
-                        0.,
-                        t.accent.into(),
-                    )
+                if let Some(composition) = &self.composition_layout {
+                    let start = self.composition_start();
+                    for rect in composition.selection(start..start + self.preedit.len()) {
+                        cx.painter.rect(
+                            Rect::new(rect.x, rect.y + rect.height - 1., rect.width, 1.),
+                            0.,
+                            t.accent.into(),
+                        );
+                    }
+                    if let Some((anchor, caret)) = self.preedit_selection {
+                        for rect in composition
+                            .selection(start + anchor.min(caret)..start + anchor.max(caret))
+                        {
+                            cx.painter.rect(rect, 0., t.selection.into());
+                        }
+                        let at = composition.caret_point(Caret::at(start + caret));
+                        cx.painter.rect(
+                            Rect::new(at.x, at.y, 1.5, composition.line_height),
+                            0.,
+                            t.accent.into(),
+                        );
+                    }
                 }
             }
         }
@@ -1082,7 +1156,15 @@ impl<D: Document> Widget for Editor<D> {
     }
     fn ime_cursor(&self) -> Option<Rect> {
         let p = self.paragraph.as_ref()?;
-        let point = p.caret_point(self.caret);
+        let point = if let Some(composition) = &self.composition_layout {
+            let byte = self.composition_start()
+                + self
+                    .preedit_selection
+                    .map_or(self.preedit.len(), |(_, caret)| caret);
+            composition.caret_point(Caret::at(byte))
+        } else {
+            p.caret_point(self.caret)
+        };
         Some(Rect::new(
             point.x + self.insets().x - self.scroll.x,
             point.y + self.insets().y - self.scroll.y,
@@ -1090,10 +1172,84 @@ impl<D: Document> Widget for Editor<D> {
             p.line_height,
         ))
     }
+    fn accessibility(
+        &mut self,
+        cx: &mut Update<'_, Self>,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
+        if action == SemanticAction::Focus {
+            return cx.focus().map_err(|_| SemanticError::Unavailable);
+        }
+        let before = self.document.revision();
+        let replacement = match action {
+            SemanticAction::SetValue(text) => Some((0..self.text().len(), text)),
+            SemanticAction::ReplaceSelectedText(text) => Some((
+                self.selection().unwrap_or(self.caret.byte..self.caret.byte),
+                text,
+            )),
+            SemanticAction::ReplaceText { start, end, text } => Some((start..end, text)),
+            SemanticAction::SetSelection { anchor, caret } => {
+                if self.boundary(anchor) != anchor || self.boundary(caret) != caret {
+                    return Err(SemanticError::InvalidSelection);
+                }
+                self.anchor = Some(anchor);
+                self.caret = Caret::at(caret);
+                None
+            }
+            _ => return Err(SemanticError::Unsupported),
+        };
+        if let Some((range, text)) = replacement {
+            // Check before mutating composition, selection or history.
+            if range.start > range.end
+                || !self.text().is_char_boundary(range.start)
+                || !self.text().is_char_boundary(range.end)
+            {
+                return Err(SemanticError::InvalidSelection);
+            }
+            let added = text
+                .chars()
+                .filter(|c| *c != '\r')
+                .map(char::len_utf8)
+                .sum::<usize>();
+            let next_len = self.text().len() - range.len() + added;
+            if next_len > self.max_bytes && next_len > self.text().len() {
+                return Err(SemanticError::LimitReached);
+            }
+            self.replace(range, &text);
+        }
+        self.clear_preedit();
+        self.reveal(cx.bounds().size());
+        self.changed(cx, before);
+        Ok(())
+    }
     fn semantics(&self) -> Semantics {
         Semantics {
             role: Role::TextInput,
-            label: self.placeholder.to_string(),
+            label: self
+                .label
+                .clone()
+                .unwrap_or_else(|| self.placeholder.to_string()),
+            key: self.key.clone(),
+            actions: vec![
+                SemanticActionKind::SetValue,
+                SemanticActionKind::ReplaceSelectedText,
+                SemanticActionKind::ReplaceText,
+                SemanticActionKind::SetSelection,
+            ],
+            text: Some(TextSemantics {
+                anchor: self.anchor.unwrap_or(self.caret.byte),
+                caret: self.caret,
+                multiline: self.multiline,
+                composition: (!self.preedit.is_empty()).then(|| Composition {
+                    text: self.preedit.clone(),
+                    selection: self.preedit_selection,
+                }),
+                paragraph: self.paragraph.clone(),
+                origin: Point::new(
+                    self.insets().x - self.scroll.x,
+                    self.insets().y - self.scroll.y,
+                ),
+            }),
             value: Some(self.text().into()),
             ..Semantics::default()
         }

@@ -34,7 +34,12 @@ pub struct WindowOptions {
     pub overlay: bool,
     pub min_size: Size,
     pub position: Option<(i32, i32)>,
+    /// Primary font file. None loads no font; text requires an explicit face.
     pub font: Option<std::path::PathBuf>,
+    /// Ordered fallback faces for characters missing from the primary font.
+    pub fallback_fonts: Vec<std::path::PathBuf>,
+    /// Retain a window image to repaint only damage, trading graphics memory for CPU.
+    pub partial_repaint: bool,
     pub size: Size,
     pub background: Color,
     pub limits: Limits,
@@ -48,6 +53,8 @@ impl Default for WindowOptions {
             min_size: Size::new(420., 360.),
             position: None,
             font: None,
+            fallback_fonts: vec![],
+            partial_repaint: false,
             size: Size::new(1100., 780.),
             background: Color::hex(0x171918),
             limits: Limits::default(),
@@ -55,9 +62,27 @@ impl Default for WindowOptions {
     }
 }
 enum HostEvent {
+    #[cfg(all(unix, feature = "inspection"))]
+    Inspect(crate::inspection::Pending),
     Command(Posted),
+    #[cfg(feature = "accessibility")]
     Accessibility(accesskit_winit::Event),
+    #[cfg(all(target_os = "linux", feature = "accessibility"))]
+    LinuxEdit(crate::linux_atspi::PendingEdit),
+    #[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+    LinuxPaste {
+        pending: crate::linux_atspi::PendingEdit,
+        text: Result<String, String>,
+        expected: String,
+    },
 }
+#[cfg(all(target_os = "linux", feature = "accessibility"))]
+impl From<crate::linux_atspi::PendingEdit> for HostEvent {
+    fn from(pending: crate::linux_atspi::PendingEdit) -> Self {
+        Self::LinuxEdit(pending)
+    }
+}
+#[cfg(feature = "accessibility")]
 impl From<accesskit_winit::Event> for HostEvent {
     fn from(event: accesskit_winit::Event) -> Self {
         Self::Accessibility(event)
@@ -139,9 +164,13 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
             Err(error) => {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.bytes.fetch_sub(bytes, Ordering::AcqRel);
-                let HostEvent::Command(post) = error.0 else {
+                #[cfg(any(feature = "accessibility", all(unix, feature = "inspection")))]
+                let HostEvent::Command(post) = error.0
+                else {
                     unreachable!()
                 };
+                #[cfg(not(any(feature = "accessibility", all(unix, feature = "inspection"))))]
+                let HostEvent::Command(post) = error.0;
                 Err((
                     Error::Stale,
                     *post
@@ -155,9 +184,16 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
 }
 // Drop GPU resources before the context and window.
 struct State<W: Widget> {
-    accessibility: accesskit_winit::Adapter,
+    #[cfg(feature = "accessibility")]
+    accessibility: crate::platform_accessibility::Adapter,
+    #[cfg(feature = "accessibility")]
+    accessibility_tree: crate::accessibility::AccessibilityTree,
+    #[cfg(feature = "accessibility")]
     semantic_revision: Option<u64>,
     canvas: Canvas<OpenGl>,
+    backing: Option<femtovg::ImageId>,
+    partial_repaint: bool,
+    presenter: Option<crate::present::Presenter>,
     text: NativeText,
     ui: Ui<W>,
     surface: Surface<WindowSurface>,
@@ -179,6 +215,7 @@ struct Host<W: Widget, F> {
     composing: bool,
     ime_session: Option<u64>,
     ime_target: Option<u64>,
+    #[cfg(feature = "clipboard")]
     clipboard: Option<arboard::Clipboard>,
     cursor: Option<CursorIcon>,
     wake: WakeHandle<W>,
@@ -206,6 +243,16 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         count: Arc::new(AtomicUsize::new(0)),
         bytes: Arc::new(AtomicUsize::new(0)),
     };
+    #[cfg(all(unix, feature = "inspection"))]
+    let _inspection = if let Some(path) = std::env::var_os("FIRE_UI_INSPECT") {
+        let proxy = wake.proxy.clone();
+        Some(crate::inspection::Server::start(
+            path.into(),
+            move |request| proxy.send_event(HostEvent::Inspect(request)).is_ok(),
+        )?)
+    } else {
+        None
+    };
     let mut host = Host {
         root: Some(root),
         options,
@@ -218,6 +265,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         composing: false,
         ime_session: None,
         ime_target: None,
+        #[cfg(feature = "clipboard")]
         clipboard: None,
         cursor: None,
         wake,
@@ -245,6 +293,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             |request| requests.push(request),
         );
         for request in requests {
+            #[cfg(feature = "clipboard")]
             if matches!(request, HostRequest::Copy(_) | HostRequest::Paste(_))
                 && self.clipboard.is_none()
             {
@@ -253,6 +302,19 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             match request {
                 HostRequest::Close => self.close_requested = true,
                 HostRequest::Window(action) => match action {
+                    WindowAction::Focus => s.window.focus_window(),
+                    WindowAction::Restore => {
+                        s.window.set_minimized(false);
+                        s.window.set_maximized(false);
+                    }
+                    WindowAction::Fullscreen(enabled) => s.window.set_fullscreen(
+                        enabled.then_some(winit::window::Fullscreen::Borderless(None)),
+                    ),
+                    WindowAction::AlwaysOnTop(enabled) => s.window.set_window_level(if enabled {
+                        winit::window::WindowLevel::AlwaysOnTop
+                    } else {
+                        winit::window::WindowLevel::Normal
+                    }),
                     WindowAction::Minimize => s.window.set_minimized(true),
                     WindowAction::ToggleMaximized => {
                         s.window.set_maximized(!s.window.is_maximized())
@@ -275,11 +337,13 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
                         let _ = s.window.drag_resize_window(direction);
                     }
                 },
+                #[cfg(feature = "clipboard")]
                 HostRequest::Copy(text) => {
                     if let Some(clipboard) = &mut self.clipboard {
                         let _ = clipboard.set_text(text);
                     }
                 }
+                #[cfg(feature = "clipboard")]
                 HostRequest::Paste(token) => {
                     if let Some(clipboard) = &mut self.clipboard {
                         if let Ok(text) = clipboard.get_text() {
@@ -287,6 +351,8 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
                         }
                     }
                 }
+                #[cfg(not(feature = "clipboard"))]
+                HostRequest::Copy(_) | HostRequest::Paste(_) => {}
             }
         }
         while let Some(post) = self.pending_posts.pop_front() {
@@ -339,16 +405,19 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             self.cursor = Some(cursor);
         }
 
-        let revision = s.ui.semantic_revision();
-        if s.semantic_revision != Some(revision) {
-            s.accessibility.update_if_active(|| {
-                crate::accessibility::tree(
-                    s.ui.semantics(),
-                    &self.options.title,
-                    s.window.scale_factor(),
-                )
-            });
-            s.semantic_revision = Some(revision);
+        #[cfg(feature = "accessibility")]
+        {
+            let revision = s.ui.semantic_revision();
+            if s.semantic_revision != Some(revision) {
+                s.accessibility.update_if_active(|| {
+                    s.accessibility_tree.tree(
+                        s.ui.semantics(),
+                        &self.options.title,
+                        s.window.scale_factor(),
+                    )
+                });
+                s.semantic_revision = Some(revision);
+            }
         }
         let caret = s.ui.ime_cursor();
         let target = caret.map(|_| s.ui.session());
@@ -362,8 +431,19 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             }
         }
         if let Some(caret) = caret {
+            // winit 0.30's X11 backend ignores the area size and forwards only
+            // the spot. XIM needs the bottom of the line to avoid covering preedit.
+            let y = if matches!(
+                s.window.window_handle().map(|h| h.as_raw()),
+                Ok(raw_window_handle::RawWindowHandle::Xlib(_)
+                    | raw_window_handle::RawWindowHandle::Xcb(_))
+            ) {
+                caret.y + caret.height
+            } else {
+                caret.y
+            };
             s.window.set_ime_cursor_area(
-                LogicalPosition::new(caret.x as f64, caret.y as f64),
+                LogicalPosition::new(caret.x as f64, y as f64),
                 LogicalSize::new(caret.width as f64, caret.height as f64),
             );
         }
@@ -394,6 +474,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
             event_loop,
             &self.options,
             self.root.take().unwrap(),
+            #[cfg(feature = "accessibility")]
             self.wake.proxy.clone(),
         ) {
             Ok(state) => {
@@ -411,6 +492,32 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
     }
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
+            #[cfg(all(unix, feature = "inspection"))]
+            HostEvent::Inspect(pending) => {
+                if Instant::now() > pending.deadline {
+                    let _ = pending
+                        .reply
+                        .send(serde_json::json!({"error": "request expired"}));
+                    return;
+                }
+                self.service();
+                let result = self
+                    .state
+                    .as_mut()
+                    .ok_or("window unavailable".to_string())
+                    .and_then(|s| crate::inspection::apply(&mut s.ui, &pending.request));
+                for _ in 0..16 {
+                    self.service();
+                    if self.state.as_ref().is_none_or(|s| !s.ui.next_work().ready) {
+                        break;
+                    }
+                }
+                let response = match result {
+                    Ok(()) => crate::inspection::snapshot(&self.state.as_ref().unwrap().ui),
+                    Err(error) => serde_json::json!({"error": error}),
+                };
+                let _ = pending.reply.send(response);
+            }
             HostEvent::Command(post) => self.pending_posts.push_back(Pending {
                 command: *post
                     .command
@@ -423,6 +530,96 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                 }),
                 bytes: post.bytes,
             }),
+            #[cfg(all(target_os = "linux", feature = "accessibility"))]
+            HostEvent::LinuxEdit(pending) => {
+                self.service();
+                if let crate::linux_atspi::Operation::Paste {
+                    position: _position,
+                } = pending.operation
+                {
+                    #[cfg(not(feature = "clipboard"))]
+                    let _ = pending
+                        .reply
+                        .try_send(Err("native clipboard feature is disabled".into()));
+                    #[cfg(feature = "clipboard")]
+                    {
+                        let prepared = self
+                            .state
+                            .as_ref()
+                            .ok_or("window unavailable".to_string())
+                            .and_then(|s| crate::linux_edit::prepare_paste(&s.ui, &pending));
+                        match prepared {
+                            Ok(expected) => {
+                                let proxy = self.wake.proxy.clone();
+                                // An unresponsive clipboard owner can take seconds. Keep
+                                // pointer events and paints running while waiting for it.
+                                std::thread::spawn(move || {
+                                    let text = arboard::Clipboard::new()
+                                        .and_then(|mut c| c.get_text())
+                                        .map_err(|e| e.to_string());
+                                    let _ = proxy.send_event(HostEvent::LinuxPaste {
+                                        pending,
+                                        text,
+                                        expected,
+                                    });
+                                });
+                            }
+                            Err(error) => {
+                                let _ = pending.reply.try_send(Err(error));
+                            }
+                        }
+                    }
+                } else {
+                    let result = self
+                        .state
+                        .as_mut()
+                        .ok_or("window unavailable".to_string())
+                        .and_then(|s| {
+                            crate::linux_edit::apply(&mut s.ui, &pending, |text| {
+                                #[cfg(feature = "clipboard")]
+                                {
+                                    copy_text(&mut self.clipboard, text)
+                                }
+                                #[cfg(not(feature = "clipboard"))]
+                                {
+                                    let _ = text;
+                                    Err("native clipboard feature is disabled".into())
+                                }
+                            })
+                        });
+                    self.service();
+                    let _ = pending.reply.try_send(result);
+                }
+            }
+            #[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+            HostEvent::LinuxPaste {
+                mut pending,
+                text,
+                expected,
+            } => {
+                self.service();
+                let result = text.and_then(|text| {
+                    let s = self.state.as_mut().ok_or("window unavailable")?;
+                    if crate::linux_edit::prepare_paste(&s.ui, &pending)? != expected {
+                        return Err("text changed while reading clipboard".into());
+                    }
+                    let crate::linux_atspi::Operation::Paste { position } = pending.operation
+                    else {
+                        unreachable!()
+                    };
+                    pending.operation = crate::linux_atspi::Operation::Insert {
+                        position,
+                        length: -1,
+                        text,
+                    };
+                    crate::linux_edit::apply(&mut s.ui, &pending, |text| {
+                        copy_text(&mut self.clipboard, text)
+                    })
+                });
+                self.service();
+                let _ = pending.reply.try_send(result);
+            }
+            #[cfg(feature = "accessibility")]
             HostEvent::Accessibility(event) => {
                 if let Some(s) = &mut self.state {
                     if event.window_id != s.window.id() {
@@ -430,15 +627,20 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                     }
                     match event.window_event {
                         accesskit_winit::WindowEvent::InitialTreeRequested => {
-                            s.semantic_revision = None
+                            s.semantic_revision = None;
+                            s.accessibility_tree.reset();
                         }
                         accesskit_winit::WindowEvent::ActionRequested(request) => {
-                            if let Some(action) = crate::accessibility::action(request.action) {
-                                s.ui.accessibility(request.target_node.0, action);
+                            if let Some(action) = s
+                                .accessibility_tree
+                                .action(request.clone(), &s.ui.semantics())
+                            {
+                                let _ = s.ui.accessibility(request.target_node.0, action);
                             }
                         }
                         accesskit_winit::WindowEvent::AccessibilityDeactivated => {
-                            s.semantic_revision = None
+                            s.semantic_revision = None;
+                            s.accessibility_tree.reset();
                         }
                     }
                 }
@@ -447,6 +649,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
         self.service();
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(feature = "accessibility")]
         if let Some(s) = &mut self.state {
             s.accessibility.process_event(&s.window, &event);
         }
@@ -559,13 +762,23 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
             }
             WindowEvent::Ime(Ime::Enabled) => self.ime_session = self.ime_target,
             WindowEvent::Ime(Ime::Disabled) => {
-                self.ime_session = None;
+                if let Some(session) = self.ime_session.take() {
+                    self.input(Input::Preedit {
+                        session,
+                        text: String::new(),
+                        selection: None,
+                    });
+                }
                 self.composing = false;
             }
-            WindowEvent::Ime(Ime::Preedit(text, _)) => {
+            WindowEvent::Ime(Ime::Preedit(text, selection)) => {
                 if let Some(session) = self.ime_session {
                     self.composing = !text.is_empty();
-                    self.input(Input::Preedit { session, text });
+                    self.input(Input::Preedit {
+                        session,
+                        text,
+                        selection,
+                    });
                 }
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
@@ -585,18 +798,20 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                     alt: self.modifiers.alt_key(),
                     meta: self.modifiers.super_key(),
                 };
-                if let Some(key) = key(&event.logical_key) {
-                    let physical = match event.physical_key {
-                        PhysicalKey::Code(code) => code as u32,
-                        PhysicalKey::Unidentified(_) => u32::MAX,
-                    };
-                    self.input(Input::Key {
-                        key,
-                        physical,
-                        down: event.state == ElementState::Pressed,
-                        repeat: event.repeat,
-                        modifiers,
-                    });
+                if !self.composing {
+                    if let Some(key) = key(&event.logical_key) {
+                        let physical = match event.physical_key {
+                            PhysicalKey::Code(code) => code as u32,
+                            PhysicalKey::Unidentified(_) => u32::MAX,
+                        };
+                        self.input(Input::Key {
+                            key,
+                            physical,
+                            down: event.state == ElementState::Pressed,
+                            repeat: event.repeat,
+                            modifiers,
+                        });
+                    }
                 }
                 if event.state == ElementState::Pressed
                     && !modifiers.command()
@@ -699,7 +914,7 @@ fn create<W: Widget>(
     event_loop: &ActiveEventLoop,
     options: &WindowOptions,
     root: Element<W>,
-    proxy: EventLoopProxy<HostEvent>,
+    #[cfg(feature = "accessibility")] proxy: EventLoopProxy<HostEvent>,
 ) -> Result<State<W>, String> {
     let attrs = Window::default_attributes()
         .with_visible(false)
@@ -716,7 +931,7 @@ fn create<W: Widget>(
             options.min_size.width,
             options.min_size.height,
         ));
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "x11"))]
     let attrs = if options.overlay {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
         attrs
@@ -736,6 +951,7 @@ fn create<W: Widget>(
             event_loop,
             ConfigTemplateBuilder::new()
                 .with_alpha_size(8)
+                .with_stencil_size(8)
                 .with_depth_size(0),
             |configs| {
                 configs
@@ -745,7 +961,9 @@ fn create<W: Widget>(
         )
         .map_err(|e| e.to_string())?;
     let window = window.ok_or("Window creation failed")?;
-    let accessibility = accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
+    #[cfg(feature = "accessibility")]
+    let accessibility =
+        crate::platform_accessibility::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
     if options.overlay {
         if matches!(
             window.window_handle().map_err(|e| e.to_string())?.as_raw(),
@@ -783,19 +1001,34 @@ fn create<W: Widget>(
     let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
     let renderer = unsafe { OpenGl::new_from_function_cstr(|name| display.get_proc_address(name)) }
         .map_err(|e| e.to_string())?;
-    let text = if let Some(path) = &options.font {
+    let mut text = if let Some(path) = &options.font {
         NativeText::with_font(path)?
     } else {
-        NativeText::new()?
+        NativeText::empty()
     };
+    for path in &options.fallback_fonts {
+        text.add_font(path)?;
+    }
     let canvas =
         Canvas::new_with_text_context(renderer, text.context.clone()).map_err(|e| e.to_string())?;
-    let ui = Ui::new(root, options.size, options.limits)
+    let mut ui = Ui::new(root, options.size, options.limits)
         .map_err(|e| format!("UI admission failed: {e:?}"))?;
+    ui.set_clipboard_enabled(cfg!(feature = "clipboard"));
     Ok(State {
+        #[cfg(feature = "accessibility")]
         accessibility,
+        #[cfg(feature = "accessibility")]
+        accessibility_tree: Default::default(),
+        #[cfg(feature = "accessibility")]
         semantic_revision: None,
         canvas,
+        backing: None,
+        partial_repaint: options.partial_repaint,
+        presenter: if options.partial_repaint {
+            unsafe { crate::present::Presenter::new(|name| display.get_proc_address(name)) }
+        } else {
+            None
+        },
         text,
         ui,
         surface,
@@ -807,6 +1040,9 @@ fn create<W: Widget>(
     })
 }
 fn render<W: Widget>(s: &mut State<W>, background: Color, profile: bool) -> Result<(), String> {
+    if s.text.fonts.is_empty() && s.text.layouts != 0 {
+        return Err("Text requires a font; set WindowOptions::font or fallback_fonts".into());
+    }
     let size = s.window.inner_size();
     if size.width == 0 || size.height == 0 {
         return Ok(());
@@ -817,27 +1053,132 @@ fn render<W: Widget>(s: &mut State<W>, background: Color, profile: bool) -> Resu
             NonZeroU32::new(size.width).unwrap(),
             NonZeroU32::new(size.height).unwrap(),
         );
-        s.surface_size = (size.width, size.height)
+        s.surface_size = (size.width, size.height);
+        if let Some(image) = s.backing.take() {
+            s.canvas.delete_image(image);
+        }
+        s.ui.repaint();
     }
     s.canvas.set_size(size.width, size.height, 1.);
-    s.canvas.reset();
-    s.canvas.clear_rect(
-        0,
-        0,
-        size.width,
-        size.height,
-        femtovg::Color::rgbaf(background.0, background.1, background.2, background.3),
-    );
-    s.canvas.scale(
-        s.window.scale_factor() as f32,
-        s.window.scale_factor() as f32,
-    );
-    s.ui.paint(&mut GlPainter::new(
-        &mut s.canvas,
-        &s.text,
-        Rect::new(0., 0., size.width as f32, size.height as f32),
-    ));
-    s.canvas.flush();
+    if s.partial_repaint {
+        if s.backing.is_none() {
+            s.backing = Some(
+                s.canvas
+                    .create_image_empty(
+                        size.width as usize,
+                        size.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::FLIP_Y
+                            | femtovg::ImageFlags::PREMULTIPLIED
+                            | femtovg::ImageFlags::NEAREST,
+                    )
+                    .map_err(|e| e.to_string())?,
+            );
+            s.ui.repaint();
+        }
+        let backing = s.backing.unwrap();
+        let scale = s.window.scale_factor() as f32;
+        if let Some(damage) = s.ui.paint_damage() {
+            // Round outwards and include antialiasing at the damage edge.
+            let x = (damage.x * scale - 2.).floor().max(0.);
+            let y = (damage.y * scale - 2.).floor().max(0.);
+            let right = ((damage.x + damage.width) * scale + 2.)
+                .ceil()
+                .min(size.width as f32);
+            let bottom = ((damage.y + damage.height) * scale + 2.)
+                .ceil()
+                .min(size.height as f32);
+            let region = Rect::new(
+                x / scale,
+                y / scale,
+                (right - x) / scale,
+                (bottom - y) / scale,
+            );
+            s.canvas
+                .set_render_target(femtovg::RenderTarget::Image(backing));
+            s.canvas.reset();
+            s.canvas.clear_rect(
+                x as u32,
+                y as u32,
+                (right - x) as u32,
+                (bottom - y) as u32,
+                femtovg::Color::rgbaf(background.0, background.1, background.2, background.3),
+            );
+            s.canvas.scale(scale, scale);
+            s.ui.paint_region(
+                &mut GlPainter::new(
+                    &mut s.canvas,
+                    &s.text,
+                    Rect::new(0., 0., size.width as f32, size.height as f32),
+                ),
+                region,
+            );
+            if profile {
+                eprintln!("paint_area_pixels={}", (right - x) * (bottom - y));
+            }
+        }
+        s.canvas.set_render_target(femtovg::RenderTarget::Screen);
+        if let Some(presenter) = &s.presenter {
+            s.canvas.flush();
+            presenter.copy(
+                s.canvas
+                    .get_native_texture(backing)
+                    .map_err(|e| e.to_string())?,
+                size.width,
+                size.height,
+            )?;
+        } else {
+            s.canvas.reset();
+            s.canvas.clear_rect(
+                0,
+                0,
+                size.width,
+                size.height,
+                femtovg::Color::rgba(0, 0, 0, 0),
+            );
+            s.canvas
+                .global_composite_operation(femtovg::CompositeOperation::Copy);
+            let mut path = femtovg::Path::new();
+            path.rect(0., 0., size.width as f32, size.height as f32);
+            s.canvas.fill_path(
+                &path,
+                &femtovg::Paint::image(
+                    backing,
+                    0.,
+                    0.,
+                    size.width as f32,
+                    size.height as f32,
+                    0.,
+                    1.,
+                ),
+            );
+            s.canvas.flush();
+        }
+    } else {
+        s.canvas.set_render_target(femtovg::RenderTarget::Screen);
+        s.canvas.reset();
+        s.canvas.clear_rect(
+            0,
+            0,
+            size.width,
+            size.height,
+            femtovg::Color::rgbaf(background.0, background.1, background.2, background.3),
+        );
+        let scale = s.window.scale_factor() as f32;
+        s.canvas.scale(scale, scale);
+        s.ui.paint(&mut GlPainter::new(
+            &mut s.canvas,
+            &s.text,
+            Rect::new(0., 0., size.width as f32, size.height as f32),
+        ));
+        s.canvas.flush();
+        if profile {
+            eprintln!(
+                "paint_area_pixels={}",
+                size.width as u64 * size.height as u64
+            );
+        }
+    }
     s.surface
         .swap_buffers(&s.context)
         .map_err(|e| e.to_string())?;
@@ -865,4 +1206,15 @@ fn resize_edge(p: Point, size: Size) -> Option<ResizeEdge> {
         (_, _, _, true) => Some(ResizeEdge::South),
         _ => None,
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) -> Result<(), String> {
+    if slot.is_none() {
+        *slot = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+    }
+    slot.as_mut()
+        .unwrap()
+        .set_text(text)
+        .map_err(|e| e.to_string())
 }

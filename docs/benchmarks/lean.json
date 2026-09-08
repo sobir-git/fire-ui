@@ -1,0 +1,81 @@
+{
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.0\nLLVM version: 21.1.8",
+  "backend": "X11 / Xvfb / Mesa software GL",
+  "window": [
+    640,
+    480
+  ],
+  "workload": "same draw-only app; no fonts, no retained framebuffer, optional services unused",
+  "variants": {
+    "minimal": {
+      "features": [
+        "x11"
+      ],
+      "binary": "/home/fire/projects/fire-ui/artifacts/lean-native/minimal/target/x86_64-unknown-linux-gnu/release/fire-ui-lean-probe",
+      "binary_bytes": 2784936,
+      "binary_sha256": "f80f90996b08f1e3e7c605879a78de7352663083ae6b4afd9fa6e36313060b6c",
+      "dependency_packages": 64,
+      "dependency_kind": "normal and build, host target",
+      "build_seconds": 45.165,
+      "target_directory_existed": true,
+      "build_cache": "variant-specific target; Cargo source/download cache shared",
+      "target_bytes": 229091273,
+      "consumer_source_sha256": "95e23b7e3fa4c1881ffeecd317646df49298647523cbd03ec4dc04869423eeec",
+      "lock_sha256": "d07369c21b07f60b0407ce95ddd332a03bd60d5822aa703f91d4b61f79ac8d0f",
+      "idle": {
+        "rss_kib": 109236,
+        "pss_kib": 77903,
+        "threads": 34,
+        "seconds": 2.0,
+        "cpu_ticks": 0,
+        "cpu_percent_one_core": 0.0,
+        "screenshot": "/home/fire/projects/fire-ui/artifacts/lean-native/minimal/window.png",
+        "resize": {
+          "size": [
+            480,
+            360
+          ],
+          "screenshot": "/home/fire/projects/fire-ui/artifacts/lean-native/minimal/resized.png"
+        }
+      }
+    },
+    "extras": {
+      "features": [
+        "x11",
+        "accessibility",
+        "inspection",
+        "clipboard",
+        "dialogs",
+        "bitmap-fonts"
+      ],
+      "binary": "/home/fire/projects/fire-ui/artifacts/lean-native/extras/target/x86_64-unknown-linux-gnu/release/fire-ui-lean-probe",
+      "binary_bytes": 6649864,
+      "binary_sha256": "f77aee2c261a07004b6ca70eb3ec9d26e18eaa36d2f8f8c0a240020186244eb3",
+      "dependency_packages": 170,
+      "dependency_kind": "normal and build, host target",
+      "build_seconds": 123.106,
+      "target_directory_existed": true,
+      "build_cache": "variant-specific target; Cargo source/download cache shared",
+      "target_bytes": 533723706,
+      "consumer_source_sha256": "95e23b7e3fa4c1881ffeecd317646df49298647523cbd03ec4dc04869423eeec",
+      "lock_sha256": "2674e0758d43e74520174cfb1c3e00f7354a9066a2d0b6d9ae7372f2d06c4933",
+      "idle": {
+        "rss_kib": 115164,
+        "pss_kib": 82812,
+        "threads": 37,
+        "seconds": 2.0,
+        "cpu_ticks": 0,
+        "cpu_percent_one_core": 0.0,
+        "screenshot": "/home/fire/projects/fire-ui/artifacts/lean-native/extras/window.png",
+        "resize": {
+          "size": [
+            480,
+            360
+          ],
+          "screenshot": "/home/fire/projects/fire-ui/artifacts/lean-native/extras/resized.png"
+        }
+      }
+    }
+  },
+  "measurement_note": "Runtime samples taken after task compilation finished; Mesa software rendering is included. Build timings include concurrent work and are not a controlled speed comparison."
+}

@@ -34,11 +34,25 @@ pub struct Stop {
     pub x: f32,
 }
 #[derive(Clone, Debug)]
+pub struct TextCell {
+    pub range: Range<usize>,
+    pub x: f32,
+    pub width: f32,
+}
+#[derive(Clone, Debug)]
+pub struct TextRun {
+    pub x: f32,
+    /// Host-shaped display text; source byte offsets remain in TextCell and Stop.
+    pub display: Arc<str>,
+}
+#[derive(Clone, Debug)]
 pub struct TextLine {
     pub range: Range<usize>,
     pub y: f32,
     pub width: f32,
     pub stops: Vec<Stop>,
+    pub cells: Vec<TextCell>,
+    pub runs: Vec<TextRun>,
 }
 #[derive(Clone, Debug)]
 pub struct Paragraph {
@@ -69,7 +83,8 @@ impl Paragraph {
             Point::new(
                 l.stops
                     .iter()
-                    .find(|s| s.caret.byte == caret.byte)
+                    .find(|s| s.caret == caret)
+                    .or_else(|| l.stops.iter().find(|s| s.caret.byte == caret.byte))
                     .map_or(l.width, |s| s.x),
                 l.y,
             )
@@ -87,6 +102,60 @@ impl Paragraph {
             })
             .map_or(Caret::at(0), |s| s.caret)
     }
+    /// Move between visually distinct caret positions, retaining bidi/wrap affinity.
+    pub fn visual_move(&self, caret: Caret, right: bool) -> Caret {
+        let point = self.caret_point(caret);
+        let Some(index) = self.lines.iter().position(|l| (l.y - point.y).abs() < 0.1) else {
+            return caret;
+        };
+        let line = &self.lines[index];
+        let next = line
+            .stops
+            .iter()
+            .filter(|s| {
+                if right {
+                    s.x > point.x + 0.01
+                } else {
+                    s.x < point.x - 0.01
+                }
+            })
+            .min_by(|a, b| (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs()));
+        if let Some(stop) = next {
+            return stop.caret;
+        }
+        let adjacent = if right {
+            self.lines.get(index + 1)
+        } else {
+            index.checked_sub(1).and_then(|i| self.lines.get(i))
+        };
+        adjacent
+            .and_then(|l| {
+                l.stops.iter().min_by(|a, b| {
+                    if right {
+                        a.x.total_cmp(&b.x)
+                    } else {
+                        b.x.total_cmp(&a.x)
+                    }
+                })
+            })
+            .map_or(caret, |s| s.caret)
+    }
+    pub fn line_edge(&self, caret: Caret, right: bool) -> Caret {
+        let point = self.caret_point(caret);
+        self.lines
+            .iter()
+            .find(|l| (l.y - point.y).abs() < 0.1)
+            .and_then(|l| {
+                l.stops.iter().min_by(|a, b| {
+                    if right {
+                        b.x.total_cmp(&a.x)
+                    } else {
+                        a.x.total_cmp(&b.x)
+                    }
+                })
+            })
+            .map_or(caret, |s| s.caret)
+    }
     pub fn selection(&self, range: Range<usize>) -> Vec<Rect> {
         self.selection_in(range, Rect::new(0., 0., f32::MAX, f32::MAX))
     }
@@ -97,20 +166,26 @@ impl Paragraph {
         self.lines[first..]
             .iter()
             .take_while(|l| l.y < viewport.y + viewport.height)
-            .filter_map(|l| {
-                let start = range.start.max(l.range.start);
-                let end = range.end.min(l.range.end);
-                if start >= end {
-                    return None;
+            .flat_map(|l| {
+                let mut rects: Vec<Rect> = vec![];
+                let mut cells: Vec<_> = l
+                    .cells
+                    .iter()
+                    .filter(|cell| cell.range.start < range.end && cell.range.end > range.start)
+                    .collect();
+                cells.sort_by(|a, b| a.x.total_cmp(&b.x));
+                for cell in cells {
+                    let r = Rect::new(cell.x, l.y, cell.width, self.line_height);
+                    if let Some(last) = rects
+                        .last_mut()
+                        .filter(|last| (last.x + last.width - r.x).abs() < 0.1)
+                    {
+                        *last = last.union(r);
+                    } else {
+                        rects.push(r);
+                    }
                 }
-                let x = |b| {
-                    l.stops
-                        .iter()
-                        .find(|s| s.caret.byte == b)
-                        .map_or(l.width, |s| s.x)
-                };
-                let (a, b) = (x(start), x(end));
-                Some(Rect::new(a.min(b), l.y, (a - b).abs(), self.line_height))
+                rects
             })
             .collect()
     }
@@ -146,6 +221,11 @@ impl TextEngine for TestText {
                     range: start..byte,
                     y: lines.len() as f32 * height,
                     width: x,
+                    cells: cells(&stops),
+                    runs: vec![TextRun {
+                        x: 0.,
+                        display: Arc::from(&r.text[start..byte]),
+                    }],
                     stops: std::mem::take(&mut stops),
                 });
                 start = if ch == '\n' { byte + 1 } else { byte };
@@ -168,6 +248,11 @@ impl TextEngine for TestText {
             range: start..r.text.len(),
             y: lines.len() as f32 * height,
             width: x,
+            cells: cells(&stops),
+            runs: vec![TextRun {
+                x: 0.,
+                display: Arc::from(&r.text[start..]),
+            }],
             stops,
         });
         let size = Size::new(
@@ -186,4 +271,15 @@ impl TextEngine for TestText {
             lines,
         })
     }
+}
+
+fn cells(stops: &[Stop]) -> Vec<TextCell> {
+    stops
+        .windows(2)
+        .map(|w| TextCell {
+            range: w[0].caret.byte..w[1].caret.byte,
+            x: w[0].x.min(w[1].x),
+            width: (w[1].x - w[0].x).abs(),
+        })
+        .collect()
 }

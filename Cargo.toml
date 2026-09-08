@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/fire-ui", "crates/fire-ui-widgets", "crates/fire-ui-native", "examples/studio"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -12,9 +12,9 @@ keywords = ["gui", "ui", "widgets", "native", "graphics"]
 categories = ["gui", "graphics"]
 
 [workspace.dependencies]
-fire-ui = { version = "0.2.0", path = "crates/fire-ui" }
-fire-ui-widgets = { version = "0.2.0", path = "crates/fire-ui-widgets" }
-fire-ui-native = { version = "0.2.0", path = "crates/fire-ui-native" }
+fire-ui = { version = "0.4.0", path = "crates/fire-ui" }
+fire-ui-widgets = { version = "0.4.0", path = "crates/fire-ui-widgets" }
+fire-ui-native = { version = "0.4.0", path = "crates/fire-ui-native" }
 
 [profile.release]
 opt-level = 3

@@ -5,7 +5,7 @@ higher-level composition. Use it for native desktop tools, animated text and
 interactive canvases. Widgets retain their state; explicit invalidation and frame
 requests let the event loop sleep when idle.
 
-**Version 0.2.0 · Rust 1.88+ · MIT · experimental**
+**Version 0.4.0 · Rust 1.88+ · MIT · experimental**
 
 | Crate | Responsibility |
 | --- | --- |
@@ -19,14 +19,14 @@ application state or prescribed visual theme is required.
 
 ## Start an app
 
-The GitHub release can be used directly. These crates are prepared for crates.io,
-but have not been published there yet.
+Use the `v0.4.0` GitHub prerelease directly. The three crate archives are attached
+to the release; these crates have not been published to crates.io.
 
 ```toml
 [dependencies]
-fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
-fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
-fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
+fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
+fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
+fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
 ```
 
 ```rust,no_run
@@ -37,7 +37,10 @@ use fire_ui_widgets::{Label, Padding};
 fn main() -> Result<(), String> {
     run(
         Padding::new(Element::leaf(Label::new("Hello, Fire UI")), 24.0),
-        WindowOptions::default(),
+        WindowOptions {
+            font: Some(fire_ui_native::system_font().ok_or("Choose a font file")?),
+            ..WindowOptions::default()
+        },
     )
 }
 ```
@@ -53,6 +56,10 @@ cargo run --release -p fire-ui-studio
 The studio includes independent counters, an editor, a searchable 100,000-item
 virtual list, animated text and a pointer-controlled paddle. It uses public APIs.
 
+The native host defaults to X11 rendering. Accessibility, agent inspection, clipboard,
+dialogs and bitmap-font decoding are independent Cargo features. Font coverage and
+retained repainting are explicit app choices. See [native configuration](crates/fire-ui-native/README.md).
+
 ## Support and limits
 
 The core and widgets are platform-independent Rust with `std`. The native host
@@ -61,13 +68,24 @@ macOS and Windows have CI build/test checks, not verified desktop interaction
 parity. Browser, mobile, embedded and `no_std` hosts are not provided.
 
 Supply a licensed TrueType font with `WindowOptions::font` for predictable app
-packaging. The host otherwise searches common system fonts; `FIRE_UI_FONT`
-overrides that search. Full bidi editing, complete editable-text accessibility,
-platform IME coverage, variable-height lists and partial repaint remain unfinished.
+packaging. The host loads no fonts by default. Call `system_font()` explicitly
+for a common system face or the `FIRE_UI_FONT` override. `fallback_fonts` supplies ordered fallback faces. Mixed-direction
+text shares shaping, selection and visual caret geometry. IME composition carries its
+selection and replaces the selected text in a temporary display layout.
+
+[Agent inspection](docs/inspection.md) uses the same semantic actions as accessibility.
+It exposes widget identity, values, bounds, supported actions, selection and composition
+through the optional `inspection` feature and Unix socket. The `accessibility` feature
+enables AccessKit, which publishes text runs and selection to native
+assistive technology. Linux implements all six AT-SPI EditableText methods with atomic
+range edits, undo and asynchronous clipboard reads. Native probes use installed IBus
+Cangjie5/XIM and Orca, including its generated speech. Windows/macOS native IME and
+screen-reader verification, and variable-height lists, remain future work.
 
 The [performance report](docs/performance.md) records native measurements and their
 limits. Low idle CPU, memory use, direct pointer response and fast resizing remain
-requirements. Software-rendered animation is still expensive.
+requirements. Apps can opt into `WindowOptions::partial_repaint` to retain unchanged pixels
+and repaint damaged regions; layout changes repaint the window. Hardware-GPU measurements are still needed.
 
 ## Development
 

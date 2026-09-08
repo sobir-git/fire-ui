@@ -123,11 +123,14 @@ caret hit testing, selection geometry and IME cursor position. Native measuremen
 drawing share the same font context. The renderer skips paragraphs outside the clip
 and selects visible lines before issuing text draws.
 
-International text remains a prototype limit: grapheme editing is tested, but complete
-mixed-direction caret/selection behavior and broad font fallback are unfinished.
-Native preedit/commit events carry the enabled input method's focus session;
-real input-method combinations need platform
-verification. Do not infer these guarantees from headless tests.
+Unicode bidi levels determine visual runs. Painting, hit testing, arrow movement
+and discontiguous selection share shaped grapheme cells. Ordered fallback fonts are
+optional host configuration, empty by default. The native host does not discover fonts.
+Native preedit/commit events carry the enabled input method's focus session and
+composition selection. The editor builds a temporary display paragraph without
+changing the document until commit.
+Linux IBus Cangjie5/XIM composition and Orca speech generation are verified by native
+probes. Windows/macOS input-method combinations need platform verification. Do not infer these guarantees from headless tests.
 
 ## Work and native host
 
@@ -153,9 +156,25 @@ choosers can run on a platform dialog thread. Keyboard events with no focused ch
 target the root, so empty applications can still handle their shortcuts.
 
 The native accessibility bridge publishes roles, values, focus and shared geometry
-through [AccessKit's winit adapter](https://docs.rs/accesskit_winit/0.33.2/accesskit_winit/struct.Adapter.html).
-It supplies native activation/focus actions and avoids building semantic trees while
-accessibility is inactive. Full editable-text accessibility is still incomplete.
+through AccessKit. Windows and macOS use its winit adapter; Linux owns the AT-SPI
+transport and uses the published common adapter for tree translation.
+It supplies native activation, focus and editor actions, text runs, character geometry
+and directed selection. Only changed AccessKit nodes are sent after activation.
+The Unix inspection socket exposes the same semantic contract for agents and tests;
+see [inspection](inspection.md). It is opt-in and uses a private local socket.
+Linux implements all six AT-SPI EditableText operations through one UI-thread request
+per operation. Positions are Unicode scalar offsets; the host converts against the
+current value and dispatches a shared atomic `ReplaceText` action. Copy preserves
+selection; cut checks clipboard success before deleting. Clipboard reads run on a
+worker and revalidate the target/value before pasting. Requests are bounded and
+expire. The transport derives from MIT-licensed AccessKit Unix 0.23, whose released
+EditableText implementation supports only SetTextContents. It stays private to the
+native crate; public widgets do not depend on Linux or D-Bus types.
+
+Widget accessibility handlers return a result. Rejected edits preserve state and
+successful edits use normal undo history. Successful focused-editor mutations or
+selection changes advance the input session, causing the host to restart native
+composition and reject stale input.
 
 The host combines ready work, frame demand, repaint and the next deadline. It sleeps
 when idle. Worker posts have count/byte limits and wake the event loop. Running a widget does
@@ -166,8 +185,10 @@ the monitor refresh rate even when software GL does not enforce swap interval.
 
 Drawing streams through a portable `Painter` on one UI thread. OpenGL is the current
 backend. Custom backend painting is an explicit optional capability returning whether
-it was handled. Full-window repaint is the current fallback; there is no retained
-framebuffer or render thread. Active software rendering is still expensive.
+it was handled. Local repaint requests accumulate window-coordinate damage. Layout
+changes invalidate the full window. The host retains a framebuffer image and repaints
+intersecting branches into it, then copies that image to the swap surface. Decoration
+bounds and caret blinking use local damage. No render thread is required.
 
 ## Verification and remaining work
 
@@ -180,9 +201,8 @@ wide/narrow sizes. It also discovers a real AT-SPI button and invokes it, checki
 that its command reaches the counter.
 [Performance results](performance.md) distinguish measured behavior from targets.
 
-Remaining limitations include variable-height virtualization, complete bidi editing,
-platform IME coverage, full screen-reader interaction coverage, and partial repaint for
-large/animated documents. Geometry changes and visibility reconciliation still contain
+Remaining limitations include variable-height virtualization, Windows/macOS native
+IME and screen-reader verification, and large-document layout costs. Geometry changes and visibility reconciliation still contain
 whole-tree passes; clean pointer input avoids them. Physical mouse-to-display latency,
 hardware-GPU power use and cross-platform behavior require target-device measurements.
 These limits are implementation work, not reasons for another framework rewrite.

@@ -65,6 +65,10 @@ pub enum ResizeEdge {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowAction {
+    Focus,
+    Restore,
+    Fullscreen(bool),
+    AlwaysOnTop(bool),
     Minimize,
     ToggleMaximized,
     Drag,
@@ -87,6 +91,7 @@ pub(crate) enum Delivery {
     Paste(Id),
 }
 pub(crate) struct Mailbox {
+    pub clipboard_enabled: bool,
     items: VecDeque<(Delivery, usize)>,
     capacity: usize,
     byte_limit: usize,
@@ -132,6 +137,7 @@ pub struct SemanticNode {
     pub id: u64,
     pub parent: Option<u64>,
     pub bounds: Rect,
+    pub transform: Transform,
     pub focused: bool,
     pub focusable: bool,
     pub semantics: Semantics,
@@ -161,6 +167,7 @@ pub struct Ui<W: Widget> {
     timer_index: BTreeSet<(Duration, Id, Timer, u64)>,
     epoch: u64,
     paint_dirty: bool,
+    damage: Option<Rect>,
     geometry_revision: u64,
     semantic_revision: u64,
     painted: u64,
@@ -180,6 +187,7 @@ impl<W: Widget> Ui<W> {
         let mut mounts = vec![];
         tree.insert(None, element.prepared, &mut mounts);
         let mut mailbox = Mailbox {
+            clipboard_enabled: false,
             items: VecDeque::new(),
             capacity: limits.messages,
             byte_limit: limits.message_bytes,
@@ -216,12 +224,19 @@ impl<W: Widget> Ui<W> {
             timer_index: BTreeSet::new(),
             epoch: 0,
             paint_dirty: true,
+            damage: None,
             geometry_revision: 0,
             semantic_revision: 0,
             painted: 0,
             stale: 0,
             marker: PhantomData,
         })
+    }
+    /// Declare whether the host services clipboard requests in `pump`.
+    /// Disabled by default: copy/paste admission returns `Error::Unsupported`.
+    /// Enable before dispatching input or delivering commands that use the clipboard.
+    pub fn set_clipboard_enabled(&mut self, enabled: bool) {
+        self.mailbox.clipboard_enabled = enabled;
     }
     pub fn root(&self) -> &W {
         self.tree
@@ -335,7 +350,7 @@ impl<W: Widget> Ui<W> {
                 self.inherit_environment(child, value.clone(), layout);
             }
         }
-        self.paint_dirty = true;
+        self.repaint();
     }
     fn invoke(
         &mut self,
@@ -384,7 +399,12 @@ impl<W: Widget> Ui<W> {
             self.tree.invalidate(id)
         }
         if effects.repaint {
-            self.paint_dirty = true
+            if let Some(n) = self.tree.get(id) {
+                let region = effects.damage.map_or(n.geometry.clip, |r| {
+                    n.geometry.transform.rect(r).intersect(n.geometry.clip)
+                });
+                self.invalidate_paint(region);
+            }
         }
         for mutation in effects.mutations.drain(..) {
             self.mutate(id, mutation)
@@ -439,7 +459,7 @@ impl<W: Widget> Ui<W> {
                     self.mailbox.push_reserved(Delivery::Mount(id), 0)
                 }
                 self.tree.invalidate(owner);
-                self.paint_dirty = true
+                self.repaint()
             }
             Mutation::Remove(id) => {
                 if self.tree.get(id).is_some_and(|n| n.parent == Some(owner)) {
@@ -450,7 +470,7 @@ impl<W: Widget> Ui<W> {
                 if let Some(n) = self.tree.get_mut(id) {
                     n.visible = visible;
                     self.tree.invalidate(id);
-                    self.paint_dirty = true;
+                    self.repaint();
                     self.reconcile()
                 }
             }
@@ -580,7 +600,7 @@ impl<W: Widget> Ui<W> {
         if let Some(id) = next {
             self.notice(id, Lifecycle::Focus(true))
         }
-        self.paint_dirty = true
+        self.repaint()
     }
     fn change_hover(&mut self, next: Option<Id>) {
         let next = next.filter(|id| self.eligible(*id));
@@ -607,7 +627,7 @@ impl<W: Widget> Ui<W> {
         for id in &path[shared..] {
             self.notice(*id, Lifecycle::Hover(true));
         }
-        self.paint_dirty = true;
+        self.repaint();
     }
     fn reconcile(&mut self) {
         while self
@@ -720,7 +740,7 @@ impl<W: Widget> Ui<W> {
                 self.tree.invalidate(p)
             }
         }
-        self.paint_dirty = true;
+        self.repaint();
         self.reconcile();
     }
     pub fn pump(
@@ -831,7 +851,7 @@ impl<W: Widget> Ui<W> {
         if size.valid() && size != self.size {
             self.size = size;
             self.tree.invalidate(self.root);
-            self.paint_dirty = true
+            self.repaint()
         }
     }
     pub fn layout(&mut self, text: &mut dyn TextEngine) {
@@ -847,6 +867,7 @@ impl<W: Widget> Ui<W> {
 
         self.tree
             .measure(self.root, Constraints::tight(self.size), text);
+        self.repaint();
         self.geometry_revision += 1;
         self.semantic_revision += 1;
         let viewport = Rect::from_size(self.size);
@@ -971,6 +992,9 @@ impl<W: Widget> Ui<W> {
             self.change_focus(saved);
             self.repaint();
         }
+    }
+    pub fn window_focused(&self) -> bool {
+        self.window_focused
     }
     pub fn window_focus(&mut self, focused: bool) {
         self.window_focused = focused;
@@ -1183,20 +1207,42 @@ impl<W: Widget> Ui<W> {
         allowed
     }
     pub fn repaint(&mut self) {
-        self.paint_dirty = true
+        self.paint_dirty = true;
+        self.damage = None;
+    }
+    fn invalidate_paint(&mut self, region: Rect) {
+        if region.width <= 0. || region.height <= 0. {
+            return;
+        }
+        self.damage = if self.paint_dirty {
+            self.damage.map(|old| old.union(region))
+        } else {
+            Some(region)
+        };
+        self.paint_dirty = true;
+    }
+    /// Damage in window coordinates. None means no paint is pending.
+    pub fn paint_damage(&self) -> Option<Rect> {
+        self.paint_dirty
+            .then(|| self.damage.unwrap_or(Rect::from_size(self.size)))
     }
     pub fn paint(&mut self, painter: &mut dyn Painter) {
+        self.paint_region(painter, Rect::from_size(self.size));
+    }
+    /// Repaint an area into a host-owned retained target. The host must preserve all other pixels.
+    pub fn paint_region(&mut self, painter: &mut dyn Painter, region: Rect) {
         fn paint(
             tree: &Tree,
             id: Id,
             painter: &mut dyn Painter,
-            focus: Option<Id>,
-            hover: &[Id],
+            interaction: (Option<Id>, &[Id]),
             absolute: bool,
             count: &mut u64,
+            region: Rect,
         ) {
             let Some(n) = tree.get(id) else { return };
-            if !n.geometry.visible || n.geometry.clip.width <= 0. || n.geometry.clip.height <= 0. {
+            let visible = n.geometry.clip.intersect(region);
+            if !n.geometry.visible || visible.width <= 0. || visible.height <= 0. {
                 return;
             }
             painter.save();
@@ -1211,8 +1257,8 @@ impl<W: Widget> Ui<W> {
             if let Some(widget) = &n.widget {
                 widget.paint(&mut Paint {
                     bounds: Rect::from_size(n.size),
-                    focused: focus == Some(id),
-                    hovered: hover.contains(&id),
+                    focused: interaction.0 == Some(id),
+                    hovered: interaction.1.contains(&id),
                     painter,
                     environment: n.environment.as_deref(),
                 });
@@ -1220,19 +1266,21 @@ impl<W: Widget> Ui<W> {
             }
             for child in &n.children {
                 if tree.get(*child).is_some_and(|n| n.anchor.is_none()) {
-                    paint(tree, *child, painter, focus, hover, false, count)
+                    paint(tree, *child, painter, interaction, false, count, region)
                 }
             }
             painter.restore();
         }
+        painter.save();
+        painter.clip(region);
         paint(
             &self.tree,
             self.root,
             painter,
-            self.focus,
-            &self.hover_path,
+            (self.focus, &self.hover_path),
             false,
             &mut self.painted,
+            region,
         );
         let mut overlays: Vec<_> = self
             .tree
@@ -1245,13 +1293,20 @@ impl<W: Widget> Ui<W> {
                 &self.tree,
                 id,
                 painter,
-                self.focus,
-                &self.hover_path,
+                (self.focus, &self.hover_path),
                 true,
                 &mut self.painted,
+                region,
             )
         }
-        self.paint_dirty = false;
+        painter.restore();
+        if self
+            .paint_damage()
+            .is_none_or(|damage| damage.intersect(region) == damage)
+        {
+            self.paint_dirty = false;
+            self.damage = None;
+        }
     }
     pub fn semantic_revision(&self) -> u64 {
         self.semantic_revision
@@ -1267,6 +1322,7 @@ impl<W: Widget> Ui<W> {
                     id: id.0,
                     parent: n.parent.map(|p| p.0),
                     bounds: n.geometry.bounds.intersect(n.geometry.clip),
+                    transform: n.geometry.transform,
                     focused: self.focus == Some(id),
                     focusable: n.widget.as_ref()?.focusable(),
                     semantics: n.widget.as_ref()?.semantics(),
@@ -1298,11 +1354,58 @@ impl<W: Widget> Ui<W> {
         let caret = n.widget.as_ref()?.ime_cursor()?;
         Some(n.geometry.transform.rect(caret).intersect(n.geometry.clip))
     }
-    pub fn accessibility(&mut self, id: u64, action: SemanticAction) {
+    /// Dispatch only actions supported by a visible, enabled widget in the active modal scope.
+    pub fn accessibility(&mut self, id: u64, action: SemanticAction) -> Result<(), SemanticError> {
         let id = Id(id);
-        if self.eligible(id) {
-            self.invoke(id, false, false, |w, cx| w.accessibility(cx, action));
+        if !self.eligible(id) {
+            return Err(SemanticError::Unavailable);
         }
+        let node = self.tree.get(id).ok_or(SemanticError::Unavailable)?;
+        let widget = node.widget.as_ref().ok_or(SemanticError::Unavailable)?;
+        let semantics = widget.semantics();
+        if semantics.disabled {
+            return Err(SemanticError::Unavailable);
+        }
+        if !(semantics.actions.contains(&action.kind())
+            || action == SemanticAction::Focus && widget.focusable())
+        {
+            return Err(SemanticError::Unsupported);
+        }
+        if let SemanticAction::SetSelection { anchor, caret } = &action {
+            semantics.text.as_ref().ok_or(SemanticError::Unsupported)?;
+            let value = semantics.value.as_deref().unwrap_or("");
+            // The widget validates its own caret policy against current text.
+            // A paragraph may still describe the previous value before layout.
+            if !value.is_char_boundary(*anchor) || !value.is_char_boundary(*caret) {
+                return Err(SemanticError::InvalidSelection);
+            }
+        }
+        if let SemanticAction::ReplaceText { start, end, .. } = &action {
+            let value = semantics
+                .value
+                .as_deref()
+                .ok_or(SemanticError::Unsupported)?;
+            if start > end || !value.is_char_boundary(*start) || !value.is_char_boundary(*end) {
+                return Err(SemanticError::InvalidSelection);
+            }
+        }
+        let restart_ime = matches!(
+            &action,
+            SemanticAction::SetValue(_)
+                | SemanticAction::ReplaceSelectedText(_)
+                | SemanticAction::ReplaceText { .. }
+                | SemanticAction::SetSelection { .. }
+        );
+        let mut result = Err(SemanticError::Unavailable);
+        self.invoke(id, false, false, |w, cx| {
+            result = w.accessibility(cx, action)
+        });
+        if result.is_ok() && restart_ime && self.focus == Some(id) {
+            // Hosts restart native composition, and queued input/paste from the
+            // previous text state can no longer reach this editor.
+            self.session += 1;
+        }
+        result
     }
 }
 

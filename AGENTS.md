@@ -18,6 +18,10 @@ counterexamples, not historical implementation choices.
 
 ## Product and quality
 
+When unsure about Rust, crate APIs, or platform behavior, research current primary
+sources on the web. Check the versions used by this repository; do not rely on
+remembered APIs when the ecosystem may have changed.
+
 The UI framework and reusable widgets are the product. Fire Notes, animated text,
 and games are consumers that test its usefulness.
 
@@ -25,6 +29,19 @@ Aim for an elegant implementation and an elegant public API. Keep low-level cont
 available and make higher-level composition optional. Common tasks should read
 clearly without exposing runtime bookkeeping. Custom widgets must use the same
 supported interfaces as built-in widgets.
+
+Composability and modularity are product requirements. Keep core UI, reusable
+widgets and native services independently usable. Applications compose the pieces
+they need; convenience APIs must not force unrelated services or policy. Custom
+implementations use the same public interfaces as built-ins. Prefer a small set of
+coherent components over feature flags for every internal detail.
+
+Keep the framework lean by default. App authors choose optional integrations,
+font coverage and retained rendering resources explicitly. Do not impose broad
+font loading, platform services, background work or optional dependency stacks
+on minimal apps. Keep core semantics available for custom widgets and agent tests.
+Measure minimal consumers separately from feature-rich workspace builds; Cargo
+feature unification must not hide the cost of optional capabilities.
 
 Treat fast pointer response, fast resizing, low idle CPU, and low memory use as
 design requirements. Measure them; a passing contract model does not prove native

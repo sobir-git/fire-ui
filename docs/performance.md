@@ -1,70 +1,121 @@
 # Native measurements
 
-The studio regression run was measured on 2026-09-07 with release optimization,
-Xvfb and Mesa software rendering. These are prototype measurements, not hardware
-GPU or physical display latency results. [Raw results](benchmarks/native.json)
-include the measured binary's SHA-256. Superseded measurements remain in Git history.
-
-These measurements predate the repository split. Test counts describe the combined
-workspace at measurement time. App results live in [Fire Notes](../../fire-notes/docs/performance.md).
-
-## Studio regression run
+Measured on 2026-09-08 with release optimization, Xvfb and Mesa software rendering.
+[Raw results](benchmarks/native.json) include the final executable's SHA-256 and the
+pre-change reference run. These are local process measurements, not hardware-GPU
+power measurements or physical-display latency.
 
 ```sh
 cargo build --release -p fire-ui-studio
 python3 tools/native_probe.py --seconds 2 --accessibility --output artifacts/native
 ```
 
-The accessibility option creates a private D-Bus session and temporary runtime
-storage. Its settings backend is in-memory. The probe leaves the user's display,
-notes and accessibility preferences out of the test.
+The probe uses a private X display, D-Bus session, runtime directory and inspection
+socket. It leaves the user's desktop and accessibility preferences unchanged.
+
+## Minimal consumer
+
+`tools/lean_probe.py` builds the same draw-only 640×480 window in two independent
+consumer workspaces. The minimal variant selects only `x11`; the other enables
+accessibility, inspection, clipboard, dialogs and bitmap fonts. Neither loads fonts
+or retains a framebuffer. [Raw results](benchmarks/lean.json) record compiler,
+features, dependency/lock hashes, binary hashes, memory and build conditions.
+
+| Measurement | Minimal | Extras compiled in |
+| --- | ---: | ---: |
+| Stripped executable | 2.66 MiB | 6.34 MiB |
+| Normal/build dependency packages | 64 | 170 |
+| Idle RSS | 106.7 MiB | 112.5 MiB |
+| Idle proportional memory (PSS) | 76.1 MiB | 80.9 MiB |
+| CPU ticks over two seconds | 0 | 0 |
+
+The minimal executable is 58.1% smaller. These process memory figures include Mesa's
+software renderer, which creates its own worker threads; they are not core-only
+allocation measurements. The core crate has no dependencies. The native renderer
+still compiles its text-shaping dependencies even when no font files are loaded.
+Services unused by this workload can incur further costs when activated.
+Both variants render the same pixels and resize to 480×360 without stale drawing.
+Recorded build times include concurrent compilation and differing cache states;
+they do not establish a build-speed improvement.
+
+[Cargo combines enabled features](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification).
+A shared workspace build with Studio would therefore invalidate this dependency
+comparison. CI checks the native features independently as well as the complete apps.
 
 ## CPU and memory
 
-CPU percentages count one core as 100%; Mesa uses several worker threads. Each
-sample below lasted about two seconds. Zero CPU ticks over a short sample establishes
-quiet idle behavior during that sample, not a universal power-consumption guarantee.
-RSS includes native libraries, software GL, font caches and the 100,000-item model.
+One core is 100%; Mesa uses multiple threads. Samples last about two seconds.
+Zero CPU ticks establishes quiet idle behavior during those samples only. The
+pre-change reference was the existing release binary; its source commit and hash
+were not recorded. Comparisons are indicative, not a controlled benchmark between
+pinned source revisions. Other work on the machine can affect timings.
 
-| State | CPU | Process RSS |
-| --- | ---: | ---: |
-| idle | 0.0% | 140.4 MiB |
-| focused caret | 4.5% | 131.9 MiB |
-| animation | 139.5% | 136.3 MiB |
-| paused again | 0.0% | 136.3 MiB |
+| State | Pre-change CPU | Current CPU | Current RSS |
+| --- | ---: | ---: | ---: |
+| idle | 0.0% | 0.0% | 159.7 MiB |
+| focused caret | 7.5% | 4.0% | 160.0 MiB |
+| animation | 196.0% | 118.0% | 157.2 MiB |
+| paused again | 0.0% | 0.0% | 157.2 MiB |
 
-The stripped release executable is 7.48 MiB, including the
-native accessibility bridge. `fire-ui` itself has no dependencies. Software-rendered
-animation remains expensive; partial repaint and hardware-GPU measurements are next
-performance work. The current host streams a full repaint without a backing texture.
-Clipped widget branches and off-screen paragraph lines are skipped.
+Animation CPU was 196.0% in the old reference and 118.0% in this run. This comparison
+includes the earlier partial-repaint changes and is not an isolated accessibility
+benchmark. Studio explicitly loads installed CJK/emoji font fallbacks for its multilingual
+exercises. The previous Linux build recorded 168.4 MiB idle RSS and an 8.14 MiB
+executable; this build records 159.7 MiB and 6.53 MiB. Both hashes are recorded in
+the raw results. Framework defaults load no fonts; applications supply all font paths.
+Shared driver pages and other machine activity can affect RSS comparisons. The retained color image
+and stencil buffer cost about five bytes per window pixel, plus driver overhead;
+font and text caches also affect RSS. The inspection server adds one sleeping
+thread and recorded no idle CPU ticks in the separate Fire Notes probe.
+
+With `partial_repaint: true`, the host repaints damaged regions into a retained image. OpenGL 3+ presents it with
+a framebuffer blit; older contexts use a texture draw and have not been benchmarked
+here. Geometry changes still repaint the full window. The studio animation damages
+about 93,000 pixels of its roughly 1,000,000-pixel window. Fire Notes' decoration
+bounds allow small fire frames to invalidate fewer than 1,000 pixels. These are
+paint regions, not a claim that presentation copies only that region.
 
 ## Responsiveness
 
-| Measurement | Median | 95th percentile | Maximum |
+| Measurement | Pre-change median | Current median | Current p95 |
 | --- | ---: | ---: | ---: |
-| Resize event received to completed swap, 63 frames | 6.36 ms | 7.52 ms | 8.84 ms |
-| Injected mouse command to observed paddle pixels, 20 moves | 12.84 ms | 15.32 ms | 15.32 ms |
+| Resize event received to completed swap | 18.05 ms | 7.30 ms | 10.35 ms |
+| Injected pointer command to observed paddle pixels | 37.44 ms | 9.68 ms | 19.65 ms |
 
-Mouse measurements include xdotool execution and screenshot capture. Swap completion
-is not compositor presentation. The paddle assigns the latest pointer position
-directly; the simulation does not interpolate or smooth pointer movement.
+Resize uses 63 rendered samples in the current run. Pointer measurements use 20
+moves and include xdotool and screenshot overhead. Swap completion is not compositor
+presentation. The paddle follows the latest pointer position directly.
 
-## Verification
+## Verification and limits
 
-The probe verified both counter instances, text insertion and caret movement,
-search/filter/select in the virtual list, animation/pause, wide/narrow resize,
-scrolling and visible paddle position. It discovered the native AT-SPI button,
-invoked its action and checked that the counter increment reached the application.
-Normal, editing, animated and narrow-window screenshots were visually inspected.
+The native probe passed independent counters, typing/caret movement, list search and
+selection, animation/pause, pointer response, scrolling and wide/narrow resizing.
+It reads Unicode through AT-SPI, moves the native caret, exercises all six EditableText
+methods and verifies undo and invalid-range rejection. A clipboard owner that ignores
+requests leaves the UI responsive and cannot cause a late paste. The UI answered
+an inspector edit in 4.6 ms while the native paste was waiting. The counter also
+responds to an AT-SPI activation action.
 
-The workspace has 50 passing tests. These cover lifecycle/removal, input sessions,
-modal and anchor geometry, bounded messages/work, stale task results, native text
-measurement, editing/undo, appearance invalidation and virtual-list bounds.
-A 100,000-item list uses at most 14 mounted rows in the 300-pixel test viewport.
-Height-only editor resize reuses its paragraph, and clean pointer motion triggers
-no layout or geometry publication.
+The separate `linux_input_probe.py` runs installed IBus 1.5.29-rc2 with Cangjie5 through
+XIM and Orca 46.1 on a private desktop. It verifies composition, candidate commit,
+cancellation, selected-text replacement and focus transfer. External edits through
+the socket and AT-SPI cancel stale composition. Screenshots verify the CJK glyph and
+candidate panel below the text. Orca generates expected content, caret, editing,
+selection and button utterances, with keyboard echo disabled. Tab and Enter work
+while Orca runs. Speech synthesis/audio output is excluded.
 
-Full bidi editing, real IME combinations, complete screen-reader text navigation,
-large-document partial repaint and target-device resource use remain unverified or
-unfinished. They are not established by the native smoke test.
+The framework has 66 unit/integration tests and two documentation tests. Added tests
+cover transformed/coalesced paint damage, unrelated-sibling paint skipping, mixed
+Hebrew/Arabic/Latin geometry, bidi controls, AccessKit selection conversion, IME
+composition state, semantic edits/undo and private socket cleanup. The actual crate
+packages are built separately by `cargo package`.
+
+Fire Notes checks, screenshots and temporary-data probes live in its own repository.
+Its agent probe checks directed selection, Unicode replacement, native keyboard undo,
+invalid/stale requests and orderly socket cleanup. The screenshot includes Hebrew,
+Arabic, combining characters, color emoji and animated selected text.
+
+Windows/macOS native interaction, hardware-GPU performance and physical-display
+latency remain unverified. Linux evidence covers the installed IBus/XIM and Orca
+versions above, not every engine or assistive device. Variable-height lists and
+large-document incremental layout remain future work. Wayland is deferred.
