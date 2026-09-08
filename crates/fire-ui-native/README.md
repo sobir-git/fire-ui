@@ -14,7 +14,7 @@ Optional services are selected by the application:
 | `bitmap-fonts` | PNG decoding for bitmap glyphs, including color emoji |
 
 ```toml
-fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.5.0", default-features = false, features = ["x11", "accessibility", "clipboard"] }
+fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.6.0", default-features = false, features = ["x11", "accessibility", "clipboard"] }
 ```
 
 Call `run` on the main thread. `run_with` additionally receives root outputs and a
@@ -56,7 +56,7 @@ adapters; their native IME and screen-reader verification is future work.
 
 Enable `inspection` and set `FIRE_UI_INSPECT` to a socket path in a private directory to inspect and operate
 widgets on Unix. Requests use the same semantic actions as native accessibility.
-See [the inspection protocol](https://github.com/sobir-git/fire-ui/blob/v0.5.0/docs/inspection.md).
+See [the inspection protocol](https://github.com/sobir-git/fire-ui/blob/v0.6.0/docs/inspection.md).
 No socket exists by default.
 
 The default renderer paints directly to the window, with no retained window image.

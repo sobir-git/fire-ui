@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 · 2026-09-08
+
+Ambient values, a second scale, and the widget cleanups the compact theme exposed.
+Public contracts changed; consumers update directly.
 
 - Add `Palette::slate_dark` and `Scale::compact`, and `Theme::compact` pairing
   them: a dense instrument panel against the roomy ember default. Palette and

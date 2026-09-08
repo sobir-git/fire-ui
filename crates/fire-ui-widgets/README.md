@@ -46,5 +46,5 @@ animate typed or selected text without replacing the editor. Virtual lists mount
 only their visible rows.
 
 See the [quick start](https://github.com/sobir-git/fire-ui#start-an-app)
-and [studio](https://github.com/sobir-git/fire-ui/tree/v0.5.0/examples/studio).
+and [studio](https://github.com/sobir-git/fire-ui/tree/v0.6.0/examples/studio).
 Experimental 0.x API; MIT licensed.
