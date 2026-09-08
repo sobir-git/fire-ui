@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.5.0 · 2026-09-08
+
+Controls, layout and theming are the focus. Public contracts changed throughout;
+consumers update directly.
+
+- Add `Checkbox`, `Switch`, `Slider`, `Progress`, `Dropdown`, `Tabs`, `Divider`
+  and `Surface`. Each carries keyboard handling, a focus ring, a pointer cursor
+  and accessible semantics rather than paint alone.
+- Replace the flat `Theme` with a semantic `Palette` and a `Scale`, a six-step
+  `TextRole` type scale and `ColorRole` text colours. Widgets name roles, never
+  literal values, so one `AppearanceScope` swap repaints a whole window; ships
+  ember dark and ember light palettes.
+- Rework layout: `Flow` carries gap, `Justify` and `Align`; `Entry` claims natural,
+  fixed or weighted length; add `stack`, `grid`, per-side `Insets`, `Aligned`,
+  `Constrain` and `Spacer`. The `_at` variants lay out from an origin so one widget
+  can sequence several policies without a container per combination.
+- A row or column now measures each child against the space its predecessors left,
+  not the whole extent. Previously a heading and a caption above a panel pushed the
+  panel past the bottom, where an ancestor clipped its border away — invisible in
+  published bounds, which are already intersected with the clip.
+- Controls reserve room for the halo they draw when hovered, checked or focused
+  (`Scale::halo`), so it no longer crosses their bounds and is clipped into a hard
+  edge. `focus_ring` draws only a ring: it used to add a glow whose filled interior
+  washed the control it marked.
+- `Editor::chrome(false)` now suppresses the background as well as the border, so an
+  editor inside a themed surface is one well rather than a box inside a box.
+- One `Scrollbar` is shared by the viewport, the virtual list and the editor, which
+  previously had three separate implementations with different sizes, positions and
+  colours — the editor's ignored the theme entirely and drew itself in white. Each
+  bar occupies its own strip rather than floating over the content, so text wraps
+  beside it and the content underneath no longer claims the pointer: hovering a
+  scrollbar used to show a text caret, and the list's showed a hand as though the
+  bar were a row. The virtual list's bar can now be dragged; it only ever painted
+  one. A bar answers the pointer: the thumb rests narrow and dim, grows to the full
+  track and brightens under the pointer, and takes the accent while dragged.
+- Moving the pointer over an editor no longer scrolls the view back to the caret.
+- Add `Children::bubble`, so a decorator is transparent in both directions: commands
+  reach its content and the content's output passes through untouched. Padding,
+  alignment, constraints, surfaces and viewports all use it.
+- Overlays can anchor to the window, not only to a sibling, and are born anchored
+  through `Update::insert_at` — a handle returned by `insert` is not yet owned when
+  the inserting callback runs, so anchoring afterwards was silently rejected. This
+  is what lets a dropdown's list escape a scrolling panel.
+- Add `Lifecycle::Inherited`, delivered when an inherited environment value changed
+  and a widget publishes its own to a child. Without it a control that derives a
+  theme for its content froze that content on the palette present at mount.
+- Add `Brush::Radial` and `Brush::Box` to the paint contract, and the
+  `glow`/`focus_ring`/`drop_shadow` helpers built on them.
+- Add `Role::{Radio, Switch, Slider, Progress, TabList, Heading, Link, Group}`, a
+  numeric `Semantics::range` published to AccessKit and inspection, and
+  `SemanticError::InvalidValue`.
+- Add `Update::window_bounds` and `Layout::viewport` for widgets that position
+  themselves against the window.
+- Replace the studio with a navigable gallery of seven sections. It contains no
+  literal colour, font size or panel coordinate; every gap it revealed is closed
+  above rather than worked around in the app.
+
+Known gap: `VirtualList` publishes itself but not per-row list items, so rows reach
+assistive technology as their own content rather than as selectable list entries.
+
 ## 0.4.0 · 2026-09-08
 
 - Native defaults include X11 rendering only; accessibility, inspection, clipboard,

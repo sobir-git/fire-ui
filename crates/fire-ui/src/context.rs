@@ -15,6 +15,17 @@ pub enum Error {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timer(pub(crate) Id);
+
+/// Where an overlay is placed, or `None` for an ordinary child.
+pub enum Anchor<A: Widget> {
+    /// Not an overlay: laid out and clipped by its owner like any other child.
+    None,
+    /// Positioned against the window's origin and clipped only by the window.
+    Window,
+    /// Positioned against another child, and clipped only by the window.
+    To(Child<A>),
+}
+
 impl Default for Timer {
     fn default() -> Self {
         Self::new()
@@ -37,7 +48,7 @@ pub(crate) enum Mutation {
     Focus(Id),
     Capture(u32, bool),
     Modal(Option<Id>),
-    Anchor(Id, Option<Id>),
+    Anchor(Id, Option<Option<Id>>),
     Environment(Id, Rc<dyn Any>, bool),
 }
 pub(crate) struct Effects {
@@ -156,6 +167,16 @@ impl<W: Widget> Update<'_, W> {
     pub fn bounds(&self) -> Rect {
         Rect::from_size(self.raw.tree().get(self.raw.me()).unwrap().size)
     }
+    /// This widget's rectangle in window coordinates, from the last published
+    /// geometry. Popovers and drag feedback need it to position themselves against
+    /// the window rather than against their owner.
+    pub fn window_bounds(&self) -> Rect {
+        self.raw
+            .tree()
+            .get(self.raw.me())
+            .map(|n| n.geometry.bounds)
+            .unwrap_or_default()
+    }
     pub fn environment<T: Any>(&self) -> Option<&T> {
         self.raw
             .tree()
@@ -204,7 +225,7 @@ impl<W: Widget> Update<'_, W> {
             .and_then(|n| n.output.as_ref())
             .and_then(|map| match map {
                 OutputMap::Map(map) => Some(map(&output)),
-                OutputMap::Forward => None,
+                OutputMap::Forward | OutputMap::Bubble => None,
             });
         let bytes = mapped
             .as_ref()
@@ -238,8 +259,32 @@ impl<W: Widget> Update<'_, W> {
         element: Element<C>,
         map: impl Fn(&C::Output) -> W::Command + 'static,
     ) -> Result<Child<C>, (Error, Element<C>)> {
+        self.insert_at(element, Anchor::<C>::None, map)
+    }
+    /// Insert a child that is an overlay from the moment it exists.
+    ///
+    /// An overlay cannot be arranged after the fact: a handle returned by `insert`
+    /// names a child this widget does not own until the callback returns, so
+    /// `anchor` would be rejected. A menu, popover or tooltip is inserted this way.
+    pub fn insert_at<C: Widget, A: Widget>(
+        &mut self,
+        element: Element<C>,
+        anchor: Anchor<A>,
+        map: impl Fn(&C::Output) -> W::Command + 'static,
+    ) -> Result<Child<C>, (Error, Element<C>)> {
+        let anchor = match anchor {
+            Anchor::None => None,
+            Anchor::Window => Some(None),
+            Anchor::To(a) => {
+                if let Err(e) = self.owned(a) {
+                    return Err((e, element));
+                }
+                Some(Some(a.id))
+            }
+        };
         let child = Child::new(element.prepared.id);
         let mut prepared = element.prepared;
+        prepared.anchor = anchor;
         prepared.output = Some(OutputMap::Map(Box::new(move |p| {
             let command = map(p
                 .downcast_ref::<C::Output>()
@@ -282,20 +327,30 @@ impl<W: Widget> Update<'_, W> {
     pub fn close_modal(&mut self) -> Result<(), Error> {
         self.raw.mutate(Mutation::Modal(None)).map_err(|(e, _)| e)
     }
+    /// Lift a child out of the ordinary layout into an overlay, or put it back.
+    ///
+    /// An overlay is placed against its anchor rather than against this widget, and
+    /// is clipped by the window instead of by any ancestor. That is what lets a menu
+    /// or a popover leave the scrolling panel that opened it.
     pub fn anchor<C: Widget, A: Widget>(
         &mut self,
         child: Child<C>,
-        anchor: Option<Child<A>>,
+        anchor: Anchor<A>,
     ) -> Result<(), Error> {
         self.owned(child)?;
-        if let Some(a) = anchor {
-            self.owned(a)?;
-            if a.id == child.id {
-                return Err(Error::InvalidGeometry);
+        let anchor = match anchor {
+            Anchor::None => None,
+            Anchor::Window => Some(None),
+            Anchor::To(a) => {
+                self.owned(a)?;
+                if a.id == child.id {
+                    return Err(Error::InvalidGeometry);
+                }
+                Some(Some(a.id))
             }
-        }
+        };
         self.raw
-            .mutate(Mutation::Anchor(child.id, anchor.map(|a| a.id)))
+            .mutate(Mutation::Anchor(child.id, anchor))
             .map_err(|(e, _)| e)
     }
     pub fn set_environment<C: Widget, T: Any>(

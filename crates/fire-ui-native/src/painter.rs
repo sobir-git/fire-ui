@@ -35,6 +35,36 @@ fn brush(b: Brush) -> femtovg::Paint {
         } => {
             femtovg::Paint::linear_gradient(start.x, start.y, end.x, end.y, color(from), color(to))
         }
+        Brush::Radial {
+            center,
+            inner,
+            outer,
+            from,
+            to,
+        } => femtovg::Paint::radial_gradient(
+            center.x,
+            center.y,
+            inner,
+            outer.max(inner),
+            color(from),
+            color(to),
+        ),
+        Brush::Box {
+            rect,
+            radius,
+            feather,
+            from,
+            to,
+        } => femtovg::Paint::box_gradient(
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            radius,
+            feather.max(0.001),
+            color(from),
+            color(to),
+        ),
     }
 }
 impl Painter for GlPainter<'_> {

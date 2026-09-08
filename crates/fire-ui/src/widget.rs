@@ -66,6 +66,17 @@ impl Data for bool {
         1
     }
 }
+/// Fixed-size scalars cost their own size; the macro keeps the set consistent.
+macro_rules! scalar_data {
+    ($($t:ty),*) => {$(
+        impl Data for $t {
+            fn bytes(&self) -> usize {
+                std::mem::size_of::<Self>()
+            }
+        }
+    )*};
+}
+scalar_data!(f32, f64, u8, u16, u32, u64, i8, i16, i32, i64, isize, char);
 #[derive(Clone, Copy, Debug)]
 pub struct FrameTime {
     pub now: Duration,
@@ -82,9 +93,17 @@ pub enum Role {
     Dialog,
     Canvas,
     CheckBox,
+    Radio,
+    Switch,
+    Slider,
+    Progress,
     Menu,
     MenuItem,
     Tab,
+    TabList,
+    Heading,
+    Link,
+    Group,
 }
 #[derive(Clone, Debug)]
 pub struct Semantics {
@@ -96,6 +115,9 @@ pub struct Semantics {
     /// Stable application-supplied identifier for inspection and tests.
     pub key: Option<String>,
     pub checked: Option<bool>,
+    /// Numeric state for sliders and progress. Published separately from `value`
+    /// so assistive technology can announce and adjust a real quantity.
+    pub range: Option<Range>,
     pub actions: Vec<SemanticActionKind>,
     pub text: Option<TextSemantics>,
 }
@@ -109,10 +131,20 @@ impl Default for Semantics {
             selected: false,
             key: None,
             checked: None,
+            range: None,
             actions: vec![],
             text: None,
         }
     }
+}
+/// A numeric quantity a widget reports, and optionally accepts through `SetValue`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Range {
+    pub now: f32,
+    pub min: f32,
+    pub max: f32,
+    /// Increment for one keyboard or assistive-technology step.
+    pub step: f32,
 }
 /// Actions advertised by widgets, shared by assistive technology and automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +208,8 @@ pub enum SemanticError {
     Unavailable,
     Unsupported,
     InvalidSelection,
+    /// A `SetValue` payload that is not a value this widget accepts.
+    InvalidValue,
     LimitReached,
 }
 /// All custom and built-in widgets use this protocol. No runtime nodes are public.
@@ -222,6 +256,9 @@ pub(crate) type Payload = Box<dyn Any>;
 type Mapper = dyn Fn(&dyn Any) -> (Payload, usize);
 pub(crate) enum OutputMap {
     Forward,
+    /// A transparent decorator: the child's output is its owner's output, and is
+    /// delivered past the owner without invoking its `update`.
+    Bubble,
     Map(Box<Mapper>),
 }
 pub(crate) trait Erased {
@@ -303,6 +340,9 @@ pub(crate) struct Prepared {
     pub children: Vec<Prepared>,
     pub output: Option<OutputMap>,
     pub count: usize,
+    /// Set when the node is to be born an overlay, which cannot be arranged after
+    /// insertion: the handle is not yet owned when the inserting callback runs.
+    pub anchor: Option<Option<Id>>,
 }
 pub struct Element<W: Widget> {
     pub(crate) prepared: Prepared,
@@ -326,6 +366,7 @@ impl<W: Widget> Element<W> {
                 children: children.nodes,
                 output: None,
                 count,
+                anchor: None,
             },
             marker: PhantomData,
         }
@@ -369,6 +410,17 @@ impl<P: Widget> Children<P> {
     pub fn forward<W: Widget<Output = P::Command>>(&mut self, element: Element<W>) -> Child<W> {
         let mut node = element.prepared;
         node.output = Some(OutputMap::Forward);
+        self.push(node)
+    }
+    /// Adopt a child whose output *is* this widget's output.
+    ///
+    /// The payload travels straight to this widget's own owner without passing
+    /// through `update`, which leaves `Command` free to address the child. This is
+    /// what makes a decorator — padding, alignment, a themed surface — transparent
+    /// in both directions instead of only upwards.
+    pub fn bubble<W: Widget<Output = P::Output>>(&mut self, element: Element<W>) -> Child<W> {
+        let mut node = element.prepared;
+        node.output = Some(OutputMap::Bubble);
         self.push(node)
     }
     fn push<W: Widget>(&mut self, node: Prepared) -> Child<W> {

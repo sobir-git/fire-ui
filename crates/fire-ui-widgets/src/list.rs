@@ -58,6 +58,14 @@ where
     hover_selection: bool,
     pressed: Option<u32>,
     row_states: HashMap<K, bool>,
+    /// Pointer dragging the scrollbar, and where on the thumb it took hold.
+    bar_drag: Option<(u32, f32)>,
+    /// Whether the pointer is resting on the scrollbar.
+    bar_hover: bool,
+    /// Viewport width from the last layout, for cursor resolution.
+    width: f32,
+    /// Theme from the last layout, so input can reproduce the bar's geometry.
+    theme: crate::Theme,
 }
 impl<K, R, F> VirtualList<K, R, F>
 where
@@ -81,6 +89,10 @@ where
             hover_selection: false,
             pressed: None,
             row_states: HashMap::new(),
+            bar_drag: None,
+            bar_hover: false,
+            width: 0.,
+            theme: crate::Theme::default(),
         }
     }
     pub fn select_on_hover(mut self, enabled: bool) -> Self {
@@ -97,11 +109,50 @@ where
         }
         indices
     }
+    /// How far the list has scrolled from the top, in pixels.
+    pub fn offset(&self) -> f32 {
+        self.offset
+    }
     pub fn mounted_rows(&self) -> usize {
         self.rows.len()
     }
     pub fn row(&self, key: &K) -> Option<Child<R>> {
         self.rows.iter().find(|(k, _)| k == key).map(|(_, c)| *c)
+    }
+    fn extent(&self) -> f32 {
+        self.keys.len() as f32 * self.row_height
+    }
+    fn overflow(&self) -> f32 {
+        (self.extent() - self.height).max(0.)
+    }
+    /// The scrollbar for the current geometry, or `None` when everything fits.
+    fn bar(&self, bounds: Rect) -> Option<crate::Scrollbar> {
+        crate::Scrollbar::new(bounds, self.height, self.extent(), self.offset, &self.theme)
+    }
+    /// The strip the bar occupies, or zero when the rows all fit.
+    fn bar_strip(&self) -> f32 {
+        if self.extent() > self.height {
+            crate::Scrollbar::width(&self.theme)
+        } else {
+            0.
+        }
+    }
+    /// Tracks whether the pointer is on the bar, repainting when that changes.
+    fn track_bar_hover(&mut self, cx: &mut Update<'_, Self>, position: Point) {
+        let hovered = self
+            .bar(cx.bounds())
+            .is_some_and(|bar| bar.contains(position));
+        if hovered != self.bar_hover {
+            self.bar_hover = hovered;
+            cx.repaint()
+        }
+    }
+    fn scroll_to(&mut self, cx: &mut Update<'_, Self>, offset: f32) {
+        let offset = offset.clamp(0., self.overflow());
+        if offset != self.offset {
+            self.offset = offset;
+            self.sync(cx)
+        }
     }
     fn navigate(&mut self, cx: &mut Update<'_, Self>, delta: i32) {
         if self.keys.is_empty() {
@@ -229,23 +280,34 @@ where
             }
         }
     }
-    fn cursor(&self, _position: Point) -> Option<CursorIcon> {
+    fn cursor(&self, position: Point) -> Option<CursorIcon> {
+        // On its scrollbar the list is a scrolling surface, not a row of choices.
+        if self.bar_strip() > 0. && position.x >= self.width - self.bar_strip() {
+            return Some(CursorIcon::Arrow);
+        }
         Some(CursorIcon::Pointer)
     }
     fn focusable(&self) -> bool {
         true
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let size = c.constrain(Size::new(
-            c.max.width,
-            (self.keys.len() as f32 * self.row_height).min(c.max.height),
-        ));
+        self.theme = crate::theme(cx);
+        self.width = c.max.width;
+        let extent = self.keys.len() as f32 * self.row_height;
+        let size = c.constrain(Size::new(c.max.width, extent.min(c.max.height)));
         self.height = size.height;
+        // Rows stop where the scrollbar begins rather than running underneath it.
+        let bar = if extent > size.height {
+            crate::Scrollbar::width(&self.theme)
+        } else {
+            0.
+        };
+        let row_width = (size.width - bar).max(0.);
         for (key, child) in &self.rows {
             if let Some(index) = self.indices.get(key).copied() {
                 cx.measure(
                     *child,
-                    Constraints::tight(Size::new(size.width, self.row_height)),
+                    Constraints::tight(Size::new(row_width, self.row_height)),
                 );
                 cx.place(
                     *child,
@@ -260,14 +322,26 @@ where
             return;
         }
         match input {
-            Input::Pointer { position, .. } if self.hover_selection => {
-                let index = ((position.y + self.offset) / self.row_height)
-                    .floor()
-                    .max(0.) as usize;
-                if let Some(key) = self.keys.get(index) {
-                    if self.selected.as_ref() != Some(key) {
-                        self.selected = Some(key.clone());
-                        self.sync(cx);
+            Input::Pointer { position, pointer } => {
+                if let Some((held, grab)) = self.bar_drag.filter(|(p, _)| p == pointer) {
+                    let _ = held;
+                    if let Some(bar) = self.bar(cx.bounds()) {
+                        let offset = bar.offset_for(position.y - grab, self.overflow());
+                        self.scroll_to(cx, offset)
+                    }
+                    cx.stop();
+                    return;
+                }
+                self.track_bar_hover(cx, *position);
+                if self.hover_selection && !self.bar_hover {
+                    let index = ((position.y + self.offset) / self.row_height)
+                        .floor()
+                        .max(0.) as usize;
+                    if let Some(key) = self.keys.get(index) {
+                        if self.selected.as_ref() != Some(key) {
+                            self.selected = Some(key.clone());
+                            self.sync(cx);
+                        }
                     }
                 }
             }
@@ -277,6 +351,40 @@ where
                     (self.keys.len() as f32 * self.row_height - self.height).max(0.),
                 );
                 self.sync(cx);
+                cx.stop()
+            }
+            Input::Button {
+                button: 1,
+                down: true,
+                pointer,
+                position,
+            } if self
+                .bar(cx.bounds())
+                .is_some_and(|bar| bar.track.contains(*position)) =>
+            {
+                let bar = self.bar(cx.bounds()).unwrap();
+                let grab = if bar.thumb.contains(*position) {
+                    position.y - bar.thumb.y
+                } else {
+                    // Jump so the thumb centres on the click, then keep dragging.
+                    let offset =
+                        bar.offset_for(position.y - bar.thumb.height / 2., self.overflow());
+                    self.scroll_to(cx, offset);
+                    bar.thumb.height / 2.
+                };
+                self.bar_drag = Some((*pointer, grab));
+                let _ = cx.capture(*pointer);
+                cx.stop()
+            }
+            Input::Button {
+                button: 1,
+                down: false,
+                pointer,
+                ..
+            } if self.bar_drag.is_some_and(|(p, _)| p == *pointer) => {
+                self.bar_drag = None;
+                let _ = cx.release(*pointer);
+                cx.repaint();
                 cx.stop()
             }
             Input::Button {
@@ -348,32 +456,36 @@ where
             .environment::<crate::Theme>()
             .cloned()
             .unwrap_or_default();
+        let bar = self.bar(cx.bounds);
+        let reserved = bar.map_or(0., |_| crate::Scrollbar::width(&t));
         if let Some(index) = self
             .selected
             .as_ref()
             .and_then(|k| self.indices.get(k).copied())
         {
-            cx.painter.rect(
-                Rect::new(
-                    0.,
-                    index as f32 * self.row_height - self.offset,
-                    cx.bounds.width,
-                    self.row_height,
-                ),
-                t.radius,
-                t.selection.into(),
-            )
+            let y = index as f32 * self.row_height - self.offset;
+            // Only paint a selection that is actually on screen, inset from the edges
+            // so its rounded corners sit inside whatever surface holds the list.
+            if y + self.row_height > 0. && y < self.height {
+                let pad = t.scale.space(0.25);
+                let row = Rect::new(
+                    pad,
+                    y + pad,
+                    (cx.bounds.width - reserved - 2. * pad).max(0.),
+                    (self.row_height - 2. * pad).max(0.),
+                );
+                cx.painter
+                    .rect(row, t.scale.radius, t.color.selection.into());
+                // A short accent edge marks the selected row without a heavy fill.
+                cx.painter.rect(
+                    Rect::new(row.x, row.y, 2.5, row.height),
+                    1.25,
+                    t.color.accent.into(),
+                )
+            }
         }
-        if self.keys.len() as f32 * self.row_height > self.height {
-            let height =
-                (self.height * self.height / (self.keys.len() as f32 * self.row_height)).max(20.);
-            let y = self.offset / (self.keys.len() as f32 * self.row_height - self.height)
-                * (self.height - height);
-            cx.painter.rect(
-                Rect::new(cx.bounds.width - 4., y, 3., height),
-                1.5,
-                t.muted.alpha(0.5).into(),
-            )
+        if let Some(bar) = bar {
+            bar.paint(cx.painter, &t, self.bar_hover, self.bar_drag.is_some())
         }
     }
     fn semantics(&self) -> Semantics {

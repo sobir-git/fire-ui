@@ -217,9 +217,10 @@ impl<K: Data + Clone> Widget for Menu<K> {
     }
     fn paint(&self, cx: &mut Paint<'_>) {
         let t = cx.environment::<Theme>().cloned().unwrap_or_default();
-        cx.painter.rect(self.panel, t.radius, t.panel.into());
         cx.painter
-            .stroke(self.panel.inset(0.5), t.radius, 1., t.border);
+            .rect(self.panel, t.scale.radius, t.color.surface.into());
+        cx.painter
+            .stroke(self.panel.inset(0.5), t.scale.radius, 1., t.color.border);
     }
     fn semantics(&self) -> Semantics {
         Semantics {
@@ -303,7 +304,7 @@ impl Widget for MenuRow {
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         let style = TextStyle {
-            size: theme(cx).font_size,
+            size: theme(cx).scale.font_size,
             font: 0,
         };
         for (source, target) in [
@@ -332,9 +333,13 @@ impl Widget for MenuRow {
     fn paint(&self, cx: &mut Paint<'_>) {
         let t = cx.environment::<Theme>().cloned().unwrap_or_default();
         if self.enabled && (cx.focused || cx.hovered) {
-            cx.painter.rect(cx.bounds, 3., t.raised.into());
+            cx.painter.rect(cx.bounds, 3., t.color.raised.into());
         }
-        let fg = if self.enabled { t.foreground } else { t.muted };
+        let fg = if self.enabled {
+            t.color.foreground
+        } else {
+            t.color.muted
+        };
         if self.checked {
             cx.painter.path(
                 &[
@@ -357,7 +362,7 @@ impl Widget for MenuRow {
                     cx.bounds.width - p.size.width - 8.,
                     (32. - p.line_height) / 2.,
                 ),
-                t.muted.into(),
+                t.color.muted.into(),
             );
         }
     }

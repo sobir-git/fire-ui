@@ -23,17 +23,20 @@ Element::build(|children| Counter {
 })
 ```
 
-The [studio](../examples/studio/src/main.rs) contains the complete counter, composed
-panel, picker and custom canvas consumers. None has access to private runtime nodes.
-The picker owns search/filtering; its parent receives a selected key.
+The [studio](../examples/studio/src/main.rs) is the worked example: a shell owning
+seven pages, every shipped control, a searchable list, a custom canvas and a live
+layout playground. None of them has access to private runtime nodes. The list page
+owns its own search and filtering; its owner receives only a selected key.
 `Menu` accepts action keys, labels, shortcut hints, checked and enabled states.
 It owns keyboard navigation and accessible action rows; its parent receives the
 chosen key or dismissal and controls the modal overlay. Fire Notes uses it for
 tab actions without adding app commands to the framework.
 
 `Children::add` accepts children that cannot emit output. `connect` maps a borrowed
-output to an owner command; `forward` transfers an owned output unchanged; `discard`
-explicitly ignores output. Detached subtrees are admitted atomically under node and
+output to an owner command; `forward` transfers an owned output unchanged as this
+widget's command; `bubble` passes it through as this widget's own output, without
+invoking `update`, which is what a transparent decorator needs; `discard` explicitly
+ignores output. Detached subtrees are admitted atomically under node and
 message limits. Mount runs before layout and input. Dynamic handles become usable
 when their admitted structural change is committed after the callback.
 
@@ -64,17 +67,38 @@ held keys/capture/work, then sends child-first unmount notifications.
 
 Structural mutations currently preserve callback order. Frame demand and timer/task
 assignments coalesce by owner/handle. This is not a transaction and cannot roll back
-widget state. Consumers must handle overload. The studio retains latest counter-label
-and picker updates for retry; applications must choose their own policy for critical
-outputs. `Data::bytes` is a trusted accounting contract, not a sandbox for arbitrary
+widget state. Consumers must handle overload. The studio's list page retains the
+latest filter for retry on the next frame; applications must choose their own policy
+for critical outputs. `Data::bytes` is a trusted accounting contract, not a sandbox for arbitrary
 widget code or a bound on document/model storage.
 
 ## Layout and composition
 
 Children report intrinsic size and optional baseline under constraints. Parents
 choose placement, clipping and transforms. Row/column helpers borrow child handles;
-they do not build a second tree. Padding contributes insets. Scroll measures its
-content at viewport width and derives the extent.
+they do not build a second tree. Scroll measures its content at viewport width and
+derives the extent.
+
+A flow carries the gap, a `Justify` for leftover main-axis space and an `Align`
+across the other axis; each `Entry` claims a natural, fixed or weighted length, and
+may override the alignment for itself alone. `Fill` degrades to natural measurement
+under an unbounded axis, which is what a column inside a viewport gets. `stack`
+overlays children, and `grid` takes a minimum column width instead of a column count
+so it reflows with the window. Every policy has an `_at` variant that lays out from
+an origin, so one widget sequences a column and then a grid below it without a
+container type for each combination.
+
+Wrappers are transparent in both directions. `Children::bubble` adopts a child whose
+output *is* the wrapper's output: the payload is delivered past the wrapper without
+invoking its `update`, which leaves `Command` free to address the content. Padding,
+alignment, constraints, surfaces and viewports are all built this way, so decorating
+a widget never severs the owner's ability to command it.
+
+Overlays anchor to the window or to a sibling; both escape ancestor clipping and are
+published against the viewport. An overlay must be born anchored, through
+`insert_at`: a handle returned by `insert` names a child the widget does not yet own
+when the callback runs, so anchoring afterwards is rejected. This is how a dropdown
+list leaves the scrolling panel that opened it.
 
 Buttons own arbitrary ordinary content and add activation, capture, focus, semantics
 and appearance. Decorative content leaves activation to the button. A virtual list
@@ -84,9 +108,21 @@ and owns selection/navigation. Selection is published to row content through
 by an owner while focus remains in its search field. Its fixed row height is explicit. Key indexing avoids
 scanning the entire dataset while laying out visible rows.
 
+One `Scrollbar` serves every scrolling surface — viewport, virtual list and editor —
+and reserves its own strip rather than floating above content, so a bar is always
+clickable and never steals the pointer shape from what is beneath it.
+
 Immutable theme values propagate through an affected subtree until a nested explicit
-scope. Local label appearance can override typography or color. Metric changes
-invalidate layout; color changes repaint without reshaping text. Clean pointer events
+scope. A theme is a semantic `Palette` and a `Scale`; widgets name a role and never a
+literal value, which is what allows one swap to repaint a whole window correctly in
+either palette. Local label appearance can override the type-scale step or the colour
+role. Metric changes invalidate layout; colour changes repaint without reshaping text.
+
+A nested scope also stops inheritance, which controls rely on: a filled button
+publishes a theme to its own content so the label resolves to `on_accent`. That
+would otherwise freeze the content on the palette present at mount, so a widget
+whose child holds its own value is told `Lifecycle::Inherited` when the ambient
+value changes, and republishes what it derived. Clean pointer events
 skip geometry traversal, and valid paragraphs survive height-only resizing.
 
 ## Input and text
@@ -195,14 +231,21 @@ bounds and caret blinking use local damage. No render thread is required.
 The workspace tests exercise real framework instances: removal, focus, held keys,
 modal recovery, anchor chains, bounded admission, stale task results, frame fairness,
 Unicode edits, paragraph reuse, native shaping and 100,000-item virtualization.
-The isolated native probe checks counter independence, editing, picker filtering,
-animation/pause, visible paddle response and window resizing, with screenshots at
-wide/narrow sizes. It also discovers a real AT-SPI button and invokes it, checking
-that its command reaches the counter.
+The isolated native probe drives the studio through its own inspection socket rather
+than fixed coordinates: it navigates every section by semantic action, presses each
+button style, checks a disabled control refuses activation, ticks a checkbox, moves a
+slider by pointer, arrow keys and assistive `set_value` (rejecting a value that is not
+a number), opens a dropdown and confirms its list lands below the field and outside
+the scrolling panel, edits text, filters the 100,000-row list, times visible paddle
+response, changes a layout rule and watches the blocks move, swaps the palette, and
+resizes wide and narrow — with screenshots throughout. It also discovers a real AT-SPI
+button and invokes it, checking that its command reaches the studio.
 [Performance results](performance.md) distinguish measured behavior from targets.
 
-Remaining limitations include variable-height virtualization, Windows/macOS native
-IME and screen-reader verification, and large-document layout costs. Geometry changes and visibility reconciliation still contain
+Remaining limitations include variable-height virtualization, per-row list-item
+semantics (a virtual list publishes itself but its rows reach assistive technology as
+their own content, not as selectable entries), Windows/macOS native IME and
+screen-reader verification, and large-document layout costs. Geometry changes and visibility reconciliation still contain
 whole-tree passes; clean pointer input avoids them. Physical mouse-to-display latency,
 hardware-GPU power use and cross-platform behavior require target-device measurements.
 These limits are implementation work, not reasons for another framework rewrite.

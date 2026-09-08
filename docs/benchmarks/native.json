@@ -1,57 +1,71 @@
 {
   "binary": "/home/fire/projects/fire-ui/target/release/fire-ui-studio",
-  "binary_bytes": 6844552,
-  "binary_sha256": "d544f148287c1290b8321b3e49795817a86ca5e468db081e571b556549bb69e3",
+  "binary_bytes": 7080712,
+  "binary_sha256": "9b0fdd2d52ac5cab9805b3f036957648450d21d55983d893f14691cd0fdc74e2",
   "backend": "Xvfb / Mesa software GL",
   "samples": {
     "idle": {
-      "seconds": 2.0,
+      "seconds": 3.0,
       "cpu_percent_one_core": 0.0,
       "cpu_ticks": 0,
-      "rss_kib": 163508,
+      "rss_kib": 162720,
+      "threads": 38
+    },
+    "controls": {
+      "seconds": 3.0,
+      "cpu_percent_one_core": 0.0,
+      "cpu_ticks": 0,
+      "rss_kib": 163156,
       "threads": 38
     },
     "focused_caret": {
-      "seconds": 2.0,
-      "cpu_percent_one_core": 3.999,
-      "cpu_ticks": 8,
-      "rss_kib": 163828,
+      "seconds": 3.0,
+      "cpu_percent_one_core": 5.666,
+      "cpu_ticks": 17,
+      "rss_kib": 165476,
       "threads": 38
     },
     "animation": {
-      "seconds": 2.0,
-      "cpu_percent_one_core": 117.988,
-      "cpu_ticks": 236,
-      "rss_kib": 160956,
+      "seconds": 3.0,
+      "cpu_percent_one_core": 181.663,
+      "cpu_ticks": 545,
+      "rss_kib": 162780,
       "threads": 38
     },
     "paused_again": {
-      "seconds": 2.0,
+      "seconds": 3.0,
       "cpu_percent_one_core": 0.0,
       "cpu_ticks": 0,
-      "rss_kib": 160956,
+      "rss_kib": 162780,
+      "threads": 38
+    },
+    "light_theme": {
+      "seconds": 3.0,
+      "cpu_percent_one_core": 0.0,
+      "cpu_ticks": 0,
+      "rss_kib": 162780,
       "threads": 38
     }
   },
   "paddle_move_to_visible_ms": {
     "samples": 20,
-    "p50": 9.676,
-    "p95": 19.652,
-    "max": 19.652,
+    "p50": 13.571,
+    "p95": 18.395,
+    "max": 18.395,
     "note": "Injected mouse command to observed paddle pixels; includes command and screenshot overhead on Xvfb."
   },
-  "clipboard_wait_ui_reply_ms": 4.564,
+  "clipboard_wait_ui_reply_ms": 4.43,
   "accessibility": {
-    "nodes_visited": 12,
-    "button_activation": "counter increment verified",
+    "nodes_visited": 9,
+    "button_activation": "primary button press verified",
     "text": "Unicode read/caret, all six EditableText methods, byte/scalar offsets, rejected invalid edits and undo verified"
   },
   "window_smoke": "completed",
   "resize_event_to_swap_ms": {
-    "rendered_samples": 63,
-    "p50": 7.298,
-    "p95": 10.347,
-    "max": 10.628,
+    "rendered_samples": 59,
+    "p50": 7.892,
+    "p95": 11.532,
+    "max": 82.477,
     "note": "Latest resize event received by app to completed swap; software GL. Not compositor presentation latency."
   },
   "linux_input": {
@@ -200,5 +214,54 @@
         "threads": 38
       }
     }
+  },
+  "v0_4_0_reference": {
+    "samples": {
+      "idle": {
+        "seconds": 2.0,
+        "cpu_percent_one_core": 0.0,
+        "cpu_ticks": 0,
+        "rss_kib": 163508,
+        "threads": 38
+      },
+      "focused_caret": {
+        "seconds": 2.0,
+        "cpu_percent_one_core": 3.999,
+        "cpu_ticks": 8,
+        "rss_kib": 163828,
+        "threads": 38
+      },
+      "animation": {
+        "seconds": 2.0,
+        "cpu_percent_one_core": 117.988,
+        "cpu_ticks": 236,
+        "rss_kib": 160956,
+        "threads": 38
+      },
+      "paused_again": {
+        "seconds": 2.0,
+        "cpu_percent_one_core": 0.0,
+        "cpu_ticks": 0,
+        "rss_kib": 160956,
+        "threads": 38
+      }
+    },
+    "binary_bytes": 6844552,
+    "binary_sha256": "d544f148287c1290b8321b3e49795817a86ca5e468db081e571b556549bb69e3",
+    "paddle_move_to_visible_ms": {
+      "samples": 20,
+      "p50": 9.676,
+      "p95": 19.652,
+      "max": 19.652,
+      "note": "Injected mouse command to observed paddle pixels; includes command and screenshot overhead on Xvfb."
+    },
+    "resize_event_to_swap_ms": {
+      "rendered_samples": 63,
+      "p50": 7.298,
+      "p95": 10.347,
+      "max": 10.628,
+      "note": "Latest resize event received by app to completed swap; software GL. Not compositor presentation latency."
+    },
+    "note": "The 0.5.0 studio is a seven-page gallery; its canvas damages three times the pixels this one did."
   }
 }

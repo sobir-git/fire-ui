@@ -1,6 +1,7 @@
-use crate::{theme, Appearance, Theme};
+use crate::{theme, Appearance, TextRole, Theme};
 use fire_ui::*;
-use std::{convert::Infallible, sync::Arc};
+use std::{convert::Infallible, rc::Rc, sync::Arc};
+
 pub struct Label {
     text: Arc<str>,
     appearance: Appearance,
@@ -17,6 +18,14 @@ impl Label {
             revision: 0,
             wrap: false,
         }
+    }
+    /// A label at a step of the type scale.
+    pub fn styled(text: impl Into<Arc<str>>, role: TextRole) -> Self {
+        Self::new(text).appearance(Appearance::role(role))
+    }
+    /// A label at a step of the type scale, in a palette role.
+    pub fn toned(text: impl Into<Arc<str>>, role: TextRole, color: crate::ColorRole) -> Self {
+        Self::new(text).appearance(Appearance::role(role).color(color))
     }
     pub fn appearance(mut self, appearance: Appearance) -> Self {
         self.appearance = appearance;
@@ -41,9 +50,8 @@ impl Widget for Label {
         }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let t = self.appearance.resolve(&theme(cx));
         let style = TextStyle {
-            size: t.font_size,
+            size: self.appearance.resolve_size(&theme(cx)),
             font: 0,
         };
         let width = self.wrap.then_some(c.max.width).filter(|w| w.is_finite());
@@ -67,21 +75,54 @@ impl Widget for Label {
         }
     }
     fn paint(&self, cx: &mut Paint<'_>) {
-        let parent = cx.environment::<Theme>().cloned().unwrap_or_default();
-        let t = self.appearance.resolve(&parent);
+        let t = crate::painted_theme(cx);
         if let Some(p) = &self.paragraph {
-            cx.painter
-                .paragraph(p, Point::default(), t.foreground.into())
+            cx.painter.paragraph(
+                p,
+                Point::default(),
+                self.appearance.resolve_color(&t).into(),
+            )
         }
     }
     fn semantics(&self) -> Semantics {
         Semantics {
-            role: Role::Text,
+            role: if matches!(
+                self.appearance.role,
+                Some(TextRole::Display | TextRole::Title | TextRole::Heading)
+            ) {
+                Role::Heading
+            } else {
+                Role::Text
+            },
             label: self.text.to_string(),
             ..Semantics::default()
         }
     }
 }
+
+/// How much visual weight a button carries. One accent, four levels of emphasis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ButtonStyle {
+    /// The one action a panel wants you to take. Filled with the accent.
+    Primary,
+    /// The ordinary action. A bordered surface.
+    #[default]
+    Secondary,
+    /// Tertiary actions and toolbars. No fill until hovered.
+    Ghost,
+    /// Destructive actions.
+    Danger,
+}
+impl ButtonStyle {
+    fn foreground(self, t: &Theme) -> Color {
+        match self {
+            Self::Primary | Self::Danger => t.color.on_accent,
+            Self::Secondary => t.color.foreground,
+            Self::Ghost => t.color.muted,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ButtonCommand<C: Data> {
     Disabled(bool),
@@ -89,6 +130,7 @@ pub enum ButtonCommand<C: Data> {
     Content(C),
     /// Update the button's accessible action name.
     Label(String),
+    Style(ButtonStyle),
 }
 impl<C: Data> Data for ButtonCommand<C> {
     fn bytes(&self) -> usize {
@@ -96,45 +138,75 @@ impl<C: Data> Data for ButtonCommand<C> {
             + match self {
                 Self::Content(command) => command.bytes(),
                 Self::Label(label) => label.capacity(),
-                Self::Disabled(_) => 0,
+                Self::Disabled(_) | Self::Style(_) => 0,
             }
     }
 }
+
 /// Content is an ordinary owned widget. Decorative content does not consume activation.
+///
+/// The button publishes a derived theme to its content so a filled button's text
+/// resolves to `on_accent` without the content knowing which button holds it.
 pub struct Button<C: Widget<Output = Infallible>> {
     content: Child<C>,
     pressed: Option<u32>,
     disabled: bool,
-    theme: Theme,
+    style: ButtonStyle,
     label: String,
-    appearance: Option<Theme>,
+    published: Option<Color>,
 }
 impl<C: Widget<Output = Infallible>> Button<C> {
     pub fn new(content: Element<C>, label: impl Into<String>) -> Element<Self> {
-        Self::build(content, label.into(), None)
+        Self::styled(content, label, ButtonStyle::default())
     }
-    /// Per-control styling without replacing keyboard, pointer or accessibility behavior.
     pub fn styled(
         content: Element<C>,
         label: impl Into<String>,
-        appearance: Theme,
+        style: ButtonStyle,
     ) -> Element<Self> {
-        Self::build(content, label.into(), Some(appearance))
-    }
-    fn build(content: Element<C>, label: String, appearance: Option<Theme>) -> Element<Self> {
+        let label = label.into();
         Element::build(|children| Self {
             content: children.add(content),
             pressed: None,
             disabled: false,
-            theme: Theme::default(),
+            style,
             label,
-            appearance,
+            published: None,
         })
+    }
+    fn publish(&mut self, cx: &mut Update<'_, Self>) {
+        let t = cx.environment::<Theme>().copied().unwrap_or_default();
+        let foreground = if self.disabled {
+            t.color.faint
+        } else {
+            self.style.foreground(&t)
+        };
+        if self.published != Some(foreground) {
+            let mut derived = t;
+            derived.color.foreground = foreground;
+            if cx
+                .set_environment(self.content, Rc::new(derived), false)
+                .is_ok()
+            {
+                self.published = Some(foreground);
+            }
+        }
     }
 }
 impl<C: Widget<Output = Infallible>> Widget for Button<C> {
     type Command = ButtonCommand<C::Command>;
     type Output = ();
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        match event {
+            Lifecycle::Mount | Lifecycle::Inherited => self.publish(cx),
+            Lifecycle::CaptureLost(_) | Lifecycle::Focus(false) | Lifecycle::Visibility(false) => {
+                self.pressed = None;
+                cx.repaint()
+            }
+            Lifecycle::Hover(_) => cx.repaint(),
+            _ => {}
+        }
+    }
     fn update(&mut self, cx: &mut Update<'_, Self>, command: Self::Command) {
         match command {
             ButtonCommand::Content(command) => {
@@ -142,13 +214,19 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
             }
             ButtonCommand::Label(label) => {
                 self.label = label;
-                cx.repaint();
+                cx.repaint()
+            }
+            ButtonCommand::Style(style) => {
+                self.style = style;
+                self.publish(cx);
+                cx.repaint()
             }
             ButtonCommand::Disabled(value) => {
                 self.disabled = value;
                 if let Some(pointer) = self.pressed.take() {
                     let _ = cx.release(pointer);
                 }
+                self.publish(cx);
                 cx.repaint()
             }
         }
@@ -164,29 +242,23 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
         })
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        self.theme = self.appearance.clone().unwrap_or_else(|| theme(cx));
-        let inset = self.theme.inset;
+        let t = theme(cx);
+        let inset = t.scale.inset + t.scale.halo;
         let m = cx.measure(self.content, c.inset(inset));
         let size = c.constrain(Size::new(
             m.size.width + 2. * inset,
-            m.size.height + 2. * inset,
+            (m.size.height + 2. * inset).max(t.scale.control + 2. * t.scale.halo),
         ));
         cx.place(
             self.content,
-            Point::new(inset, (size.height - m.size.height) / 2.),
+            Point::new(
+                (size.width - m.size.width) / 2.,
+                (size.height - m.size.height) / 2.,
+            ),
         );
         Metrics {
             size,
             baseline: m.baseline.map(|b| b + (size.height - m.size.height) / 2.),
-        }
-    }
-    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
-        if matches!(
-            event,
-            Lifecycle::CaptureLost(_) | Lifecycle::Focus(false) | Lifecycle::Visibility(false)
-        ) {
-            self.pressed = None;
-            cx.repaint()
         }
     }
     fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
@@ -233,29 +305,89 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
         }
     }
     fn paint(&self, cx: &mut Paint<'_>) {
-        let t = self
-            .appearance
-            .clone()
-            .or_else(|| cx.environment::<Theme>().cloned())
-            .unwrap_or_else(|| self.theme.clone());
-        cx.painter.rect(
-            cx.bounds,
-            t.radius,
-            if self.pressed.is_some() {
-                t.accent.alpha(0.25)
-            } else if cx.hovered {
-                t.raised
-            } else {
-                t.panel
+        let t = crate::painted_theme(cx);
+        let r = t.scale.radius;
+        // The visible button sits inside the room reserved for its halo.
+        let bounds = cx.bounds.inset(t.scale.halo);
+        let pressed = self.pressed.is_some();
+        let hovered = cx.hovered && !self.disabled;
+        if self.disabled {
+            cx.painter
+                .rect(bounds, r, t.color.surface.alpha(0.6).into());
+            cx.painter
+                .stroke(bounds.inset(0.5), r, t.scale.border, t.color.border);
+        } else {
+            match self.style {
+                ButtonStyle::Primary | ButtonStyle::Danger => {
+                    let base = if self.style == ButtonStyle::Danger {
+                        t.color.danger
+                    } else if hovered {
+                        t.color.accent_hover
+                    } else {
+                        t.color.accent
+                    };
+                    let top = if self.style == ButtonStyle::Danger {
+                        base
+                    } else {
+                        t.color.accent_light
+                    };
+                    if hovered && !pressed {
+                        crate::glow(cx.painter, bounds, r, 14., base.alpha(0.45));
+                    }
+                    cx.painter.rect(
+                        bounds,
+                        r,
+                        Brush::Linear {
+                            start: Point::new(bounds.x, bounds.y),
+                            end: Point::new(bounds.x, bounds.y + bounds.height),
+                            from: if pressed { base } else { top },
+                            to: base,
+                        },
+                    );
+                }
+                ButtonStyle::Secondary => {
+                    cx.painter.rect(
+                        bounds,
+                        r,
+                        if pressed {
+                            t.color.sunken
+                        } else if hovered {
+                            t.color.raised
+                        } else {
+                            t.color.surface
+                        }
+                        .into(),
+                    );
+                    cx.painter.stroke(
+                        bounds.inset(0.5),
+                        r,
+                        t.scale.border,
+                        if hovered {
+                            t.color.border_strong
+                        } else {
+                            t.color.border
+                        },
+                    );
+                }
+                ButtonStyle::Ghost => {
+                    if hovered || pressed {
+                        cx.painter.rect(
+                            bounds,
+                            r,
+                            if pressed {
+                                t.color.sunken
+                            } else {
+                                t.color.raised
+                            }
+                            .into(),
+                        );
+                    }
+                }
             }
-            .into(),
-        );
-        cx.painter.stroke(
-            cx.bounds.inset(0.5),
-            t.radius,
-            1.,
-            if cx.focused { t.accent } else { t.border },
-        );
+        }
+        if cx.focused && !self.disabled {
+            crate::focus_ring(cx.painter, bounds, r, &t);
+        }
     }
     fn semantics(&self) -> Semantics {
         Semantics {
@@ -279,5 +411,28 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
             SemanticAction::Focus => cx.focus().map_err(|_| SemanticError::Unavailable),
             _ => Err(SemanticError::Unsupported),
         }
+    }
+}
+
+/// A one-pixel rule. Horizontal when wider than tall.
+#[derive(Default)]
+pub struct Divider;
+impl Widget for Divider {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let border = theme(cx).scale.border;
+        Metrics::new(c.constrain(Size::new(
+            if c.max.width.is_finite() {
+                c.max.width
+            } else {
+                border
+            },
+            border,
+        )))
+    }
+    fn paint(&self, cx: &mut Paint<'_>) {
+        cx.painter
+            .rect(cx.bounds, 0., crate::painted_theme(cx).color.border.into())
     }
 }

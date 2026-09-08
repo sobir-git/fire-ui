@@ -23,6 +23,22 @@ pub enum Brush {
         from: Color,
         to: Color,
     },
+    /// Concentric fade from `from` at `inner` to `to` at `outer`. Round glows and orbs.
+    Radial {
+        center: Point,
+        inner: f32,
+        outer: f32,
+        from: Color,
+        to: Color,
+    },
+    /// A rounded rectangle fading outwards over `feather`. Shadows, glows and edge light.
+    Box {
+        rect: Rect,
+        radius: f32,
+        feather: f32,
+        from: Color,
+        to: Color,
+    },
 }
 impl From<Color> for Brush {
     fn from(c: Color) -> Self {

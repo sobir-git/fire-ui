@@ -163,6 +163,11 @@ pub struct Editor<D: Document = StringDocument> {
     reveal_pending: bool,
     restore_pending: bool,
     scrollbar_drag: Option<(u32, f32)>,
+    /// Viewport width and scrollbar strip from the last layout, for cursor shape.
+    width: f32,
+    strip: f32,
+    /// Whether the pointer is resting on the scrollbar.
+    bar_hover: bool,
 }
 impl Editor<StringDocument> {
     pub fn new(text: impl Into<String>) -> Self {
@@ -215,6 +220,9 @@ impl<D: Document> Editor<D> {
             reveal_pending: true,
             restore_pending: false,
             scrollbar_drag: None,
+            width: 0.,
+            strip: 0.,
+            bar_hover: false,
         }
     }
     pub fn label(mut self, label: impl Into<String>) -> Self {
@@ -262,16 +270,14 @@ impl<D: Document> Editor<D> {
     fn report_state(&self, cx: &mut Update<'_, Self>) {
         let _ = cx.emit(EditorOutput::StateChanged(self.state()));
     }
-    fn scrollbar(&self, bounds: Rect) -> Option<Rect> {
-        let total = self.paragraph.as_ref()?.size.height + 2. * self.insets().y;
-        if !self.multiline || total <= bounds.height {
+    /// The editor's own bar, using the same geometry as every other scrolling
+    /// surface so the three read as one control.
+    fn scrollbar(&self, bounds: Rect) -> Option<crate::Scrollbar> {
+        if !self.multiline {
             return None;
         }
-        let height = (bounds.height * bounds.height / total)
-            .max(30.)
-            .min(bounds.height);
-        let y = self.scroll.y / (total - bounds.height) * (bounds.height - height);
-        Some(Rect::new(bounds.width - 12., y, 12., height))
+        let total = self.paragraph.as_ref()?.size.height + 2. * self.insets().y;
+        crate::Scrollbar::new(bounds, bounds.height, total, self.scroll.y, &self.theme)
     }
     pub fn padding(mut self, horizontal: f32, vertical: f32) -> Self {
         assert!(
@@ -286,7 +292,7 @@ impl<D: Document> Editor<D> {
     }
     fn insets(&self) -> Point {
         self.padding
-            .unwrap_or(Point::new(self.theme.inset, self.theme.inset))
+            .unwrap_or(Point::new(self.theme.scale.inset, self.theme.scale.inset))
     }
     fn view(&self, bounds: Rect, focused: bool) -> Option<EditorView<'_>> {
         Some(EditorView {
@@ -314,6 +320,10 @@ impl<D: Document> Editor<D> {
     pub fn chrome(mut self, chrome: bool) -> Self {
         self.chrome = chrome;
         self
+    }
+    /// How far the view has scrolled from the top, in pixels.
+    pub fn scroll_offset(&self) -> f32 {
+        self.scroll.y
     }
     pub fn text(&self) -> &str {
         self.document.text()
@@ -504,7 +514,8 @@ impl<D: Document> Editor<D> {
         self.reset_blink(cx)
     }
     fn drag_scrollbar(&mut self, cx: &mut Update<'_, Self>, position: Point, grab: f32) {
-        if let (Some(thumb), Some(p)) = (self.scrollbar(cx.bounds()), &self.paragraph) {
+        if let (Some(bar), Some(p)) = (self.scrollbar(cx.bounds()), &self.paragraph) {
+            let thumb = bar.thumb;
             let max = (p.size.height + 2. * self.insets().y - cx.bounds().height).max(0.);
             let travel = (cx.bounds().height - thumb.height).max(1.);
             self.scroll.y = ((position.y - grab) / travel).clamp(0., 1.) * max;
@@ -656,7 +667,11 @@ impl<D: Document> Widget for Editor<D> {
             self.decoration = Some(decoration);
         }
     }
-    fn cursor(&self, _position: Point) -> Option<CursorIcon> {
+    fn cursor(&self, position: Point) -> Option<CursorIcon> {
+        // Over its own scrollbar the editor is a scrolling surface, not a text field.
+        if position.x >= self.width - self.strip {
+            return Some(CursorIcon::Arrow);
+        }
         Some(CursorIcon::Text)
     }
     fn focusable(&self) -> bool {
@@ -702,15 +717,34 @@ impl<D: Document> Widget for Editor<D> {
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         self.theme = theme(cx);
+        self.width = c.max.width;
         let style = TextStyle {
-            size: self.theme.font_size,
+            size: self.theme.scale.font_size,
             font: 0,
         };
         let inset = self.insets();
-        let width = (self.wrap && self.multiline)
-            .then_some((c.max.width - 2. * inset.x).max(0.))
-            .filter(|w| w.is_finite());
         let revision = self.document.revision();
+        let content_width = |strip: f32| {
+            (self.wrap && self.multiline)
+                .then_some((c.max.width - 2. * inset.x - strip).max(0.))
+                .filter(|w| w.is_finite())
+        };
+        // A bar takes its own strip so text wraps beside it rather than under it.
+        // Whether one is needed depends on the wrapped height, so the text is laid
+        // out once at the full width to find out, then again beside the bar.
+        self.strip = 0.;
+        if self.multiline && c.max.height.is_finite() {
+            let probe = cx.paragraph(TextRequest {
+                text: Arc::from(self.text()),
+                style,
+                width: content_width(0.),
+                revision,
+            });
+            if probe.size.height + 2. * inset.y > c.max.height {
+                self.strip = crate::Scrollbar::width(&self.theme)
+            }
+        }
+        let width = content_width(self.strip);
         let rebuild = self.paragraph.as_ref().is_none_or(|p| {
             p.revision != revision
                 || p.style != style
@@ -793,8 +827,11 @@ impl<D: Document> Widget for Editor<D> {
                 button: 1,
                 down: true,
                 position,
-            } if self.scrollbar(cx.bounds()).is_some() && position.x >= cx.bounds().width - 12. => {
-                let thumb = self.scrollbar(cx.bounds()).unwrap();
+            } if self
+                .scrollbar(cx.bounds())
+                .is_some_and(|bar| bar.track.contains(*position)) =>
+            {
+                let thumb = self.scrollbar(cx.bounds()).unwrap().thumb;
                 let grab = if thumb.contains(*position) {
                     position.y - thumb.y
                 } else {
@@ -812,6 +849,19 @@ impl<D: Document> Widget for Editor<D> {
                 let grab = self.scrollbar_drag.unwrap().1;
                 self.drag_scrollbar(cx, *position, grab);
                 cx.stop();
+                return;
+            }
+            Input::Pointer { position, .. } if self.drag.is_none() => {
+                let hovered = self
+                    .scrollbar(cx.bounds())
+                    .is_some_and(|bar| bar.contains(*position));
+                if hovered != self.bar_hover {
+                    self.bar_hover = hovered;
+                    cx.repaint()
+                }
+                // Moving the pointer is not an edit. Falling through from here would
+                // reach the caret reveal at the end of this match and drag the view
+                // back to the caret on every mouse move.
                 return;
             }
             Input::Button {
@@ -1049,18 +1099,22 @@ impl<D: Document> Widget for Editor<D> {
         cx.stop();
     }
     fn paint(&self, cx: &mut Paint<'_>) {
-        let t = cx
-            .environment::<Theme>()
-            .cloned()
-            .unwrap_or_else(|| self.theme.clone());
+        let t = cx.environment::<Theme>().cloned().unwrap_or(self.theme);
         let inset = self.insets();
-        cx.painter.rect(cx.bounds, t.radius, t.background.into());
+        // Without chrome the editor draws no surface of its own: whatever contains
+        // it owns the background, and nesting two wells looks like a mistake.
         if self.chrome {
+            cx.painter
+                .rect(cx.bounds, t.scale.radius, t.color.background.into());
             cx.painter.stroke(
                 cx.bounds.inset(0.5),
-                t.radius,
+                t.scale.radius,
                 1.,
-                if cx.focused { t.accent } else { t.border },
+                if cx.focused {
+                    t.color.accent
+                } else {
+                    t.color.border
+                },
             )
         }
         cx.painter.save();
@@ -1089,20 +1143,20 @@ impl<D: Document> Widget for Editor<D> {
                         cx.bounds.height,
                     ),
                 ) {
-                    cx.painter.rect(rect, 0., t.selection.into())
+                    cx.painter.rect(rect, 0., t.color.selection.into())
                 }
             }
             if let Some(composition) = &self.composition_layout {
                 cx.painter
-                    .paragraph(composition, Point::default(), t.foreground.into());
+                    .paragraph(composition, Point::default(), t.color.foreground.into());
             } else if self.text().is_empty() {
                 if let Some(placeholder) = &self.placeholder_layout {
                     cx.painter
-                        .paragraph(placeholder, Point::default(), t.muted.into())
+                        .paragraph(placeholder, Point::default(), t.color.muted.into())
                 }
             } else {
                 cx.painter
-                    .paragraph(p, Point::default(), t.foreground.into())
+                    .paragraph(p, Point::default(), t.color.foreground.into())
             }
             if let (Some(decoration), Some(view)) =
                 (&self.decoration, self.view(cx.bounds, cx.focused))
@@ -1115,7 +1169,7 @@ impl<D: Document> Widget for Editor<D> {
                     cx.painter.rect(
                         Rect::new(point.x, point.y, 1.5, p.line_height),
                         0.,
-                        t.accent.into(),
+                        t.color.accent.into(),
                     )
                 }
                 if let Some(composition) = &self.composition_layout {
@@ -1124,34 +1178,33 @@ impl<D: Document> Widget for Editor<D> {
                         cx.painter.rect(
                             Rect::new(rect.x, rect.y + rect.height - 1., rect.width, 1.),
                             0.,
-                            t.accent.into(),
+                            t.color.accent.into(),
                         );
                     }
                     if let Some((anchor, caret)) = self.preedit_selection {
                         for rect in composition
                             .selection(start + anchor.min(caret)..start + anchor.max(caret))
                         {
-                            cx.painter.rect(rect, 0., t.selection.into());
+                            cx.painter.rect(rect, 0., t.color.selection.into());
                         }
                         let at = composition.caret_point(Caret::at(start + caret));
                         cx.painter.rect(
                             Rect::new(at.x, at.y, 1.5, composition.line_height),
                             0.,
-                            t.accent.into(),
+                            t.color.accent.into(),
                         );
                     }
                 }
             }
         }
         cx.painter.restore();
-        if let Some(thumb) = self.scrollbar(cx.bounds) {
-            cx.painter.rect(
-                Rect::new(thumb.x + 3., thumb.y, 6., thumb.height),
-                3.,
-                Color::hex(0xffffff)
-                    .alpha(if cx.hovered { 0.35 } else { 0.20 })
-                    .into(),
-            );
+        if let Some(bar) = self.scrollbar(cx.bounds) {
+            bar.paint(
+                cx.painter,
+                &t,
+                self.bar_hover,
+                self.scrollbar_drag.is_some(),
+            )
         }
     }
     fn ime_cursor(&self) -> Option<Rect> {

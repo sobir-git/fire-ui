@@ -102,9 +102,17 @@ impl AccessibilityTree {
                 fire_ui::Role::Dialog => Role::Dialog,
                 fire_ui::Role::Canvas => Role::Canvas,
                 fire_ui::Role::CheckBox => Role::CheckBox,
+                fire_ui::Role::Radio => Role::RadioButton,
+                fire_ui::Role::Switch => Role::Switch,
+                fire_ui::Role::Slider => Role::Slider,
+                fire_ui::Role::Progress => Role::ProgressIndicator,
                 fire_ui::Role::Menu => Role::Menu,
                 fire_ui::Role::MenuItem => Role::MenuItem,
                 fire_ui::Role::Tab => Role::Tab,
+                fire_ui::Role::TabList => Role::TabList,
+                fire_ui::Role::Heading => Role::Heading,
+                fire_ui::Role::Link => Role::Link,
+                fire_ui::Role::Group => Role::Group,
             };
             let mut node = Node::new(role);
             node.set_label(n.semantics.label);
@@ -113,6 +121,12 @@ impl AccessibilityTree {
             }
             if let Some(value) = n.semantics.value {
                 node.set_value(value);
+            }
+            if let Some(range) = n.semantics.range {
+                node.set_numeric_value(range.now as f64);
+                node.set_min_numeric_value(range.min as f64);
+                node.set_max_numeric_value(range.max as f64);
+                node.set_numeric_value_step(range.step as f64);
             }
             if n.semantics.disabled {
                 node.set_disabled();

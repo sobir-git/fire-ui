@@ -104,6 +104,7 @@ pub(crate) fn snapshot<W: Widget>(ui: &Ui<W>) -> Value {
         json!({"id": n.id, "parent": n.parent, "key": s.key, "role": format!("{:?}", s.role),
             "label": s.label, "value": s.value, "disabled": s.disabled, "selected": s.selected,
             "checked": s.checked, "focused": n.focused, "actions": actions,
+            "range": s.range.map(|r| json!({"now": r.now, "min": r.min, "max": r.max, "step": r.step})),
             "bounds": {"x": n.bounds.x, "y": n.bounds.y, "width": n.bounds.width, "height": n.bounds.height},
             "text": s.text.map(|t| json!({"anchor": t.anchor, "caret": t.caret.byte,
                 "affinity": format!("{:?}", t.caret.affinity), "multiline": t.multiline,

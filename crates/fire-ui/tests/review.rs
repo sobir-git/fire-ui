@@ -61,14 +61,14 @@ impl Widget for Root {
         match command {
             Command::Remove => cx.remove(a).unwrap(),
             Command::Hide => cx.show(a, false).unwrap(),
-            Command::Anchor => cx.anchor(b, Some(a)).unwrap(),
+            Command::Anchor => cx.anchor(b, Anchor::To(a)).unwrap(),
             Command::Chain => {
-                cx.anchor(b, Some(a)).unwrap();
-                cx.anchor(c, Some(b)).unwrap();
+                cx.anchor(b, Anchor::To(a)).unwrap();
+                cx.anchor(c, Anchor::To(b)).unwrap();
             }
             Command::RemoveThenAnchor => {
                 cx.remove(b).unwrap();
-                cx.anchor(b, Some(a)).unwrap();
+                cx.anchor(b, Anchor::To(a)).unwrap();
             }
         }
     }

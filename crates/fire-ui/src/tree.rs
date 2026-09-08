@@ -30,7 +30,9 @@ pub(crate) struct Node {
     pub published_anchor: Option<bool>,
     pub local: Transform,
     pub clip: bool,
-    pub anchor: Option<Id>,
+    /// `None` for an ordinary child. `Some(None)` for an overlay placed
+    /// against the window, `Some(Some(id))` for one that follows a node.
+    pub anchor: Option<Option<Id>>,
     pub size: Size,
     pub cache: Option<(Constraints, u64, Metrics)>,
     pub dirty: bool,
@@ -44,6 +46,8 @@ pub(crate) struct Tree {
     slots: Vec<Option<Node>>,
     index: HashMap<Id, usize>,
     free: Vec<usize>,
+    /// The window rectangle in effect for this layout pass.
+    pub viewport: Rect,
     pub layout_count: u64,
     pub geometry_count: u64,
 }
@@ -81,7 +85,7 @@ impl Tree {
                 && n.visible
                 && n.local.inverse().is_some()
                 && n.parent.is_none_or(|p| self.active(p))
-                && n.anchor.is_none_or(|a| self.active(a))
+                && n.anchor.is_none_or(|a| a.is_none_or(|a| self.active(a)))
         })
     }
     pub fn insert(&mut self, parent: Option<Id>, prepared: Prepared, out: &mut Vec<Id>) {
@@ -90,6 +94,7 @@ impl Tree {
             widget,
             children,
             output,
+            anchor,
             ..
         } = prepared;
         let ids = children.iter().map(|n| n.id).collect();
@@ -111,7 +116,7 @@ impl Tree {
             published_anchor: None,
             local: Transform::IDENTITY,
             clip: true,
-            anchor: None,
+            anchor,
             size: Size::ZERO,
             cache: None,
             dirty: true,
@@ -200,7 +205,7 @@ impl Tree {
         n.geometry_dirty = true;
         metrics
     }
-    pub fn place(&mut self, id: Id, local: Transform, clip: bool, anchor: Option<Id>) {
+    pub fn place(&mut self, id: Id, local: Transform, clip: bool, anchor: Option<Option<Id>>) {
         let n = self.get_mut(id).unwrap();
         if n.local != local || n.clip != clip || n.anchor != anchor {
             n.local = local;
@@ -259,6 +264,7 @@ pub struct Layout<'a> {
     pub(crate) me: Id,
     pub(crate) text: &'a mut dyn TextEngine,
 }
+
 impl Layout<'_> {
     pub fn measure<W: Widget>(&mut self, child: Child<W>, limits: Constraints) -> Metrics {
         assert!(
@@ -285,6 +291,10 @@ impl Layout<'_> {
     }
     pub fn text_revision(&self) -> u64 {
         self.text.revision()
+    }
+    /// The window's rectangle. Window-anchored overlays measure against it.
+    pub fn viewport(&self) -> Rect {
+        self.tree.viewport
     }
     pub fn environment<T: Any>(&self) -> Option<&T> {
         self.tree.get(self.me)?.environment.as_ref()?.downcast_ref()

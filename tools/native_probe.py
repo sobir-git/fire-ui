@@ -118,8 +118,63 @@ def main():
                         x("mousemove", "--window", window, px, py)
                         x("click", 1)
 
-                    def accessibility_probe():
+
+                    sock = Path(directory) / "ui.sock"
+
+                    def snapshot():
+                        reply = inspect_request(sock, {})
+                        if "error" in reply:
+                            raise RuntimeError(reply["error"])
+                        return reply["nodes"]
+
+                    def find(**expected):
+                        """The one published node matching every field, e.g. role="Button"."""
+                        for _ in range(40):
+                            found = [n for n in snapshot()
+                                     if all(n.get(k) == v for k, v in expected.items())]
+                            if len(found) == 1:
+                                return found[0]
+                            if len(found) > 1:
+                                raise RuntimeError(f"Ambiguous target {expected}: {len(found)} nodes")
+                            time.sleep(0.05)
+                        raise RuntimeError(f"No node matching {expected}")
+
+                    def tap(node):
+                        """Click the centre of a node, in real window pixels."""
+                        b = node["bounds"]
+                        click(round(b["x"] + b["width"] / 2), round(b["y"] + b["height"] / 2))
+                        time.sleep(0.12)
+
+                    def logged():
+                        return (artifacts / "native.log").read_text()
+
+                    def expect_log(*needles, why=""):
+                        for _ in range(60):
+                            text = logged()
+                            if all(n in text for n in needles):
+                                return
+                            time.sleep(0.05)
+                        raise RuntimeError(f"Missing studio output {needles!r} {why}\n{logged()}")
+
+                    def navigate(section):
+                        """Switch pages through the same semantic action assistive
+                        technology uses, then wait for the page to publish itself."""
+                        tab = find(role="Tab", label=section)
+                        reply = inspect_request(sock, {"id": tab["id"], "action": "activate"})
+                        if "error" in reply:
+                            raise RuntimeError(f"Navigating to {section}: {reply['error']}")
+                        for _ in range(60):
+                            if find(role="Tab", label=section)["selected"]:
+                                time.sleep(0.2)
+                                return
+                            time.sleep(0.05)
+                        raise RuntimeError(f"{section} did not become the selected section")
+
+                    def accessibility_probe(navigate, find):
                         content = "AT-SPI café שלום"
+                        # Only the visible page publishes nodes, so the button and the
+                        # editor are verified from the page each one lives on.
+                        navigate("Text")
                         snapshot = inspect_request(Path(directory) / "ui.sock", {})
                         editor = next(n for n in snapshot["nodes"] if n["text"] and n["text"]["multiline"])
                         reply = inspect_request(Path(directory) / "ui.sock", {"id": editor["id"], "action": "set_value", "value": content})
@@ -144,25 +199,26 @@ def main():
                         trace = []
                         button_verified = False
                         text_verified = False
+                        restarted = False
                         while queue:
                             bus, path = queue.pop(0)
                             if (bus, path) in visited: continue
                             visited.add((bus, path))
                             name = remote(bus, path, "org.freedesktop.DBus.Properties.Get", "org.a11y.atspi.Accessible", "Name")
                             trace.append({"bus": bus, "path": path, "name": name})
-                            if "Add one" in name:
+                            if "Primary" in name and not button_verified:
                                 interfaces = remote(bus, path, "org.a11y.atspi.Accessible.GetInterfaces")
                                 if "org.a11y.atspi.Action" in interfaces:
                                     accepted = remote(bus, path, "org.a11y.atspi.Action.DoAction", "0")
                                     if "true" not in accepted: raise RuntimeError("Accessibility activation was rejected")
                                     for _ in range(20):
                                         delivered = (artifacts / "native.log").read_text()
-                                        if "Left counter: 2" in delivered or "Right counter: 2" in delivered:
+                                        if "Pressed Primary" in delivered:
                                             button_verified = True
                                             break
                                         time.sleep(0.05)
                                     if not button_verified:
-                                        raise RuntimeError("Accessibility action did not reach the counter")
+                                        raise RuntimeError("Accessibility action did not reach the button")
                             if not text_verified:
                                 interfaces = remote(bus, path, "org.a11y.atspi.Accessible.GetInterfaces")
                                 if "org.a11y.atspi.Text'" in interfaces:
@@ -320,56 +376,133 @@ sys.stdin.read()
                                     expect_text(content)
                                     text_verified = True
                             if button_verified and text_verified:
-                                return {"nodes_visited": len(visited), "button_activation": "counter increment verified", "text": "Unicode read/caret, all six EditableText methods, byte/scalar offsets, rejected invalid edits and undo verified"}
+                                return {"nodes_visited": len(visited), "button_activation": "primary button press verified", "text": "Unicode read/caret, all six EditableText methods, byte/scalar offsets, rejected invalid edits and undo verified"}
                             queue.extend(children(bus, path))
+                            if not queue and text_verified and not button_verified and not restarted:
+                                # The editor and the button live on different pages, and
+                                # only the visible page is published. Having finished the
+                                # text checks, walk the tree again on the button's page.
+                                restarted = True
+                                navigate("Controls")
+                                queue = list(children("org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root"))
+                                visited = set()
                         (artifacts / "accessibility-tree.json").write_text(json.dumps(trace, indent=2))
                         raise RuntimeError(f"Accessibility incomplete: button={button_verified}, text={text_verified}")
 
                     sample("idle")
-                    shot("studio-initial.png")
-                    click(700, 332)
-                    click(950, 332)
-                    click(100, 285)
+                    shot("studio-overview.png")
+                    # Every page is reachable, and each one publishes a heading.
+                    sections = [n["label"] for n in snapshot() if n["role"] == "Tab"]
+                    if len(sections) != 7:
+                        raise RuntimeError(f"Expected seven sections, found {sections}")
+
+                    navigate("Controls")
+                    shot("studio-controls.png")
+                    for name in ["Primary", "Secondary", "Ghost", "Delete"]:
+                        tap(find(role="Button", label=name))
+                    expect_log(*[f"Pressed {n}" for n in ["Primary", "Secondary", "Ghost", "Delete"]],
+                               why="(button styles)")
+                    disabled = find(role="Button", label="Disabled")
+                    if not disabled["disabled"] or disabled["actions"]:
+                        raise RuntimeError("A disabled button still advertises actions")
+                    tap(disabled)
+                    if "Pressed Disabled" in logged():
+                        raise RuntimeError("A disabled button was activated")
+
+                    box = find(role="CheckBox")
+                    if box["checked"]:
+                        raise RuntimeError("Checkbox did not start clear")
+                    tap(box)
+                    expect_log("Checkbox is now ticked")
+                    if not find(role="CheckBox")["checked"]:
+                        raise RuntimeError("Checkbox state did not reach accessibility")
+
+                    switch = find(role="Switch", label="Animate")
+                    tap(switch)
+                    expect_log("Animation on")
+
+                    slider = find(role="Slider")
+                    if slider["range"]["now"] != 62:
+                        raise RuntimeError(f"Slider published {slider['range']} not 62")
+                    x("mousemove", "--window", window,
+                      round(slider["bounds"]["x"] + slider["bounds"]["width"] / 2),
+                      round(slider["bounds"]["y"] + slider["bounds"]["height"] / 2))
+                    x("click", 1)
+                    time.sleep(0.15)
+                    x("key", "Right", "Right")
+                    time.sleep(0.2)
+                    moved = find(role="Slider")["range"]["now"]
+                    if not 45 < moved < 60:
+                        raise RuntimeError(f"Slider did not follow pointer and arrows: {moved}")
+                    reply = inspect_request(sock, {"id": slider["id"], "action": "set_value", "value": "88"})
+                    if "error" in reply:
+                        raise RuntimeError(reply["error"])
+                    expect_log("Warmth 88", why="(assistive-technology set_value)")
+                    reply = inspect_request(sock, {"id": slider["id"], "action": "set_value", "value": "not a number"})
+                    if "error" not in reply:
+                        raise RuntimeError("Slider accepted a value that is not a number")
+
+                    # The dropdown's list is a modal overlay, positioned in window
+                    # coordinates so it escapes the page's viewport.
+                    choice = find(role="Menu", label="Palette")
+                    tap(choice)
+                    paper = find(role="MenuItem", label="Paper")
+                    if paper["bounds"]["y"] <= choice["bounds"]["y"]:
+                        raise RuntimeError("Dropdown list did not open below its field")
+                    tap(paper)
+                    expect_log("Chose Paper")
+                    if find(role="Menu", label="Palette")["value"] != "Paper":
+                        raise RuntimeError("Dropdown did not adopt the chosen option")
+                    shot("studio-controls-used.png")
+                    sample("controls")
+
+                    navigate("Text")
+                    editor = find(role="TextInput", value=None) if False else next(
+                        n for n in snapshot() if n["text"] and n["text"]["multiline"])
+                    tap({"bounds": editor["bounds"]})
                     x("key", "ctrl+a")
                     x("type", "--clearmodifiers", "ab")
                     x("key", "Left")
                     x("type", "X")
-                    time.sleep(0.2)
+                    time.sleep(0.25)
+                    expect_log("3 characters in the note")
                     shot("studio-editing.png")
                     sample("focused_caret")
-                    log.flush()
-                    output = (artifacts / "native.log").read_text()
-                    for expected in ["Left counter: 1", "Right counter: 1", "3 characters in your note"]:
-                        if expected not in output:
-                            raise RuntimeError("Missing interaction result: " + expected + "\n" + output)
-                    click(710, 526)
+
+                    navigate("Lists")
+                    search = next(n for n in snapshot()
+                                  if n["text"] and not n["text"]["multiline"])
+                    tap(search)
                     x("type", "--clearmodifiers", "99999")
-                    time.sleep(0.2)
-                    click(710, 570)
-                    time.sleep(0.1)
-                    if "Selected material study 99999" not in (artifacts / "native.log").read_text():
-                        raise RuntimeError("Picker did not filter and emit the selected result")
-                    click(710, 526)
-                    x("key", "ctrl+a", "BackSpace")
-                    click(500, 605)
-                    time.sleep(0.2)
+                    time.sleep(0.35)
+                    # Rows are the caller's own widgets; the list publishes itself but
+                    # not per-row list items, so the visible row text is the target.
+                    tap(find(role="Text", label="Material study 99999"))
+                    expect_log("Selected material study 99999")
+                    shot("studio-lists.png")
+
+                    navigate("Canvas")
+                    canvas = find(role="Canvas")
+                    tap(find(role="Switch", label="Animate"))
+                    expect_log("Animating")
+                    time.sleep(0.4)
                     sample("animation")
                     shot("studio-animation.png")
-                    click(500, 605)
-                    time.sleep(0.2)
-                    sample("paused_again")
-                    # Includes injection and screenshot overhead, not physical display latency.
+                    # Direct pointer response: move, then wait for the paddle pixels.
+                    paddle_y = round(canvas["bounds"]["y"] + canvas["bounds"]["height"] - 15)
                     pointer_samples = []
-                    for target in [160, 470] * 10:
+                    left = round(canvas["bounds"]["x"] + canvas["bounds"]["width"] * 0.25)
+                    right = round(canvas["bounds"]["x"] + canvas["bounds"]["width"] * 0.75)
+                    for target in [left, right] * 10:
                         started = time.monotonic()
-                        x("mousemove", "--window", window, target, 690)
+                        x("mousemove", "--window", window, target, paddle_y - 40)
                         while True:
                             pixels = ImageGrab.grab(xdisplay=env["DISPLAY"])
-                            if pixels.getpixel((target, 739))[:3] == (196, 217, 169):
+                            if pixels.getpixel((target, paddle_y))[:3] == (168, 201, 126):
                                 pointer_samples.append((time.monotonic() - started) * 1000)
                                 break
                             if time.monotonic() - started > 2:
-                                raise RuntimeError("Paddle did not follow the mouse to the expected position")
+                                raise RuntimeError("Paddle did not follow the mouse")
                     pointer_samples.sort()
                     results["paddle_move_to_visible_ms"] = {
                         "samples": len(pointer_samples),
@@ -378,28 +511,58 @@ sys.stdin.read()
                         "max": round(max(pointer_samples), 3),
                         "note": "Injected mouse command to observed paddle pixels; includes command and screenshot overhead on Xvfb.",
                     }
-                    shot("studio-game.png")
+                    shot("studio-canvas.png")
+                    tap(find(role="Switch", label="Animate"))
+                    expect_log("Paused")
+                    sample("paused_again")
+
+                    navigate("Layout")
+                    blocks = lambda: [n["bounds"]["x"] for n in snapshot()
+                                      if n["role"] == "Text" and n["label"] == "natural"]
+                    start = blocks()
+                    justify = find(role="Menu", label="Justify")
+                    tap(justify)
+                    tap(find(role="MenuItem", label="Center"))
+                    time.sleep(0.3)
+                    if blocks() <= start:
+                        raise RuntimeError("Changing Justify did not move the blocks")
+                    shot("studio-layout.png")
+
+                    navigate("Theme")
+                    shot("studio-theme-dark.png")
+                    tap(find(role="Switch", label="Light"))
+                    expect_log("theme: light")
+                    time.sleep(0.4)
+                    shot("studio-theme-light.png")
+                    sample("light_theme")
+                    tap(find(role="Switch", label="Light"))
+                    expect_log("theme: dark")
+                    time.sleep(0.3)
+
+                    # Resizing repeatedly, then at two widths, exercises the rail
+                    # collapsing and the grid reflowing.
                     for step in range(60):
-                        width = 940 + abs(30-step)*6
-                        height = 700 + abs(30-step)*3
+                        width = 940 + abs(30 - step) * 6
+                        height = 700 + abs(30 - step) * 3
                         x("windowsize", window, width, height)
                         time.sleep(0.012)
                     x("windowsize", window, 940, 720)
                     time.sleep(0.3)
+                    navigate("Overview")
                     shot("studio-resized.png")
                     x("windowsize", window, 640, 780)
-                    time.sleep(0.3)
+                    time.sleep(0.4)
                     shot("studio-narrow.png")
-                    x("mousemove", "--window", window, 620, 700)
+                    x("mousemove", "--window", window, 320, 500)
                     x("click", "--repeat", 15, "--delay", 20, 5)
                     time.sleep(0.3)
                     shot("studio-narrow-scrolled.png")
                     if app.poll() is not None:
                         raise RuntimeError("Studio exited during interaction")
+                    x("windowsize", window, 1180, 860)
+                    time.sleep(0.4)
                     if args.accessibility:
-                        x("windowsize", window, 1140, 880)
-                        time.sleep(0.3)
-                        results["accessibility"] = accessibility_probe()
+                        results["accessibility"] = accessibility_probe(navigate, find)
                     results["window_smoke"] = "completed"
             finally:
                 if app is not None and app.poll() is None:

@@ -341,6 +341,7 @@ impl<W: Widget> Ui<W> {
                 self.tree.invalidate(id);
             }
         }
+        let mut blocked = false;
         for child in children {
             if self
                 .tree
@@ -348,7 +349,14 @@ impl<W: Widget> Ui<W> {
                 .is_some_and(|n| !n.environment_boundary)
             {
                 self.inherit_environment(child, value.clone(), layout);
+            } else {
+                blocked = true
             }
+        }
+        // A child holding its own value stops inheritance there. Its owner is the
+        // only one that can bring it back in line, so tell the owner.
+        if blocked {
+            self.notice(id, Lifecycle::Inherited)
         }
         self.repaint();
     }
@@ -528,7 +536,7 @@ impl<W: Widget> Ui<W> {
                 }
             }
             Mutation::Anchor(id, anchor) => {
-                let mut next = anchor;
+                let mut next = anchor.unwrap_or(None);
                 let mut valid = true;
                 let mut seen = HashSet::new();
                 while let Some(a) = next {
@@ -536,7 +544,7 @@ impl<W: Widget> Ui<W> {
                         valid = false;
                         break;
                     }
-                    next = self.tree.get(a).and_then(|n| n.anchor)
+                    next = self.tree.get(a).and_then(|n| n.anchor).unwrap_or(None)
                 }
                 if valid
                     && self
@@ -691,7 +699,7 @@ impl<W: Widget> Ui<W> {
                 .tree
                 .get(id)
                 .and_then(|n| n.anchor)
-                .map(|a| self.tree.active(a));
+                .map(|a| a.is_none_or(|a| self.tree.active(a)));
             let Some(n) = self.tree.get_mut(id) else {
                 continue;
             };
@@ -768,7 +776,7 @@ impl<W: Widget> Ui<W> {
                             .tree
                             .get(id)
                             .and_then(|n| n.anchor)
-                            .map(|a| self.tree.active(a));
+                            .map(|a| a.is_none_or(|a| self.tree.active(a)));
                         let n = self.tree.get_mut(id).unwrap();
                         n.published = Some(visible);
                         n.published_anchor = anchor;
@@ -795,22 +803,51 @@ impl<W: Widget> Ui<W> {
                     self.invoke(id, false, false, |w, cx| w.update(cx, payload));
                 }
                 Delivery::Output(id, payload) => {
-                    let Some(n) = self.tree.get(id).filter(|n| !n.retiring) else {
-                        self.stale += 1;
-                        continue;
-                    };
-                    if let Some(parent) = n.parent {
-                        if n.output.is_some() {
-                            assert!(self.mailbox.reserve(1, bytes));
-                            self.mailbox
-                                .push_reserved(Delivery::Command(parent, payload, None), bytes)
+                    // `emit` already applied the emitting node's map. A bubbling
+                    // decorator has no map of its own, so the payload becomes its
+                    // owner's output and climbs one more level, where that owner's
+                    // map still has to be applied.
+                    let mut id = id;
+                    let mut payload = payload;
+                    let mut bytes = bytes;
+                    // `emit` mapped the first hop; each bubbled hop still needs its own.
+                    let mut mapped = true;
+                    loop {
+                        let Some(n) = self.tree.get(id).filter(|n| !n.retiring) else {
+                            self.stale += 1;
+                            break;
+                        };
+                        if !mapped {
+                            if let Some(OutputMap::Map(map)) = n.output.as_ref() {
+                                let (remapped, cost) = map(&*payload);
+                                payload = remapped;
+                                bytes = cost;
+                            }
                         }
-                    } else {
-                        output(
-                            *payload
-                                .downcast::<W::Output>()
-                                .expect("private root output type invariant"),
-                        )
+                        let Some(parent) = n.parent else {
+                            output(
+                                *payload
+                                    .downcast::<W::Output>()
+                                    .expect("private root output type invariant"),
+                            );
+                            break;
+                        };
+                        match n.output.as_ref() {
+                            None => break,
+                            Some(OutputMap::Bubble) => {
+                                id = parent;
+                                mapped = false;
+                            }
+                            Some(_) => {
+                                if !self.mailbox.reserve(1, bytes) {
+                                    self.stale += 1;
+                                    break;
+                                }
+                                self.mailbox
+                                    .push_reserved(Delivery::Command(parent, payload, None), bytes);
+                                break;
+                            }
+                        }
                     }
                 }
                 Delivery::Effects(id, effects) => self.apply_effects(id, effects),
@@ -865,6 +902,7 @@ impl<W: Widget> Ui<W> {
             return;
         }
 
+        self.tree.viewport = Rect::from_size(self.size);
         self.tree
             .measure(self.root, Constraints::tight(self.size), text);
         self.repaint();
@@ -898,7 +936,7 @@ impl<W: Widget> Ui<W> {
                 return;
             };
             // An anchor may live inside another overlay, so publish its placement ancestors first.
-            let mut ancestor = Some(anchor);
+            let mut ancestor = anchor;
             while let Some(a) = ancestor {
                 if tree.get(a).is_some_and(|n| n.anchor.is_some()) {
                     publish_overlay(tree, a, viewport, revision, done);
@@ -906,8 +944,10 @@ impl<W: Widget> Ui<W> {
                 }
                 ancestor = tree.get(a).and_then(|n| n.parent);
             }
-            let transform = tree
-                .get(anchor)
+            // A window-anchored overlay starts at the window origin, which is what
+            // lets a menu escape a scrolling or clipping ancestor.
+            let transform = anchor
+                .and_then(|a| tree.get(a))
                 .map_or(Transform::IDENTITY, |n| n.geometry.transform);
             let visible = tree.active(id);
             tree.publish(id, transform, viewport, visible, revision, true);

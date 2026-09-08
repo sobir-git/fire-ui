@@ -1,495 +1,343 @@
+//! Fire UI Studio: every capability the framework ships, in one navigable window.
+//!
+//! Nothing here reaches past the public API. There is not a single literal colour
+//! or hardcoded font size in this binary — the theme decides both — and no panel
+//! computes its own pixel positions. If something in this program is awkward, the
+//! framework is missing a capability.
+
+mod canvas;
+mod controls;
+mod kit;
+mod layout_page;
+mod lists;
+mod overview;
+mod text_page;
+mod theme_page;
+
 use fire_ui::*;
-use fire_ui_native::{run_with, WindowOptions};
 use fire_ui_widgets::*;
-use std::{convert::Infallible, sync::Arc};
+use kit::*;
 
-fn label(text: impl Into<Arc<str>>, size: f32, color: Color) -> Element<Label> {
-    Element::leaf(Label::new(text).appearance(Appearance {
-        font_size: Some(size),
-        foreground: Some(color),
-    }))
-}
-fn button(text: &str) -> Element<Button<Label>> {
-    Button::new(Element::leaf(Label::new(text)), text)
-}
-fn place<W: Widget>(cx: &mut Layout<'_>, child: Child<W>, r: Rect) {
-    cx.measure(child, Constraints::tight(r.size()));
-    cx.place(child, Point::new(r.x, r.y));
-}
-
-// Decoration is ordinary composition. The content keeps its own command and output protocol.
-struct Panel<C: Widget> {
-    title: Child<Label>,
-    subtitle: Child<Label>,
-    content: Child<C>,
-}
-impl<C: Widget> Panel<C> {
-    fn new(title: &str, subtitle: &str, content: Element<C>) -> Element<Self> {
-        Element::build(|children| Self {
-            title: children.add(label(title, 19., Color::hex(0xf0eee4))),
-            subtitle: children.add(label(subtitle, 12., Color::hex(0xa9b2a8))),
-            content: children.forward(content),
-        })
-    }
-}
-impl<C: Widget> Widget for Panel<C> {
-    type Command = C::Output;
-    type Output = C::Output;
-    fn update(&mut self, cx: &mut Update<'_, Self>, output: Self::Command) {
-        let _ = cx.emit(output);
-    }
-    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let w = c.max.width;
-        let h = c.max.height;
-        place(cx, self.title, Rect::new(22., 20., (w - 44.).max(0.), 26.));
-        place(
-            cx,
-            self.subtitle,
-            Rect::new(22., 50., (w - 44.).max(0.), 19.),
-        );
-        place(
-            cx,
-            self.content,
-            Rect::new(22., 85., (w - 44.).max(0.), (h - 107.).max(0.)),
-        );
-        Metrics::new(c.max)
-    }
-    fn paint(&self, cx: &mut Paint<'_>) {
-        cx.painter.rect(cx.bounds, 12., Color::hex(0x202422).into());
-        cx.painter
-            .stroke(cx.bounds.inset(0.5), 12., 1., Color::hex(0x343b36));
-    }
-}
-
-struct Counter {
-    count: usize,
-    value: Child<Label>,
-    add: Child<Button<Label>>,
-    pending: bool,
-}
-impl Counter {
-    fn new() -> Element<Self> {
-        Element::build(|children| Self {
-            count: 0,
-            value: children.add(label("0", 36., Color::hex(0xf0eee4))),
-            add: children.connect(button("Add one"), |_| ()),
-            pending: false,
-        })
-    }
-    fn publish(&mut self, cx: &mut Update<'_, Self>) {
-        self.pending = cx.send(self.value, self.count.to_string()).is_err();
-        if self.pending {
-            cx.request_frame();
-        }
-    }
-}
-impl Widget for Counter {
-    type Command = ();
-    type Output = usize;
-    fn update(&mut self, cx: &mut Update<'_, Self>, _: ()) {
-        self.count += 1;
-        self.publish(cx);
-        let _ = cx.emit(self.count);
-    }
-    fn frame(&mut self, cx: &mut Update<'_, Self>, _: FrameTime) {
-        if self.pending {
-            self.publish(cx);
-        }
-    }
-    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        place(cx, self.value, Rect::new(0., 0., c.max.width, 49.));
-        place(cx, self.add, Rect::new(0., 62., c.max.width, 44.));
-        Metrics::new(c.max)
-    }
-}
-struct CounterPair {
-    left: Child<Counter>,
-    right: Child<Counter>,
-}
+/// What any page can tell the shell.
 #[derive(Clone, Debug)]
-enum Count {
-    Left(usize),
-    Right(usize),
+pub enum Event {
+    /// A line for the status bar.
+    Status(String),
+    /// Swap the palette for the whole window.
+    Light(bool),
 }
-impl Data for Count {
-    fn bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-impl CounterPair {
-    fn new() -> Element<Self> {
-        Element::build(|c| Self {
-            left: c.connect(Counter::new(), |v| Count::Left(*v)),
-            right: c.connect(Counter::new(), |v| Count::Right(*v)),
-        })
-    }
-}
-impl Widget for CounterPair {
-    type Command = Count;
-    type Output = Count;
-    fn update(&mut self, cx: &mut Update<'_, Self>, count: Count) {
-        let _ = cx.emit(count);
-    }
-    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let w = (c.max.width - 20.).max(0.) / 2.;
-        place(cx, self.left, Rect::new(0., 0., w, c.max.height));
-        place(cx, self.right, Rect::new(w + 20., 0., w, c.max.height));
-        Metrics::new(c.max)
-    }
-}
-
-type Rows = VirtualList<usize, Label, fn(&usize) -> Element<Label>>;
-fn item(key: &usize) -> Element<Label> {
-    label(
-        format!("  Material study {:05}", key + 1),
-        14.,
-        Color::hex(0xd7ddd3),
-    )
-}
-struct Picker {
-    search: Child<Editor>,
-    list: Child<Rows>,
-    pending: Option<Vec<usize>>,
-}
-enum Pick {
-    Query(EditorOutput),
-    List(ListOutput<usize, Infallible>),
-}
-impl Data for Pick {
+impl Data for Event {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
-                Self::Query(v) => v.bytes(),
-                Self::List(v) => v.bytes(),
+                Self::Status(s) => s.capacity(),
+                Self::Light(_) => 0,
             }
-    }
-}
-impl Picker {
-    fn new() -> Element<Self> {
-        Element::build(|c| Self {
-            search: c.connect(
-                Element::leaf(Editor::field("").placeholder("Find a material study…")),
-                |v| Pick::Query(v.clone()),
-            ),
-            list: c.connect(
-                Element::leaf(Rows::new(
-                    (0..100_000).collect(),
-                    32.,
-                    item as fn(&usize) -> Element<Label>,
-                )),
-                |v| Pick::List(v.clone()),
-            ),
-            pending: None,
-        })
-    }
-    fn publish(&mut self, cx: &mut Update<'_, Self>) {
-        if let Some(keys) = self.pending.take() {
-            if let Err((_, ListCommand::Keys(keys))) = cx.send(self.list, ListCommand::Keys(keys)) {
-                self.pending = Some(keys);
-                cx.request_frame();
-            }
-        }
-    }
-}
-impl Widget for Picker {
-    type Command = Pick;
-    type Output = usize;
-    fn update(&mut self, cx: &mut Update<'_, Self>, command: Pick) {
-        match command {
-            Pick::Query(EditorOutput::Changed { text, .. }) => {
-                self.pending = Some(
-                    (0..100_000)
-                        .filter(|i| {
-                            text.is_empty() || format!("{:05}", i + 1).contains(text.as_ref())
-                        })
-                        .collect(),
-                );
-                self.publish(cx);
-            }
-            Pick::List(ListOutput::Selected(key)) => {
-                let _ = cx.emit(key);
-            }
-            _ => {}
-        }
-    }
-    fn frame(&mut self, cx: &mut Update<'_, Self>, _: FrameTime) {
-        self.publish(cx);
-    }
-    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        place(cx, self.search, Rect::new(0., 0., c.max.width, 44.));
-        place(
-            cx,
-            self.list,
-            Rect::new(0., 58., c.max.width, (c.max.height - 58.).max(0.)),
-        );
-        Metrics::new(c.max)
     }
 }
 
-// The canvas uses the same widget protocol as text and buttons. Pointer position is direct.
-struct Playground {
-    toggle: Child<Button<Label>>,
-    running: bool,
-    paddle: f32,
-    ball: Point,
-    velocity: Point,
-    phase: f32,
-    title: Option<Arc<Paragraph>>,
-}
-impl Playground {
-    fn new() -> Element<Self> {
-        Element::build(|c| Self {
-            toggle: c.connect(button("Play / pause"), |_| ()),
-            running: false,
-            paddle: 0.5,
-            ball: Point::new(0.45, 0.35),
-            velocity: Point::new(0.32, 0.25),
-            phase: 0.,
-            title: None,
-        })
-    }
-}
-impl Widget for Playground {
-    type Command = ();
-    type Output = Infallible;
-    fn update(&mut self, cx: &mut Update<'_, Self>, _: ()) {
-        self.running = !self.running;
-        if self.running {
-            cx.request_frame();
-        } else {
-            cx.cancel_frame();
-        }
-        cx.repaint();
-    }
-    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, e: Lifecycle) {
-        if e == Lifecycle::Visibility(true) && self.running {
-            cx.request_frame();
-        }
-    }
-    fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
-        if phase == Phase::Preview {
-            return;
-        }
-        if let Input::Pointer { position, .. } = input {
-            self.paddle = (position.x / cx.bounds().width.max(1.)).clamp(0., 1.);
-            cx.repaint();
-        }
-    }
-    fn frame(&mut self, cx: &mut Update<'_, Self>, time: FrameTime) {
-        if !self.running {
-            return;
-        }
-        let dt = time.elapsed.as_secs_f32().min(0.04);
-        self.phase += dt;
-        self.ball.x += self.velocity.x * dt;
-        self.ball.y += self.velocity.y * dt;
-        if self.ball.x < 0.03 || self.ball.x > 0.97 {
-            self.velocity.x = -self.velocity.x;
-            self.ball.x = self.ball.x.clamp(0.03, 0.97);
-        }
-        if self.ball.y < 0.22 {
-            self.velocity.y = self.velocity.y.abs();
-        }
-        if self.ball.y > 0.83 {
-            if (self.ball.x - self.paddle).abs() < 0.18 {
-                self.velocity.y = -self.velocity.y.abs();
-            } else {
-                self.ball = Point::new(0.5, 0.3);
-            }
-        }
-        cx.repaint();
-        cx.request_frame();
-    }
-    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        place(
-            cx,
-            self.toggle,
-            Rect::new((c.max.width - 135.).max(0.), 0., 135., 42.),
-        );
-        if self.title.is_none() {
-            self.title = Some(cx.paragraph(TextRequest {
-                text: Arc::from("fire"),
-                style: TextStyle { size: 56., font: 0 },
-                width: None,
-                revision: 0,
-            }));
-        }
-        Metrics::new(c.max)
-    }
-    fn paint(&self, cx: &mut Paint<'_>) {
-        let w = cx.bounds.width;
-        let h = cx.bounds.height;
-        cx.painter.rect(cx.bounds, 8., Color::hex(0x151c19).into());
-        for i in 0..12 {
-            let x = 12. + i as f32 * 8.;
-            let y = 52.;
-            let sway = (self.phase * 3. + i as f32 * 1.7).sin() * 5.;
-            let height = 12. + (self.phase * 4. + i as f32).sin().abs() * 20.;
-            cx.painter.path(
-                &[
-                    Path::Move(Point::new(x, y)),
-                    Path::Curve(
-                        Point::new(x - 8., y - 10.),
-                        Point::new(x + sway, y - height),
-                        Point::new(x + sway + 2., y - height - 8.),
-                    ),
-                    Path::Curve(
-                        Point::new(x + 13., y - 10.),
-                        Point::new(x + 9., y),
-                        Point::new(x, y),
-                    ),
-                    Path::Close,
-                ],
-                Color::hex(0xf2924f).alpha(0.28).into(),
-                None,
-            );
-        }
-        if let Some(p) = &self.title {
-            cx.painter.paragraph(
-                p,
-                Point::new(12., 27.),
-                Brush::Linear {
-                    start: Point::new(0., 30.),
-                    end: Point::new(0., 90.),
-                    from: Color::hex(0xffe0aa),
-                    to: Color::hex(0xe97d42),
-                },
-            );
-        }
-        let paddle_w = (w * 0.23).clamp(45., 105.);
-        let x = (self.paddle * w - paddle_w / 2.).clamp(0., (w - paddle_w).max(0.));
-        cx.painter.rect(
-            Rect::new(x, h - 21., paddle_w, 7.),
-            3.5,
-            Color::hex(0xc4d9a9).into(),
-        );
-        cx.painter.rect(
-            Rect::new(self.ball.x * w - 5., self.ball.y * h + 24., 10., 10.),
-            5.,
-            Color::hex(0xf4b46e).into(),
-        );
-    }
-    fn semantics(&self) -> Semantics {
-        Semantics {
-            role: Role::Canvas,
-            label: "Paddle and fire canvas".into(),
-            ..Semantics::default()
-        }
-    }
-}
+const SECTIONS: [&str; 7] = [
+    "Overview", "Controls", "Text", "Lists", "Canvas", "Layout", "Theme",
+];
 
-struct Studio {
-    title: Child<Label>,
-    subtitle: Child<Label>,
+/// The window's contents: a title, a rail, the current page, and a status line.
+///
+/// Pages are hidden rather than removed, so an edit or a scroll position survives
+/// navigating away and back.
+struct Body {
+    wordmark: Child<Label>,
+    version: Child<Label>,
+    nav: Child<Tabs>,
+    rule: Child<Divider>,
     status: Child<Label>,
-    counters: Child<Panel<CounterPair>>,
-    editor: Child<Panel<Editor>>,
-    picker: Child<Panel<Picker>>,
-    game: Child<Panel<Playground>>,
-    footer: Child<Label>,
+    overview: Child<Scroll<Padding<overview::Overview>>>,
+    controls: Child<Scroll<Padding<controls::Controls>>>,
+    text: Child<Scroll<Padding<text_page::TextPage>>>,
+    lists: Child<Padding<lists::Lists>>,
+    canvas: Child<Scroll<Padding<canvas::Canvas>>>,
+    layout: Child<Scroll<Padding<layout_page::LayoutPage>>>,
+    theme: Child<Scroll<Padding<theme_page::ThemePage>>>,
+    section: usize,
 }
 enum Message {
-    Count(Count),
-    Edit(EditorOutput),
-    Pick(usize),
+    Navigate(usize),
+    Page(Event),
 }
 impl Data for Message {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
-                Self::Edit(v) => v.bytes(),
-                _ => 0,
+                Self::Page(e) => e.bytes(),
+                Self::Navigate(_) => 0,
             }
     }
 }
+/// The margin every page keeps from the window edge, in units of the theme's rhythm.
+const PAGE_INSET: f32 = 3.5;
+
+/// Wraps a page in the padding every page shares, inside a viewport.
+fn page<W: Widget>(content: Element<W>) -> Element<Scroll<Padding<W>>> {
+    Scroll::new(Padding::new(
+        content,
+        Insets::all(Scale::default().space(PAGE_INSET)),
+    ))
+}
+impl Body {
+    fn new() -> Element<Self> {
+        Element::build(|c| Self {
+            wordmark: c.add(text("Fire UI", TextRole::Title)),
+            version: c.add(muted("Studio · 0.5.0", TextRole::Micro)),
+            nav: c.connect(Tabs::vertical(SECTIONS), |v| Message::Navigate(*v)),
+            rule: c.add(Element::leaf(Divider)),
+            status: c.add(muted("Ready", TextRole::Small)),
+            overview: c.connect(page(overview::Overview::new()), |e| {
+                Message::Page(e.clone())
+            }),
+            controls: c.connect(page(controls::Controls::new()), |e| {
+                Message::Page(e.clone())
+            }),
+            text: c.connect(page(text_page::TextPage::new()), |e| {
+                Message::Page(e.clone())
+            }),
+            // The list owns its own viewport, so it is not put inside another one.
+            lists: c.connect(
+                Padding::new(
+                    lists::Lists::new(),
+                    Insets::all(Scale::default().space(PAGE_INSET)),
+                ),
+                |e| Message::Page(e.clone()),
+            ),
+            canvas: c.connect(page(canvas::Canvas::new()), |e| Message::Page(e.clone())),
+            layout: c.connect(page(layout_page::LayoutPage::new()), |e| {
+                Message::Page(e.clone())
+            }),
+            theme: c.connect(page(theme_page::ThemePage::new()), |e| {
+                Message::Page(e.clone())
+            }),
+            section: 0,
+        })
+    }
+    /// Shows exactly the page for `section`. Hidden pages keep their state.
+    fn reveal(&mut self, cx: &mut Update<'_, Self>) {
+        let n = self.section;
+        let _ = cx.show(self.overview, n == 0);
+        let _ = cx.show(self.controls, n == 1);
+        let _ = cx.show(self.text, n == 2);
+        let _ = cx.show(self.lists, n == 3);
+        let _ = cx.show(self.canvas, n == 4);
+        let _ = cx.show(self.layout, n == 5);
+        let _ = cx.show(self.theme, n == 6);
+        cx.relayout()
+    }
+    /// Shows a line in the status bar and reports it to the host.
+    fn report(&mut self, cx: &mut Update<'_, Self>, line: String) {
+        let _ = cx.send(self.status, line.clone());
+        let _ = cx.emit(Event::Status(line));
+    }
+    /// Lays out whichever page is showing into `region`.
+    fn place_page(&mut self, cx: &mut Layout<'_>, region: Rect) {
+        let c = Constraints::tight(region.size());
+        let at = Point::new(region.x, region.y);
+        match self.section {
+            0 => {
+                cx.measure(self.overview, c);
+                cx.place(self.overview, at)
+            }
+            1 => {
+                cx.measure(self.controls, c);
+                cx.place(self.controls, at)
+            }
+            2 => {
+                cx.measure(self.text, c);
+                cx.place(self.text, at)
+            }
+            3 => {
+                cx.measure(self.lists, c);
+                cx.place(self.lists, at)
+            }
+            4 => {
+                cx.measure(self.canvas, c);
+                cx.place(self.canvas, at)
+            }
+            5 => {
+                cx.measure(self.layout, c);
+                cx.place(self.layout, at)
+            }
+            _ => {
+                cx.measure(self.theme, c);
+                cx.place(self.theme, at)
+            }
+        }
+    }
+}
+impl Widget for Body {
+    type Command = Message;
+    type Output = Event;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            self.reveal(cx)
+        }
+    }
+    fn update(&mut self, cx: &mut Update<'_, Self>, message: Message) {
+        match message {
+            Message::Navigate(section) => {
+                if section != self.section {
+                    self.section = section;
+                    self.reveal(cx);
+                    self.report(cx, SECTIONS[section].to_string())
+                }
+            }
+            // The status line is shown here and also reported upwards, so a host —
+            // or a test driving the window — sees everything the studio says.
+            Message::Page(Event::Status(line)) => self.report(cx, line),
+            Message::Page(event) => {
+                let _ = cx.emit(event);
+            }
+        }
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let t = theme(cx);
+        let unit = t.scale.space(1.);
+        let pad = t.scale.space(2.);
+        // A rail while there is room for one; below that the nav sits on top and
+        // the page takes the full width.
+        let narrow = c.max.width < 720.;
+        let rail = if narrow { 0. } else { 208. };
+
+        let head = column_at(
+            cx,
+            Point::new(pad, pad),
+            Constraints::loose(Size::new((rail - pad).max(160.), f32::INFINITY)),
+            Flow::gap(unit * 0.25).align(Align::Start),
+            &[Entry::natural(self.wordmark), Entry::natural(self.version)],
+        );
+
+        let status_height = cx
+            .measure(self.status, Constraints::loose(c.max))
+            .size
+            .height;
+        let bar = status_height + unit * 2.;
+        let body_height = (c.max.height - bar).max(0.);
+
+        let nav_top = pad + head.size.height + unit * 2.;
+        let nav = cx.measure(
+            self.nav,
+            Constraints::loose(Size::new(
+                if narrow {
+                    c.max.width - 2. * pad
+                } else {
+                    rail - 2. * pad
+                },
+                f32::INFINITY,
+            )),
+        );
+        cx.place(self.nav, Point::new(pad, nav_top));
+
+        let page_top = if narrow {
+            nav_top + nav.size.height + unit
+        } else {
+            0.
+        };
+        self.place_page(
+            cx,
+            Rect::new(
+                rail,
+                page_top,
+                (c.max.width - rail).max(0.),
+                (body_height - page_top).max(0.),
+            ),
+        );
+
+        cx.measure(self.rule, Constraints::tight(Size::new(c.max.width, 1.)));
+        cx.place(self.rule, Point::new(0., body_height));
+        cx.measure(
+            self.status,
+            Constraints::loose(Size::new((c.max.width - 2. * pad).max(0.), status_height)),
+        );
+        cx.place(self.status, Point::new(pad, body_height + unit));
+        Metrics::new(c.max)
+    }
+    fn paint(&self, cx: &mut Paint<'_>) {
+        let t = painted_theme(cx);
+        // The rail sits on its own surface so the page reads as the working area.
+        cx.painter.rect(cx.bounds, 0., t.color.background.into());
+        if cx.bounds.width >= 720. {
+            cx.painter.rect(
+                Rect::new(cx.bounds.x, cx.bounds.y, 208., cx.bounds.height),
+                0.,
+                t.color.surface.into(),
+            );
+        }
+        // One ember line along the top edge: the whole accent budget of the shell.
+        cx.painter.rect(
+            Rect::new(cx.bounds.x, cx.bounds.y, cx.bounds.width, 2.),
+            0.,
+            accent_gradient(Rect::new(cx.bounds.x, cx.bounds.y, cx.bounds.width, 2.), &t),
+        )
+    }
+    fn semantics(&self) -> Semantics {
+        Semantics {
+            role: Role::Group,
+            label: "Fire UI Studio".into(),
+            ..Semantics::default()
+        }
+    }
+}
+
+/// The root. It owns the theme and hands it to everything below through the
+/// environment, which is the only reason a switch on one page can repaint the rest.
+struct Studio {
+    scope: Child<AppearanceScope<Body>>,
+}
 impl Studio {
     fn new() -> Element<Self> {
-        Element::build(|c| {
-            Self {
-        title: c.add(label("Fire UI", 40., Color::hex(0xf0eee4))),
-        subtitle: c.add(label("A small toolkit. Room to make it yours.", 15., Color::hex(0xa9b2a8))),
-        status: c.add(label("STUDIO  /  PROTOTYPE", 11., Color::hex(0xc4d9a9))),
-        counters: c.connect(Panel::new("Independent by design", "Two instances, each with its own state.", CounterPair::new()), |v| Message::Count(v.clone())),
-        editor: c.connect(Panel::new("A place to think", "Select, edit, undo. Your text stays yours.", Element::leaf(Editor::new("Good tools leave room for the person using them.\n\nTry a sentence. Move a paragraph. Start again.\n\nCafé · Привет · Καλημέρα"))), |v| Message::Edit(v.clone())),
-        picker: c.connect(Panel::new("A hundred thousand possibilities", "Search by number. Only visible rows are mounted.", Picker::new()), |v| Message::Pick(*v)),
-        game: c.add(Panel::new("Beyond the usual controls", "Move the paddle. Press play to bring it to life.", Playground::new())),
-        footer: c.add(label("Built with Fire UI  ·  Animations rest until you press play", 12., Color::hex(0x89988b))),
-    }
+        Element::build(|c| Studio {
+            scope: c.connect(AppearanceScope::new(Body::new(), Theme::dark()), |e| {
+                e.clone()
+            }),
         })
     }
 }
 impl Widget for Studio {
-    type Command = Message;
+    type Command = Event;
     type Output = String;
-    fn update(&mut self, cx: &mut Update<'_, Self>, message: Message) {
-        let status = match message {
-            Message::Count(Count::Left(n)) => format!("Left counter: {n}"),
-            Message::Count(Count::Right(n)) => format!("Right counter: {n}"),
-            Message::Pick(n) => format!("Selected material study {:05}", n + 1),
-            Message::Edit(EditorOutput::Changed { text, .. }) => {
-                format!("{} characters in your note", text.chars().count())
+    fn update(&mut self, cx: &mut Update<'_, Self>, event: Event) {
+        match event {
+            Event::Light(light) => {
+                let theme = if light { Theme::light() } else { Theme::dark() };
+                let _ = cx.send(self.scope, ScopeCommand::Theme(Box::new(theme)));
+                let _ = cx.emit(format!("theme: {}", if light { "light" } else { "dark" }));
             }
-            _ => return,
-        };
-        let _ = cx.send(self.footer, status.clone());
-        let _ = cx.emit(status);
+            Event::Status(line) => {
+                let _ = cx.emit(line);
+            }
+        }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let w = c.max.width;
-        let margin = if w < 700. { 20. } else { 36. };
-        let inner = (w - 2. * margin).max(0.);
-        place(cx, self.title, Rect::new(margin, 26., inner, 52.));
-        place(cx, self.subtitle, Rect::new(margin, 84., inner, 24.));
-        place(cx, self.status, Rect::new(margin, 121., inner, 18.));
-        let bottom = if w >= 850. {
-            let left = inner * 0.54 - 10.;
-            let right = inner - left - 20.;
-            let x = margin + left + 20.;
-            place(cx, self.editor, Rect::new(margin, 164., left, 315.));
-            place(cx, self.game, Rect::new(margin, 499., left, 280.));
-            place(cx, self.counters, Rect::new(x, 164., right, 235.));
-            place(cx, self.picker, Rect::new(x, 419., right, 360.));
-            799.
-        } else {
-            place(cx, self.editor, Rect::new(margin, 164., inner, 315.));
-            place(cx, self.counters, Rect::new(margin, 499., inner, 235.));
-            place(cx, self.game, Rect::new(margin, 754., inner, 280.));
-            place(cx, self.picker, Rect::new(margin, 1054., inner, 360.));
-            1434.
-        };
-        place(cx, self.footer, Rect::new(margin, bottom, inner, 24.));
-        Metrics::new(c.constrain(Size::new(w, bottom + 48.)))
-    }
-    fn paint(&self, cx: &mut Paint<'_>) {
-        cx.painter.rect(cx.bounds, 0., Color::hex(0x171c19).into());
-        cx.painter.rect(
-            Rect::new(0., 0., cx.bounds.width, 3.),
-            0.,
-            Color::hex(0xc4d9a9).into(),
-        );
+        let m = cx.measure(self.scope, c);
+        cx.place(self.scope, Point::default());
+        m
     }
 }
+
 fn main() -> Result<(), String> {
-    run_with(
-        AppearanceScope::new(
-            Scroll::new(Studio::new()),
-            std::rc::Rc::new(Theme::default()),
-        ),
-        WindowOptions {
+    fire_ui_native::run_with(
+        Studio::new(),
+        fire_ui_native::WindowOptions {
             title: "Fire UI Studio".into(),
             font: Some(
                 fire_ui_native::system_font().ok_or("Studio requires a font; set FIRE_UI_FONT")?,
             ),
             fallback_fonts: fallback_fonts(),
             partial_repaint: true,
-            size: Size::new(1140., 880.),
-            ..WindowOptions::default()
+            size: Size::new(1180., 860.),
+            ..fire_ui_native::WindowOptions::default()
         },
-        |output, _| println!("{output}"),
+        |status, _| println!("{status}"),
     )
 }
 
-// This application chooses multilingual coverage; the framework loads no defaults.
+/// This application chooses multilingual coverage; the framework loads no defaults.
 fn fallback_fonts() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "linux")]
     {

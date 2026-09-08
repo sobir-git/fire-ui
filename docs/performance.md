@@ -2,7 +2,7 @@
 
 Measured on 2026-09-08 with release optimization, Xvfb and Mesa software rendering.
 [Raw results](benchmarks/native.json) include the final executable's SHA-256 and the
-pre-change reference run. These are local process measurements, not hardware-GPU
+earlier reference runs, including 0.4.0's under `v0_4_0_reference`. These are local process measurements, not hardware-GPU
 power measurements or physical-display latency.
 
 ```sh
@@ -50,18 +50,28 @@ pre-change reference was the existing release binary; its source commit and hash
 were not recorded. Comparisons are indicative, not a controlled benchmark between
 pinned source revisions. Other work on the machine can affect timings.
 
-| State | Pre-change CPU | Current CPU | Current RSS |
+| State | 0.4.0 CPU | 0.5.0 CPU | 0.5.0 RSS |
 | --- | ---: | ---: | ---: |
-| idle | 0.0% | 0.0% | 159.7 MiB |
-| focused caret | 7.5% | 4.0% | 160.0 MiB |
-| animation | 196.0% | 118.0% | 157.2 MiB |
-| paused again | 0.0% | 0.0% | 157.2 MiB |
+| idle | 0.0% | 0.0% | 158.9 MiB |
+| controls page | — | 0.0% | 159.3 MiB |
+| focused caret | 4.0% | 5.7% | 161.6 MiB |
+| animation | 118.0% | 181.7% | 159.0 MiB |
+| paused again | 0.0% | 0.0% | 159.0 MiB |
+| light palette | — | 0.0% | 159.0 MiB |
 
-Animation CPU was 196.0% in the old reference and 118.0% in this run. This comparison
-includes the earlier partial-repaint changes and is not an isolated accessibility
-benchmark. Studio explicitly loads installed CJK/emoji font fallbacks for its multilingual
-exercises. The previous Linux build recorded 168.4 MiB idle RSS and an 8.14 MiB
-executable; this build records 159.7 MiB and 6.53 MiB. Both hashes are recorded in
+Idle, paused and freshly-navigated states all record zero CPU ticks, including
+immediately after a palette swap. Seven pages are mounted at once — navigation hides
+rather than removes them — and idle RSS is unchanged against 0.4.0's 159.7 MiB. A run competing with a
+concurrent build measured 282.8% for the same animation, so these figures come from
+one quiet run rather than an average.
+
+Animation CPU rose from 118.0% to 181.7%, and that is a larger canvas rather than a
+slower one: the studio's canvas now damages 280,600 pixels per frame against 93,279
+in 0.4.0. Three times the area for 1.54 times the CPU means per-pixel cost fell; the
+absolute cost of this demo rose because the demo grew. Studio explicitly loads
+installed CJK/emoji font fallbacks for its multilingual exercises. The 0.4.0 build
+recorded a 6.53 MiB executable; this build records 6.75 MiB, holding seven pages and
+every shipped control. Both hashes are recorded in
 the raw results. Framework defaults load no fonts; applications supply all font paths.
 Shared driver pages and other machine activity can affect RSS comparisons. The retained color image
 and stencil buffer cost about five bytes per window pixel, plus driver overhead;
@@ -71,7 +81,7 @@ thread and recorded no idle CPU ticks in the separate Fire Notes probe.
 With `partial_repaint: true`, the host repaints damaged regions into a retained image. OpenGL 3+ presents it with
 a framebuffer blit; older contexts use a texture draw and have not been benchmarked
 here. Geometry changes still repaint the full window. The studio animation damages
-about 93,000 pixels of its roughly 1,000,000-pixel window. Fire Notes' decoration
+about 281,000 pixels of its roughly 1,000,000-pixel window. Fire Notes' decoration
 bounds allow small fire frames to invalidate fewer than 1,000 pixels. These are
 paint regions, not a claim that presentation copies only that region.
 
@@ -79,8 +89,8 @@ paint regions, not a claim that presentation copies only that region.
 
 | Measurement | Pre-change median | Current median | Current p95 |
 | --- | ---: | ---: | ---: |
-| Resize event received to completed swap | 18.05 ms | 7.30 ms | 10.35 ms |
-| Injected pointer command to observed paddle pixels | 37.44 ms | 9.68 ms | 19.65 ms |
+| Resize event received to completed swap | 18.05 ms | 7.89 ms | 11.53 ms |
+| Injected pointer command to observed paddle pixels | 37.44 ms | 13.57 ms | 18.40 ms |
 
 Resize uses 63 rendered samples in the current run. Pointer measurements use 20
 moves and include xdotool and screenshot overhead. Swap completion is not compositor
@@ -88,13 +98,17 @@ presentation. The paddle follows the latest pointer position directly.
 
 ## Verification and limits
 
-The native probe passed independent counters, typing/caret movement, list search and
-selection, animation/pause, pointer response, scrolling and wide/narrow resizing.
+The native probe passed section navigation, every button style, refusal of a disabled
+control, checkbox and switch state, slider movement by pointer, arrow keys and
+assistive `set_value` (with a non-numeric value rejected), a dropdown whose list opens
+below its field and outside the scrolling panel that holds it, typing and caret
+movement, list search and selection, animation/pause, pointer response, a live layout
+rule change, a palette swap, scrolling and wide/narrow resizing.
 It reads Unicode through AT-SPI, moves the native caret, exercises all six EditableText
 methods and verifies undo and invalid-range rejection. A clipboard owner that ignores
 requests leaves the UI responsive and cannot cause a late paste. The UI answered
-an inspector edit in 4.6 ms while the native paste was waiting. The counter also
-responds to an AT-SPI activation action.
+an inspector edit in 4.6 ms while the native paste was waiting. A button also
+responds to an AT-SPI activation action, on the page that owns it.
 
 The separate `linux_input_probe.py` runs installed IBus 1.5.29-rc2 with Cangjie5 through
 XIM and Orca 46.1 on a private desktop. It verifies composition, candidate commit,

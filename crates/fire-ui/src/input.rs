@@ -93,7 +93,10 @@ impl Input {
 pub enum Lifecycle {
     Mount,
     Resized,
-    Moved { x: i32, y: i32 },
+    Moved {
+        x: i32,
+        y: i32,
+    },
     Unmount,
     Visibility(bool),
     Focus(bool),
@@ -101,6 +104,11 @@ pub enum Lifecycle {
     CancelKeys,
     Hover(bool),
     Anchor(bool),
+    /// An inherited environment value changed, and this widget publishes its own
+    /// to at least one child. Anything derived from the ambient value — a theme
+    /// adjusted for a filled button's label, say — has to be published again, or
+    /// that child keeps the value it was given when it was first set.
+    Inherited,
 }
 
 /// Native pointer shape, inherited from the nearest widget that supplies one.

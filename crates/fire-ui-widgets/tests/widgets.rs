@@ -82,10 +82,8 @@ fn paragraph_is_shared_across_paint_only_theme_and_height_resize() {
     ui.resize(Size::new(300., 200.));
     settle(&mut ui, &mut text);
     assert!(Arc::ptr_eq(&original, ui.root().paragraph().unwrap()));
-    let theme = Theme {
-        foreground: Color::hex(0xff0000),
-        ..Theme::default()
-    };
+    let mut theme = Theme::default();
+    theme.color.foreground = Color::hex(0xff0000);
     ui.set_environment(Rc::new(theme), false);
     settle(&mut ui, &mut text);
     assert!(Arc::ptr_eq(&original, ui.root().paragraph().unwrap()));
@@ -915,4 +913,532 @@ fn clipboard_requires_host_opt_in_before_cut_can_mutate_text() {
     ui.send(Edit::Undo).unwrap();
     settle(&mut ui, &mut TestText);
     assert_eq!(ui.root().text(), "aé🔥z");
+}
+
+fn click<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
+    for down in [true, false] {
+        ui.dispatch(
+            Input::Button {
+                pointer: 0,
+                button: 1,
+                down,
+                position: at,
+            },
+            text,
+        );
+    }
+}
+
+#[test]
+fn tabs_report_the_tab_that_was_clicked() {
+    let mut ui = Ui::new(
+        Tabs::new(["One", "Two", "Three"]),
+        Size::new(400., 60.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let bounds: Vec<Rect> = ui
+        .semantics()
+        .into_iter()
+        .filter(|n| n.semantics.role == Role::Tab)
+        .map(|n| n.bounds)
+        .collect();
+    assert_eq!(bounds.len(), 3, "three tabs are published");
+    let target = bounds[2];
+    let mut chosen = vec![];
+    click(
+        &mut ui,
+        &mut text,
+        Point::new(target.x + target.width / 2., target.y + target.height / 2.),
+    );
+    ui.pump(100, |o| chosen.push(o), |_| {});
+    assert_eq!(chosen, vec![2], "clicking the third tab selects it");
+}
+
+fn point<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: at,
+        },
+        text,
+    );
+}
+fn center(r: Rect) -> Point {
+    Point::new(r.x + r.width / 2., r.y + r.height / 2.)
+}
+fn node<W: Widget>(ui: &Ui<W>, role: Role, label: &str) -> Option<SemanticNode> {
+    ui.semantics()
+        .into_iter()
+        .find(|n| n.semantics.role == role && n.semantics.label == label)
+}
+
+#[test]
+fn dropdown_opens_a_list_below_itself_and_reports_the_chosen_option() {
+    let mut ui = Ui::new(
+        Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]),
+        Size::new(320., 400.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let field = node(&ui, Role::Menu, "Palette").expect("the field publishes itself");
+    assert_eq!(field.semantics.value.as_deref(), Some("Ember"));
+    assert!(
+        node(&ui, Role::MenuItem, "Paper").is_none(),
+        "closed to begin with"
+    );
+
+    click(&mut ui, &mut text, center(field.bounds));
+    settle(&mut ui, &mut text);
+    let row = node(&ui, Role::MenuItem, "Paper").expect("the list opened");
+    assert!(
+        row.bounds.y > field.bounds.y,
+        "the list opens below its field, not at the window origin: {:?}",
+        row.bounds
+    );
+
+    point(&mut ui, &mut text, center(row.bounds));
+    click(&mut ui, &mut text, center(row.bounds));
+    let mut chosen = vec![];
+    ui.pump(100, |o| chosen.push(o), |_| {});
+    assert_eq!(chosen, vec![2], "the chosen index is reported");
+    settle(&mut ui, &mut text);
+    assert!(
+        node(&ui, Role::MenuItem, "Paper").is_none(),
+        "the list closed"
+    );
+    assert_eq!(
+        node(&ui, Role::Menu, "Palette")
+            .unwrap()
+            .semantics
+            .value
+            .as_deref(),
+        Some("Paper"),
+    );
+}
+
+#[test]
+fn a_dropdown_inside_a_scrolling_panel_still_opens_over_it() {
+    // The studio's shape: the field is deep inside a clipping viewport, so the list
+    // is only usable if it escapes that clip as a window overlay.
+    let mut ui = Ui::new(
+        Scroll::new(Padding::new(
+            Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]),
+            Insets::all(28.),
+        )),
+        Size::new(420., 300.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let field = node(&ui, Role::Menu, "Palette").expect("the field publishes itself");
+    click(&mut ui, &mut text, center(field.bounds));
+    settle(&mut ui, &mut text);
+    let row = node(&ui, Role::MenuItem, "Paper").expect("the list opened");
+    assert!(
+        row.bounds.height > 0. && row.bounds.width > 0.,
+        "the list was clipped away by the panel: {:?}",
+        row.bounds
+    );
+    assert!(
+        row.bounds.y > field.bounds.y,
+        "the list opens below its field: {:?} vs {:?}",
+        row.bounds,
+        field.bounds
+    );
+    point(&mut ui, &mut text, center(row.bounds));
+    click(&mut ui, &mut text, center(row.bounds));
+    let mut chosen = vec![];
+    ui.pump(100, |o| chosen.push(o), |_| {});
+    assert_eq!(chosen, vec![2], "the chosen index reaches the owner");
+}
+
+#[derive(Default)]
+struct Recorder {
+    /// Solid colours text was drawn in.
+    fills: Vec<Color>,
+    /// Every filled rectangle, with the brush it was filled by.
+    rects: Vec<(Rect, Brush)>,
+    /// Every stroked rectangle and its colour.
+    strokes: Vec<(Rect, Color)>,
+}
+impl Painter for Recorder {
+    fn save(&mut self) {}
+    fn restore(&mut self) {}
+    fn transform(&mut self, _: Transform) {}
+    fn clip(&mut self, _: Rect) {}
+    fn rect(&mut self, rect: Rect, _: f32, brush: Brush) {
+        self.rects.push((rect, brush))
+    }
+    fn stroke(&mut self, rect: Rect, _: f32, _: f32, color: Color) {
+        self.strokes.push((rect, color))
+    }
+    fn path(&mut self, _: &[Path], _: Brush, _: Option<f32>) {}
+    fn paragraph(&mut self, _: &Paragraph, _: Point, brush: Brush) {
+        if let Brush::Solid(c) = brush {
+            self.fills.push(c)
+        }
+    }
+}
+
+#[test]
+fn swapping_the_theme_reaches_content_a_control_styles_for_itself() {
+    // A filled button publishes a derived theme to its label so the text resolves
+    // to `on_accent`. That override must not freeze the label on the old palette.
+    let mut ui = Ui::new(
+        Button::styled(
+            Element::leaf(Label::new("Save")),
+            "Save",
+            ButtonStyle::Primary,
+        ),
+        Size::new(200., 80.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+    let mut painter = Recorder::default();
+    ui.paint(&mut painter);
+    assert_eq!(
+        painter.fills,
+        vec![Theme::dark().color.on_accent],
+        "the label draws in the dark palette's on-accent colour"
+    );
+
+    ui.set_environment(Rc::new(Theme::light()), true);
+    settle(&mut ui, &mut text);
+    let mut painter = Recorder::default();
+    ui.paint(&mut painter);
+    assert_eq!(
+        painter.fills,
+        vec![Theme::light().color.on_accent],
+        "swapping the palette re-derives the colour the button gave its label"
+    );
+}
+
+#[test]
+fn a_focus_ring_is_a_ring_and_does_not_wash_the_control_it_marks() {
+    // `glow` fills its interior as well as its edge. Drawing one after a control
+    // has painted itself tints the whole control, which is what a focused dropdown
+    // used to look like.
+    let mut ui = Ui::new(
+        Dropdown::new("Palette", ["Ember", "Charcoal"]),
+        Size::new(320., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+
+    let field = node(&ui, Role::Menu, "Palette").expect("the field publishes itself");
+    let mut before = Recorder::default();
+    ui.paint(&mut before);
+    key(&mut ui, &mut text, Key::Tab);
+    settle(&mut ui, &mut text);
+    assert!(
+        node(&ui, Role::Menu, "Palette").unwrap().focused,
+        "tab moved focus to the field"
+    );
+    let mut after = Recorder::default();
+    ui.paint(&mut after);
+
+    let focus = Theme::dark().color.focus;
+    assert!(
+        after.strokes.iter().any(|(_, c)| *c == focus),
+        "focus is marked by a stroked ring"
+    );
+    let washed = |r: &Recorder| {
+        r.rects.iter().any(|(rect, brush)| {
+            rect.width >= field.bounds.width
+                && matches!(brush, Brush::Box { from, .. } if from.0 == focus.0 && from.1 == focus.1)
+        })
+    };
+    assert!(
+        !washed(&before),
+        "nothing washes the field before it is focused"
+    );
+    assert!(
+        !washed(&after),
+        "focusing must not fill the field with the focus colour"
+    );
+}
+
+/// A heading, a caption and a panel: the shape of every studio section.
+struct Section {
+    #[allow(dead_code)]
+    heading: Child<Label>,
+    caption: Child<Label>,
+    panel: Child<Surface<Greedy>>,
+}
+
+/// Takes every pixel it is offered, like the editor does.
+struct Greedy;
+impl Widget for Greedy {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, _: &mut Layout<'_>, c: Constraints) -> Metrics {
+        Metrics::new(c.constrain(c.max))
+    }
+}
+impl Section {
+    fn new() -> Element<Self> {
+        Element::build(|c| Self {
+            heading: c.add(Element::leaf(Label::styled("Editing", TextRole::Heading))),
+            caption: c.add(Element::leaf(Label::styled(
+                "A supporting line",
+                TextRole::Small,
+            ))),
+            // An editor fills the height it is offered, which is what turns a
+            // measurement against the wrong extent into a visible overflow.
+            panel: c.discard(surface(SurfaceStyle::Sunken).wrap(Element::leaf(Greedy))),
+        })
+    }
+}
+impl Widget for Section {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        column(
+            cx,
+            c,
+            Flow::gap(8.).align(Align::Stretch),
+            &[
+                Entry::natural(self.heading),
+                Entry::natural(self.caption),
+                Entry::natural(self.panel).aligned(Align::Stretch),
+            ],
+        )
+    }
+}
+
+#[test]
+fn a_column_never_measures_a_child_past_the_room_that_is_left() {
+    // The panel must fit under the heading and caption. Measuring every natural
+    // child against the full height instead of the remainder pushed the panel out
+    // of the bottom, where an ancestor clipped its border away.
+    let height = 160.;
+    let mut ui = Ui::new(Section::new(), Size::new(400., height), Limits::default()).unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    // Published semantic bounds are already intersected with the clip, so an
+    // overflow is invisible there. The unclipped geometry is what shows it.
+    let panel = ui.root().panel;
+    let bounds = ui.geometry(panel).expect("the panel is placed").bounds;
+    assert!(
+        bounds.y + bounds.height <= height + 0.5,
+        "the panel overflows the column and its bottom edge is clipped away: \
+         {bounds:?} in a column {height} tall"
+    );
+    assert!(bounds.height > 0., "and it is still given real room");
+}
+
+#[test]
+fn a_scrollbar_takes_its_own_strip_and_the_content_below_it_does_not_claim_the_pointer() {
+    // The editor asks for a text caret. If the bar floats over it, the pointer
+    // resolves through the editor and shows a caret above the scrollbar.
+    let mut ui = Ui::new(
+        Scroll::new(Element::leaf(Editor::new(
+            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
+        ))),
+        Size::new(240., 90.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+
+    let bar = Scrollbar::width(&Theme::dark());
+    let over_text = Point::new(20., 40.);
+    let over_bar = Point::new(240. - bar / 2., 40.);
+    point(&mut ui, &mut text, over_text);
+    assert_eq!(
+        ui.cursor(over_text),
+        CursorIcon::Text,
+        "text asks for a caret"
+    );
+    point(&mut ui, &mut text, over_bar);
+    assert_eq!(
+        ui.cursor(over_bar),
+        CursorIcon::Arrow,
+        "the scrollbar strip is not part of the content"
+    );
+}
+
+#[test]
+fn a_list_scrollbar_can_be_dragged() {
+    let mut ui = Ui::new(
+        Element::leaf(VirtualList::new(
+            (0..500usize).collect(),
+            24.,
+            |key: &usize| Element::leaf(Label::new(key.to_string())),
+        )),
+        Size::new(300., 240.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().offset(), 0., "starts at the top");
+
+    // Take hold of the thumb and drag it most of the way down the track.
+    let bar = Scrollbar::width(&Theme::dark());
+    let x = 300. - bar / 2.;
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(x, 20.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(x, 200.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    let dragged = ui.root().offset();
+    assert!(
+        dragged > 0.,
+        "dragging the thumb scrolls the list, but the offset stayed at {dragged}"
+    );
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: false,
+            position: Point::new(x, 200.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().offset(), dragged, "releasing keeps the position");
+}
+
+#[test]
+fn an_editors_own_scrollbar_matches_the_others_and_is_not_part_of_the_text() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new(
+            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
+        )),
+        Size::new(240., 90.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+
+    let bar = Scrollbar::width(&Theme::dark());
+    let over_text = Point::new(20., 40.);
+    let over_bar = Point::new(240. - bar / 2., 40.);
+    point(&mut ui, &mut text, over_text);
+    assert_eq!(ui.cursor(over_text), CursorIcon::Text);
+    point(&mut ui, &mut text, over_bar);
+    assert_eq!(
+        ui.cursor(over_bar),
+        CursorIcon::Arrow,
+        "the editor's own scrollbar is not text"
+    );
+}
+
+#[test]
+fn a_list_scrollbar_is_not_a_row_and_answers_the_pointer() {
+    let mut ui = Ui::new(
+        Element::leaf(VirtualList::new(
+            (0..500usize).collect(),
+            24.,
+            |key: &usize| Element::leaf(Label::new(key.to_string())),
+        )),
+        Size::new(300., 240.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+
+    let bar = Scrollbar::width(&Theme::dark());
+    let over_rows = Point::new(40., 100.);
+    let over_bar = Point::new(300. - bar / 2., 100.);
+    point(&mut ui, &mut text, over_rows);
+    assert_eq!(
+        ui.cursor(over_rows),
+        CursorIcon::Pointer,
+        "rows are choices, so the pointer is a hand"
+    );
+    point(&mut ui, &mut text, over_bar);
+    assert_eq!(
+        ui.cursor(over_bar),
+        CursorIcon::Arrow,
+        "the scrollbar is not a row"
+    );
+
+    // Hovering the bar has to change how it draws, or there is no feedback at all.
+    let paint = |ui: &mut Ui<VirtualList<usize, Label, _>>| {
+        let mut r = Recorder::default();
+        ui.paint(&mut r);
+        r.rects
+            .into_iter()
+            .map(|(rect, _)| rect)
+            .collect::<Vec<_>>()
+    };
+    point(&mut ui, &mut text, over_rows);
+    settle(&mut ui, &mut text);
+    let resting = paint(&mut ui);
+    point(&mut ui, &mut text, over_bar);
+    settle(&mut ui, &mut text);
+    let hovered = paint(&mut ui);
+    assert_ne!(
+        resting, hovered,
+        "the scrollbar looks the same hovered as at rest"
+    );
+}
+
+#[test]
+fn moving_the_pointer_over_an_editor_does_not_drag_the_view_back_to_the_caret() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new(
+            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
+        )),
+        Size::new(240., 90.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+
+    // Scroll away from the caret, which is at the very start.
+    ui.dispatch(
+        Input::Scroll {
+            position: Point::new(40., 40.),
+            delta: Point::new(0., -60.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    let scrolled = ui.root().scroll_offset();
+    assert!(scrolled > 0., "the wheel scrolled the editor");
+
+    point(&mut ui, &mut text, Point::new(60., 50.));
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().scroll_offset(),
+        scrolled,
+        "moving the pointer must not scroll the view back to the caret"
+    );
 }

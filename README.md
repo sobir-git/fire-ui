@@ -5,12 +5,12 @@ higher-level composition. Use it for native desktop tools, animated text and
 interactive canvases. Widgets retain their state; explicit invalidation and frame
 requests let the event loop sleep when idle.
 
-**Version 0.4.0 · Rust 1.88+ · MIT · experimental**
+**Version 0.5.0 · Rust 1.88+ · MIT · experimental**
 
 | Crate | Responsibility |
 | --- | --- |
 | `fire-ui` | Typed widget ownership, layout, input, scheduling, text and painting contracts. No dependencies. |
-| `fire-ui-widgets` | Controls, themes, editor, scrolling, menus and virtual lists. |
+| `fire-ui-widgets` | Controls, design tokens, layout policies, editor, scrolling, menus and virtual lists. |
 | `fire-ui-native` | Desktop windows, OpenGL rendering, font shaping, clipboard, IME and accessibility. |
 
 The layers are separate dependencies. You can use the core with your own host,
@@ -19,14 +19,14 @@ application state or prescribed visual theme is required.
 
 ## Start an app
 
-Use the `v0.4.0` GitHub prerelease directly. The three crate archives are attached
+Use the `v0.5.0` GitHub prerelease directly. The three crate archives are attached
 to the release; these crates have not been published to crates.io.
 
 ```toml
 [dependencies]
-fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
-fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
-fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.4.0" }
+fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.5.0" }
+fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.5.0" }
+fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.5.0" }
 ```
 
 ```rust,no_run
@@ -53,8 +53,11 @@ cargo run --release -p fire-ui-native --example hello
 cargo run --release -p fire-ui-studio
 ```
 
-The studio includes independent counters, an editor, a searchable 100,000-item
-virtual list, animated text and a pointer-controlled paddle. It uses public APIs.
+The studio is a navigable gallery of everything the framework ships: controls,
+text editing, a searchable 100,000-row virtual list, a custom animated canvas, a
+live layout playground and the design tokens themselves, with a light/dark switch.
+It uses public APIs only — no literal colour, font size or panel coordinate appears
+anywhere in it.
 
 The native host defaults to X11 rendering. Accessibility, agent inspection, clipboard,
 dialogs and bitmap-font decoding are independent Cargo features. Font coverage and

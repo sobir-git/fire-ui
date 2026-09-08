@@ -2,16 +2,25 @@
 
 ## No backward compatibility
 
+**This is the first rule and it overrides every other consideration below.**
+
 This project is in design and prototype development. There is **no backward
 compatibility requirement at all**. Break, replace, rename, or remove prototype
 APIs, widgets, formats, crate boundaries, and examples when the better design
-requires it.
+requires it. Never ask whether a change is "too breaking"; ask only whether the
+new design is better.
 
 Do not add compatibility shims, deprecated aliases, parallel old/new APIs, or
 migration machinery to preserve an earlier prototype. Update consumers directly.
 Keeping an existing demo running is not a constraint on architecture decisions.
-Remove superseded frameworks from the working tree. Git history is their archive;
-do not keep legacy directories, parallel implementations, or executable design skeletons.
+
+**Delete superseded work outright.** When something is replaced, the old version
+leaves the working tree in the same change — the widget, its tests, its probe
+steps, its documentation and its screenshots. Do not leave a superseded studio,
+example, helper, or verification script behind "in case it is useful". Git
+history is the archive. A tree containing both the old and the new shape of the
+same thing is a defect, not a safety net.
+
 Previous implementations are evidence to examine in Git history, not contracts
 that future work must preserve. Preserve product requirements and useful behavioral
 counterexamples, not historical implementation choices.

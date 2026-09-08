@@ -29,8 +29,11 @@ let swatch = Element::leaf(Swatch(Color::hex(0xff8a36)));
 
 A persistent `Widget` owns its state. `Element::build` installs typed children;
 `Child<W>` identifies a child owned by that widget. Child outputs map to parent
-commands. Use `Update` for state changes, `Layout` for measuring and placing
-children, and `Paint` for drawing. The host sleeps unless input, queued work, a
+commands with `connect`, or pass straight through with `bubble`, which is what
+makes a decorator transparent in both directions. Use `Update` for state changes,
+`Layout` for measuring and placing children, and `Paint` for drawing. Overlays —
+menus, popovers — are inserted already anchored to the window or a sibling, and
+escape ancestor clipping. The host sleeps unless input, queued work, a
 deadline or an explicit frame request needs attention.
 
 Custom hosts implement `Painter` and `TextEngine` and drive `Ui`. Clipboard requests
@@ -40,6 +43,6 @@ return `Error::Unsupported` before widgets mutate a cut selection.
 Use `fire-ui-widgets` for optional composition helpers and `fire-ui-native` for
 native desktop hosting. No app storage or app-specific theme lives in this crate.
 
-See the [architecture](https://github.com/sobir-git/fire-ui/blob/v0.4.0/docs/architecture.md)
-and [studio](https://github.com/sobir-git/fire-ui/tree/v0.4.0/examples/studio).
+See the [architecture](https://github.com/sobir-git/fire-ui/blob/v0.5.0/docs/architecture.md)
+and [studio](https://github.com/sobir-git/fire-ui/tree/v0.5.0/examples/studio).
 Experimental 0.x API; MIT licensed.
