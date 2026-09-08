@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Add passive, click-through native overlays and configurable minimum window size.
+- Linux overlays require X11/XWayland; native Wayland overlay placement is not supported.
+
 ## 0.1.0
 
 Initial standalone, MIT-licensed release: widget core, optional controls/editor,

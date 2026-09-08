@@ -30,6 +30,9 @@ use winit::{
 pub struct WindowOptions {
     pub title: String,
     pub decorations: bool,
+    /// Passive, click-through window above normal windows. On Linux this requires X11/XWayland.
+    pub overlay: bool,
+    pub min_size: Size,
     pub position: Option<(i32, i32)>,
     pub font: Option<std::path::PathBuf>,
     pub size: Size,
@@ -41,6 +44,8 @@ impl Default for WindowOptions {
         Self {
             title: "Fire UI".into(),
             decorations: true,
+            overlay: false,
+            min_size: Size::new(420., 360.),
             position: None,
             font: None,
             size: Size::new(1100., 780.),
@@ -698,10 +703,28 @@ fn create<W: Widget>(
 ) -> Result<State<W>, String> {
     let attrs = Window::default_attributes()
         .with_visible(false)
-        .with_decorations(options.decorations)
+        .with_decorations(options.decorations && !options.overlay)
+        .with_active(!options.overlay)
+        .with_window_level(if options.overlay {
+            winit::window::WindowLevel::AlwaysOnTop
+        } else {
+            winit::window::WindowLevel::Normal
+        })
         .with_title(&options.title)
         .with_inner_size(LogicalSize::new(options.size.width, options.size.height))
-        .with_min_inner_size(LogicalSize::new(420., 360.));
+        .with_min_inner_size(LogicalSize::new(
+            options.min_size.width,
+            options.min_size.height,
+        ));
+    #[cfg(target_os = "linux")]
+    let attrs = if options.overlay {
+        use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+        attrs
+            .with_override_redirect(true)
+            .with_x11_window_type(vec![WindowType::Notification])
+    } else {
+        attrs
+    };
     let attrs = if let Some((x, y)) = options.position {
         attrs.with_position(winit::dpi::PhysicalPosition::new(x, y))
     } else {
@@ -723,6 +746,17 @@ fn create<W: Widget>(
         .map_err(|e| e.to_string())?;
     let window = window.ok_or("Window creation failed")?;
     let accessibility = accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
+    if options.overlay {
+        if matches!(
+            window.window_handle().map_err(|e| e.to_string())?.as_raw(),
+            raw_window_handle::RawWindowHandle::Wayland(_)
+        ) {
+            return Err("Passive overlays require X11/XWayland on Linux".into());
+        }
+        window
+            .set_cursor_hittest(false)
+            .map_err(|e| e.to_string())?;
+    }
     window.set_visible(true);
     let display = config.display();
     let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();

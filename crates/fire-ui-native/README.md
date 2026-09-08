@@ -20,3 +20,8 @@ accessibility, bidi editing and platform IME coverage remain incomplete.
 
 See the [quick start](https://github.com/sobir-git/fire-ui#start-an-app).
 Experimental 0.x API; MIT licensed.
+
+`WindowOptions::overlay` creates a passive, click-through window above normal
+windows. Set `min_size` for small indicators. Linux overlays require X11/XWayland;
+native Wayland does not provide this overlay behavior. macOS and Windows overlay
+interaction has not been verified.

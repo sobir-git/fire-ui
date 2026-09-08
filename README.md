@@ -5,7 +5,7 @@ higher-level composition. Use it for native desktop tools, animated text and
 interactive canvases. Widgets retain their state; explicit invalidation and frame
 requests let the event loop sleep when idle.
 
-**Version 0.1.0 · Rust 1.88+ · MIT · experimental**
+**Version 0.2.0 · Rust 1.88+ · MIT · experimental**
 
 | Crate | Responsibility |
 | --- | --- |
@@ -24,9 +24,9 @@ but have not been published there yet.
 
 ```toml
 [dependencies]
-fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.1.0" }
-fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.1.0" }
-fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.1.0" }
+fire-ui = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
+fire-ui-widgets = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
+fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.2.0" }
 ```
 
 ```rust,no_run

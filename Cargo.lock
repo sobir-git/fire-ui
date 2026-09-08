@@ -780,11 +780,11 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "fire-ui"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "fire-ui-native"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "fire-ui-studio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fire-ui",
  "fire-ui-native",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "fire-ui-widgets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fire-ui",
  "unicode-segmentation",
