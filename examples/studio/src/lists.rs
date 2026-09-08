@@ -59,7 +59,10 @@ impl Lists {
                     .inset(6.)
                     .wrap(Element::leaf(Rows::new(
                         (0..TOTAL).collect(),
-                        32.,
+                        // A virtual list needs one fixed row height up front, so this
+                        // is the rhythm of the theme the studio starts in; it does not
+                        // follow a later theme change.
+                        Scale::default().space(4.),
                         row_for as fn(&usize) -> Element<Row>,
                     ))),
                 |v| Signal::Row(v.clone()),

@@ -87,6 +87,29 @@ impl Palette {
             success: Color::hex(0x4c7a2c),
         }
     }
+    /// Cool graphite with a signal-blue accent, for instrument panels and dense
+    /// read-outs where the accent marks live values rather than brand.
+    pub fn slate_dark() -> Self {
+        Self {
+            background: Color::hex(0x0f1214),
+            surface: Color::hex(0x171b1f),
+            raised: Color::hex(0x212830),
+            sunken: Color::hex(0x0b0e10),
+            border: Color::hex(0x272f38),
+            border_strong: Color::hex(0x3d4854),
+            foreground: Color::hex(0xe6edf3),
+            muted: Color::hex(0x8b98a5),
+            faint: Color::hex(0x5a6672),
+            accent: Color::hex(0x4bb3fd),
+            accent_light: Color::hex(0x7fcbff),
+            accent_hover: Color::hex(0x6bc2ff),
+            on_accent: Color::hex(0x06121c),
+            focus: Color::hex(0x7fcbff),
+            selection: Color::hex(0x4bb3fd).alpha(0.22),
+            danger: Color::hex(0xf0616d),
+            success: Color::hex(0x5ec98a),
+        }
+    }
 }
 
 /// Sizes and rhythm. Every length a widget draws derives from these.
@@ -115,6 +138,26 @@ impl Scale {
     /// `steps` units of the spacing rhythm.
     pub fn space(&self, steps: f32) -> f32 {
         self.unit * steps
+    }
+}
+impl Scale {
+    /// The roomy default: comfortable reading, generous panels.
+    pub fn spacious() -> Self {
+        Self::default()
+    }
+    /// Dense metrics for control panels: more instruments per screen, smaller
+    /// type, tighter padding and squarer corners. Pairs with any palette.
+    pub fn compact() -> Self {
+        Self {
+            font_size: 12.5,
+            unit: 5.,
+            inset: 7.,
+            radius: 5.,
+            panel_radius: 8.,
+            border: 1.,
+            control: 26.,
+            halo: 2.,
+        }
     }
 }
 impl Default for Scale {
@@ -183,6 +226,17 @@ impl Theme {
         Self {
             color: Palette::ember_light(),
             scale: Scale::default(),
+        }
+    }
+    /// A dense instrument panel: the slate palette on the compact scale.
+    ///
+    /// Palette and scale are independent, so any pairing works —
+    /// `Theme { color: Palette::ember_dark(), scale: Scale::compact() }` is a
+    /// compact ember panel, and nothing in the framework prefers a shipped pair.
+    pub fn compact() -> Self {
+        Self {
+            color: Palette::slate_dark(),
+            scale: Scale::compact(),
         }
     }
     /// Resolved size for a type-scale role.

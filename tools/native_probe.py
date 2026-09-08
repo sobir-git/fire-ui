@@ -534,14 +534,30 @@ sys.stdin.read()
 
                     navigate("Theme")
                     shot("studio-theme-dark.png")
-                    tap(find(role="Switch", label="Light"))
-                    expect_log("theme: light")
+                    tap(find(role="Tab", label="Ember light"))
+                    expect_log("theme: Ember light")
                     time.sleep(0.4)
                     shot("studio-theme-light.png")
                     sample("light_theme")
-                    tap(find(role="Switch", label="Light"))
-                    expect_log("theme: dark")
-                    time.sleep(0.3)
+                    # The compact theme changes the scale, not only the palette, so
+                    # this also exercises a relayout rather than a repaint.
+                    body = find(role="Group", label="Fire UI Studio")["bounds"]
+                    before = find(role="Tab", label="Compact slate")["bounds"]["height"]
+                    tap(find(role="Tab", label="Compact slate"))
+                    expect_log("theme: Compact slate")
+                    time.sleep(0.5)
+                    after = find(role="Tab", label="Compact slate")["bounds"]["height"]
+                    if after >= before:
+                        raise RuntimeError(
+                            f"Compact theme did not relayout: tab height {before} to {after}"
+                        )
+                    if find(role="Group", label="Fire UI Studio")["bounds"] != body:
+                        raise RuntimeError("The window changed size on a theme swap")
+                    shot("studio-theme-compact.png")
+                    sample("compact_theme")
+                    tap(find(role="Tab", label="Ember dark"))
+                    expect_log("theme: Ember dark")
+                    time.sleep(0.4)
 
                     # Resizing repeatedly, then at two widths, exercises the rail
                     # collapsing and the grid reflowing.

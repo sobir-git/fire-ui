@@ -1442,3 +1442,64 @@ fn moving_the_pointer_over_an_editor_does_not_drag_the_view_back_to_the_caret() 
         "moving the pointer must not scroll the view back to the caret"
     );
 }
+
+#[test]
+fn a_scale_change_relays_the_window_while_a_palette_change_only_repaints() {
+    // Palette and scale are independent axes. Swapping colours must not cost a
+    // layout; swapping metrics must, or controls keep their old geometry.
+    assert!(
+        !Theme::light().metrics_changed(&Theme::dark()),
+        "the two ember themes share a scale"
+    );
+    assert!(
+        Theme::compact().metrics_changed(&Theme::dark()),
+        "the compact theme changes metrics"
+    );
+
+    // Centred, so the button takes its natural size rather than the window's.
+    let mut ui = Ui::new(
+        Aligned::center(Button::styled(
+            Element::leaf(Label::new("Save")),
+            "Save",
+            ButtonStyle::Primary,
+        )),
+        Size::new(300., 120.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    let button = |ui: &Ui<Aligned<Button<Label>>>| {
+        ui.semantics()
+            .into_iter()
+            .find(|n| n.semantics.role == Role::Button)
+            .expect("the button publishes itself")
+            .bounds
+    };
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut text);
+    let spacious = button(&ui);
+
+    ui.set_environment(Rc::new(Theme::light()), false);
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        button(&ui),
+        spacious,
+        "a palette swap leaves geometry alone"
+    );
+
+    ui.set_environment(Rc::new(Theme::compact()), true);
+    settle(&mut ui, &mut text);
+    let compact = button(&ui);
+    assert!(
+        compact.height < spacious.height,
+        "the compact scale gives a shorter control: {compact:?} against {spacious:?}"
+    );
+
+    // Any palette pairs with any scale; the shipped pairs are only conveniences.
+    let mixed = Theme {
+        color: Palette::ember_dark(),
+        scale: Scale::compact(),
+    };
+    assert!(mixed.metrics_changed(&Theme::dark()));
+    assert_eq!(mixed.color.accent, Theme::dark().color.accent);
+}

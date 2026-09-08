@@ -20,9 +20,13 @@ overflow the bottom. `Padding`, `Aligned`, `Constrain`, `Spacer`, `Surface` and
 all of them are transparent in both directions — commands reach the content and its
 output passes straight through.
 
-**Theme.** A `Palette` of semantic colours and a `Scale` of sizes. Widgets name a
-role — `surface`, `muted`, `accent`, `on_accent` — and never a literal value, so a
-single `AppearanceScope` swap repaints everything correctly in either palette.
+**Theme.** A `Palette` of semantic colours and a `Scale` of sizes, as two
+independent axes. Widgets name a role — `surface`, `muted`, `accent`, `on_accent` —
+and never a literal value, so a single `AppearanceScope` swap restyles everything
+correctly. Three pairings ship (`Theme::dark`, `light` and `compact`), but a theme
+is a plain struct of public fields: write your own, mix any palette with any scale,
+or install a different one for one subtree. Changing only the palette repaints;
+changing the scale relays.
 
 ```rust
 use fire_ui::Element;

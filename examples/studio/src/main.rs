@@ -23,15 +23,15 @@ use kit::*;
 pub enum Event {
     /// A line for the status bar.
     Status(String),
-    /// Swap the palette for the whole window.
-    Light(bool),
+    /// Swap the whole window's theme, by index into `theme_page::THEMES`.
+    Theme(usize),
 }
 impl Data for Event {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
                 Self::Status(s) => s.capacity(),
-                Self::Light(_) => 0,
+                Self::Theme(_) => 0,
             }
     }
 }
@@ -303,10 +303,13 @@ impl Widget for Studio {
     type Output = String;
     fn update(&mut self, cx: &mut Update<'_, Self>, event: Event) {
         match event {
-            Event::Light(light) => {
-                let theme = if light { Theme::light() } else { Theme::dark() };
+            Event::Theme(index) => {
+                let theme = theme_page::theme_for(index);
                 let _ = cx.send(self.scope, ScopeCommand::Theme(Box::new(theme)));
-                let _ = cx.emit(format!("theme: {}", if light { "light" } else { "dark" }));
+                let name = theme_page::THEMES
+                    .get(index)
+                    .map_or("unknown", |(name, _)| name);
+                let _ = cx.emit(format!("theme: {name}"));
             }
             Event::Status(line) => {
                 let _ = cx.emit(line);

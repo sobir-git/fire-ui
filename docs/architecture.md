@@ -105,7 +105,8 @@ and appearance. Decorative content leaves activation to the button. A virtual li
 accepts a row factory and unique stable keys, keeps visible rows plus overscan mounted,
 and owns selection/navigation. Selection is published to row content through
 `ListRowState`; optional hover selection supports pickers. Navigation can be driven
-by an owner while focus remains in its search field. Its fixed row height is explicit. Key indexing avoids
+by an owner while focus remains in its search field. Its fixed row height is explicit, and being fixed at
+construction it does not follow a later theme change. Key indexing avoids
 scanning the entire dataset while laying out visible rows.
 
 One `Scrollbar` serves every scrolling surface — viewport, virtual list and editor —
@@ -113,9 +114,10 @@ and reserves its own strip rather than floating above content, so a bar is alway
 clickable and never steals the pointer shape from what is beneath it.
 
 Immutable theme values propagate through an affected subtree until a nested explicit
-scope. A theme is a semantic `Palette` and a `Scale`; widgets name a role and never a
-literal value, which is what allows one swap to repaint a whole window correctly in
-either palette. Local label appearance can override the type-scale step or the colour
+scope. A theme is a semantic `Palette` and a `Scale`, two axes that vary
+independently; widgets name a role and never a literal value, which is what allows
+one swap to restyle a whole window correctly. Shipped pairings are conveniences over
+public structs, not a closed set, and a subtree can install its own. Local label appearance can override the type-scale step or the colour
 role. Metric changes invalidate layout; colour changes repaint without reshaping text.
 
 A nested scope also stops inheritance, which controls rely on: a filled button

@@ -75,11 +75,29 @@ const STEPS: [(&str, TextRole); 6] = [
     ("Micro", TextRole::Micro),
 ];
 
-/// The token system, and the switch that proves it works both ways.
+/// The themes this studio can switch between. A palette and a scale are separate
+/// axes, so the third entry changes both at once and the window relays, not just
+/// repaints.
+pub type Choice = (&'static str, fn() -> Theme);
+
+pub const THEMES: [Choice; 3] = [
+    ("Ember dark", Theme::dark),
+    ("Ember light", Theme::light),
+    ("Compact slate", Theme::compact),
+];
+
+/// The theme for a choice from the section's picker.
+pub fn theme_for(index: usize) -> Theme {
+    THEMES
+        .get(index)
+        .map_or_else(Theme::dark, |(_, build)| build())
+}
+
+/// The token system, and the picker that proves it works in every direction.
 pub struct ThemePage {
     heading: Child<Label>,
     caption: Child<Label>,
-    mode: Child<Field<Switch>>,
+    mode: Child<Field<Tabs>>,
     palette_heading: Child<Label>,
     swatches: Vec<Child<Swatch>>,
     type_heading: Child<Label>,
@@ -92,11 +110,15 @@ impl ThemePage {
             heading: children.add(text("Theme", TextRole::Heading)),
             caption: children.add(muted_paragraph(
                 "A widget names a role — surface, muted, accent — and the theme decides \
-                 the value. Nothing below hardcodes a colour, which is why one switch \
-                 repaints the whole studio.",
+                 the value. Nothing below hardcodes a colour or a size, which is why one \
+                 choice restyles the whole studio. The compact theme changes the scale \
+                 as well as the palette, so the window relays rather than just repaints.",
                 TextRole::Small,
             )),
-            mode: children.connect(Field::new("Swap the palette", Switch::new("Light")), |v| *v),
+            mode: children.connect(
+                Field::new("Swap the theme", Tabs::new(THEMES.map(|(name, _)| name))),
+                |v| *v,
+            ),
             palette_heading: children.add(text("Palette", TextRole::Heading)),
             swatches: SWATCHES
                 .iter()
@@ -116,11 +138,11 @@ impl ThemePage {
     }
 }
 impl Widget for ThemePage {
-    /// True for the light palette.
-    type Command = bool;
+    /// The chosen theme's index.
+    type Command = usize;
     type Output = Event;
-    fn update(&mut self, cx: &mut Update<'_, Self>, light: bool) {
-        let _ = cx.emit(Event::Light(light));
+    fn update(&mut self, cx: &mut Update<'_, Self>, index: usize) {
+        let _ = cx.emit(Event::Theme(index));
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         let unit = gap(cx, 1.);

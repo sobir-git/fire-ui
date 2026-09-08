@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add `Palette::slate_dark` and `Scale::compact`, and `Theme::compact` pairing
+  them: a dense instrument panel against the roomy ember default. Palette and
+  scale stay independent axes, so any pairing works —
+  `Theme { color: Palette::ember_dark(), scale: Scale::compact() }` is a compact
+  ember panel — and nothing in the framework prefers a shipped pair.
+- The studio's theme section picks between all three. Choosing the compact one
+  changes metrics rather than only colours, so it relays the window instead of
+  repainting it, which the probe now checks.
+
 ## 0.5.0 · 2026-09-08
 
 Controls, layout and theming are the focus. Public contracts changed throughout;
