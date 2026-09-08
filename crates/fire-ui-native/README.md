@@ -39,6 +39,10 @@ and Delete remain available. Built-in keyboard clipboard shortcuts require the
 `clipboard` feature; disabled Cut preserves the selection. Custom hosts explicitly
 call `Ui::set_clipboard_enabled(true)` when they service clipboard requests. In-process semantics need neither native bridge nor socket.
 
+Linux/X11 requires the system X11, GLX/OpenGL and xkbcommon libraries at runtime.
+On Debian/Ubuntu, install `libxkbcommon-x11-0` as well as `libxkbcommon0` and
+your OpenGL driver. The X11 keyboard library is loaded dynamically by winit.
+
 Linux X11 is verified with real native interactions on Xvfb. Windows and macOS are
 build/test targets in CI; native behavior on those desktops still needs testing.
 Browser, mobile and embedded hosts are not implemented. Mixed-direction shaping,
