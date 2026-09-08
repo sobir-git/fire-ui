@@ -72,19 +72,16 @@ impl Scrollbar {
         theme.scale.space(1.5)
     }
     /// `None` when the content fits and no bar is needed.
-    pub fn new(
-        bounds: Rect,
-        viewport: f32,
-        extent: f32,
-        offset: f32,
-        theme: &Theme,
-    ) -> Option<Self> {
+    ///
+    /// Geometry takes the strip width rather than a theme: where the bar sits is
+    /// arithmetic, and only its colours are a matter of taste. A scrolling widget
+    /// therefore remembers one number between layouts, not a whole palette.
+    pub fn new(bounds: Rect, viewport: f32, extent: f32, offset: f32, width: f32) -> Option<Self> {
         let overflow = extent - viewport;
-        if overflow <= 0. || viewport <= 0. {
+        if overflow <= 0. || viewport <= 0. || width <= 0. {
             return None;
         }
-        let width = Self::width(theme);
-        let pad = theme.scale.space(0.25);
+        let pad = width / 6.;
         let track = Rect::new(
             bounds.x + bounds.width - width + pad,
             bounds.y + pad,

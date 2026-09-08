@@ -7,6 +7,13 @@
   scale stay independent axes, so any pairing works —
   `Theme { color: Palette::ember_dark(), scale: Scale::compact() }` is a compact
   ember panel — and nothing in the framework prefers a shipped pair.
+- `VirtualList` takes a `RowHeight`: a number, or a rule read from the theme so rows
+  tighten with it. `Scrollbar` geometry takes the strip width rather than a theme,
+  so a scrolling widget remembers one number between layouts instead of a palette.
+- `Lifecycle::Inherited` now reaches every widget whose inherited environment
+  changed, not only those publishing their own to a child. A widget whose structure
+  depends on the ambient value — how tall a row is, and so how many to own — cannot
+  learn it from layout alone.
 - The studio's theme section picks between all three. Choosing the compact one
   changes metrics rather than only colours, so it relays the window instead of
   repainting it, which the probe now checks.

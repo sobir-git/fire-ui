@@ -1,4 +1,4 @@
-use crate::{theme, Scrollbar, Theme};
+use crate::{theme, Scrollbar};
 use fire_ui::*;
 
 /// How much of the main axis a child claims.
@@ -684,9 +684,10 @@ pub struct Scroll<C: Widget> {
     reserved: bool,
     /// Whether the pointer is resting on the bar.
     bar_hover: bool,
-    /// Viewport width and theme from the last layout, for cursor resolution.
+    /// Viewport width and scrollbar strip from the last layout. `cursor` has no
+    /// context to consult, so these two numbers are all it needs remembered.
     width: f32,
-    theme: Theme,
+    bar: f32,
 }
 impl<C: Widget> Scroll<C> {
     pub fn new(content: Element<C>) -> Element<Self> {
@@ -700,7 +701,7 @@ impl<C: Widget> Scroll<C> {
             reserved: false,
             bar_hover: false,
             width: 0.,
-            theme: Theme::default(),
+            bar: 0.,
         })
     }
     pub fn offset(&self) -> f32 {
@@ -710,8 +711,8 @@ impl<C: Widget> Scroll<C> {
         (self.extent - self.height).max(0.)
     }
     /// The bar for the current geometry, or `None` when everything fits.
-    fn bar(&self, bounds: Rect, theme: &Theme) -> Option<Scrollbar> {
-        Scrollbar::new(bounds, self.height, self.extent, self.offset, theme)
+    fn bar(&self, bounds: Rect) -> Option<Scrollbar> {
+        Scrollbar::new(bounds, self.height, self.extent, self.offset, self.bar)
     }
     fn scroll_to(&mut self, cx: &mut Update<'_, Self>, offset: f32) {
         let offset = offset.clamp(0., self.overflow());
@@ -744,9 +745,9 @@ impl<C: Widget> Widget for Scroll<C> {
         }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        self.theme = theme(cx);
         self.width = c.max.width;
-        let bar = Scrollbar::width(&self.theme);
+        self.bar = Scrollbar::width(&theme(cx));
+        let bar = self.bar;
         let unbounded = |width: f32| Constraints::loose(Size::new(width, f32::INFINITY));
         let mut m = cx.measure(self.child, unbounded(c.max.width));
         // A bar takes its own strip rather than floating over the content, so the
@@ -769,13 +770,12 @@ impl<C: Widget> Widget for Scroll<C> {
     fn cursor(&self, position: Point) -> Option<CursorIcon> {
         self.reserved
             .then_some(CursorIcon::Arrow)
-            .filter(|_| position.x >= self.width - Scrollbar::width(&self.theme))
+            .filter(|_| position.x >= self.width - self.bar)
     }
     fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
         if phase == Phase::Preview {
             return;
         }
-        let theme = self.theme;
         match input {
             Input::Scroll { delta, .. } => {
                 let offset = self.offset - delta.y;
@@ -790,7 +790,7 @@ impl<C: Widget> Widget for Scroll<C> {
                 down: true,
                 position,
             } => {
-                let Some(bar) = self.bar(cx.bounds(), &theme) else {
+                let Some(bar) = self.bar(cx.bounds()) else {
                     return;
                 };
                 if !bar.track.contains(*position) {
@@ -811,7 +811,7 @@ impl<C: Widget> Widget for Scroll<C> {
             }
             Input::Pointer { position, .. } => {
                 if let Some((_, grip)) = self.dragging {
-                    let Some(bar) = self.bar(cx.bounds(), &theme) else {
+                    let Some(bar) = self.bar(cx.bounds()) else {
                         return;
                     };
                     let offset = bar.offset_for(position.y - grip, self.overflow());
@@ -820,7 +820,7 @@ impl<C: Widget> Widget for Scroll<C> {
                     return;
                 }
                 let hovered = self
-                    .bar(cx.bounds(), &theme)
+                    .bar(cx.bounds())
                     .is_some_and(|bar| bar.contains(*position));
                 if hovered != self.bar_hover {
                     self.bar_hover = hovered;
@@ -843,7 +843,7 @@ impl<C: Widget> Widget for Scroll<C> {
     }
     fn paint(&self, cx: &mut Paint<'_>) {
         let t = crate::painted_theme(cx);
-        if let Some(bar) = self.bar(cx.bounds, &t) {
+        if let Some(bar) = self.bar(cx.bounds) {
             bar.paint(cx.painter, &t, self.bar_hover, self.dragging.is_some())
         }
     }

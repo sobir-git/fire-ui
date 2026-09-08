@@ -6,16 +6,47 @@ use std::convert::Infallible;
 
 const TOTAL: usize = 100_000;
 
-type Row = Padding<Label>;
+/// One row: a label inset from the row's edges by the theme's rhythm rather than by
+/// numbers, so a row tightens with the theme exactly as its height does.
+pub struct Row {
+    label: Child<Label>,
+}
+impl Widget for Row {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        // A constant, not the theme's rhythm: a virtual list publishes selection
+        // state to each row, and a node holds one ambient value of one type, so a
+        // row cannot also see the theme. Row height is chosen by the list itself,
+        // which can see it, and does follow a theme change.
+        let inset = 10.;
+        // Only the sides are inset: the row's height is fixed by the list, and
+        // insetting it too would clamp the label to whatever was left over.
+        let m = cx.measure(
+            self.label,
+            Constraints::loose(Size::new((c.max.width - 2. * inset).max(0.), c.max.height)),
+        );
+        cx.place(
+            self.label,
+            Point::new(inset, ((c.max.height - m.size.height) / 2.).max(0.)),
+        );
+        Metrics::new(c.max)
+    }
+}
+
 type Rows = VirtualList<usize, Row, fn(&usize) -> Element<Row>>;
+
 fn row_for(key: &usize) -> Element<Row> {
-    Padding::new(
-        Element::leaf(Label::styled(
-            format!("Material study {:05}", key + 1),
-            TextRole::Body,
-        )),
-        Insets::symmetric(14., 4.),
-    )
+    let text = format!("Material study {:05}", key + 1);
+    Element::build(|children| Row {
+        label: children.add(Element::leaf(Label::styled(text, TextRole::Body))),
+    })
+}
+
+/// Row height as a rule: tall enough for a line of body text plus breathing room,
+/// in whatever theme is in effect.
+fn row_height(scale: &Scale) -> f32 {
+    (scale.font_size * 1.7 + scale.space(0.75)).round()
 }
 
 /// A hundred thousand rows, of which only the visible ones exist.
@@ -59,10 +90,9 @@ impl Lists {
                     .inset(6.)
                     .wrap(Element::leaf(Rows::new(
                         (0..TOTAL).collect(),
-                        // A virtual list needs one fixed row height up front, so this
-                        // is the rhythm of the theme the studio starts in; it does not
-                        // follow a later theme change.
-                        Scale::default().space(4.),
+                        // A rule, not a number: rows re-resolve when the theme
+                        // changes, so they tighten with everything else.
+                        RowHeight::Scaled(row_height),
                         row_for as fn(&usize) -> Element<Row>,
                     ))),
                 |v| Signal::Row(v.clone()),

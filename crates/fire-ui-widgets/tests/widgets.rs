@@ -1503,3 +1503,122 @@ fn a_scale_change_relays_the_window_while_a_palette_change_only_repaints() {
     assert!(mixed.metrics_changed(&Theme::dark()));
     assert_eq!(mixed.color.accent, Theme::dark().color.accent);
 }
+
+#[test]
+fn theme_is_a_small_value() {
+    assert_eq!(std::mem::size_of::<Palette>(), 17 * 16);
+    assert!(
+        std::mem::size_of::<Theme>() <= 320,
+        "{}",
+        std::mem::size_of::<Theme>()
+    );
+}
+
+/// A widget that knows nothing about themes: it draws with the core's `Color` and
+/// `Painter` alone. This is what any consumer can write, and what `fire-ui` on its
+/// own supports — the core has no theme concept at all.
+struct Unthemed;
+impl Widget for Unthemed {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, _: &mut Layout<'_>, c: Constraints) -> Metrics {
+        Metrics::new(c.constrain(Size::new(40., 20.)))
+    }
+    fn paint(&self, cx: &mut Paint<'_>) {
+        cx.painter.rect(cx.bounds, 0., Color::hex(0x00ff00).into())
+    }
+}
+
+#[test]
+fn widgets_work_with_no_theme_installed_and_with_an_invisible_one() {
+    // 1. A custom widget can ignore themes entirely.
+    let mut ui = Ui::new(
+        Element::leaf(Unthemed),
+        Size::new(80., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let mut painter = Recorder::default();
+    ui.paint(&mut painter);
+    assert_eq!(painter.rects.len(), 1, "it drew, with no theme in the tree");
+
+    // 2. A shipped control with no theme installed falls back to the default rather
+    //    than failing, so a consumer can use one without opting into theming.
+    let mut ui = Ui::new(
+        Button::styled(Element::leaf(Label::new("Go")), "Go", ButtonStyle::Primary),
+        Size::new(200., 80.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut text);
+    let mut bare = Recorder::default();
+    ui.paint(&mut bare);
+    assert!(!bare.rects.is_empty(), "an unthemed control still draws");
+
+    // 3. A theme whose surfaces are transparent is expressible, which is how a
+    //    consumer asks a control for behaviour without chrome.
+    let invisible = Theme {
+        color: Palette {
+            accent: Color::hex(0x000000).alpha(0.),
+            accent_light: Color::hex(0x000000).alpha(0.),
+            border: Color::hex(0x000000).alpha(0.),
+            ..Palette::ember_dark()
+        },
+        scale: Scale::default(),
+    };
+    ui.set_environment(Rc::new(invisible), false);
+    settle(&mut ui, &mut text);
+    let mut clear = Recorder::default();
+    ui.paint(&mut clear);
+    let visible = |brush: &Brush| match brush {
+        Brush::Solid(c) => c.3 > 0.,
+        Brush::Linear { from, to, .. } => from.3 > 0. || to.3 > 0.,
+        Brush::Radial { from, to, .. } => from.3 > 0. || to.3 > 0.,
+        Brush::Box { from, to, .. } => from.3 > 0. || to.3 > 0.,
+    };
+    let opaque = |r: &Recorder| r.rects.iter().filter(|(_, b)| visible(b)).count();
+    assert!(
+        opaque(&clear) < opaque(&bare),
+        "a transparent palette removes painted chrome without removing the control"
+    );
+    assert!(
+        ui.semantics()
+            .iter()
+            .any(|n| n.semantics.role == Role::Button),
+        "and the control is still a button to assistive technology"
+    );
+}
+
+#[test]
+fn a_row_height_rule_follows_the_theme_while_a_number_does_not() {
+    let rows = |height: RowHeight| {
+        VirtualList::new((0..200usize).collect(), height, |key: &usize| {
+            Element::leaf(Label::new(key.to_string()))
+        })
+    };
+    for (rule, follows) in [
+        (RowHeight::Scaled(|scale| scale.space(4.)), true),
+        (RowHeight::Fixed(32.), false),
+    ] {
+        let mut ui = Ui::new(
+            Element::leaf(rows(rule)),
+            Size::new(200., 200.),
+            Limits::default(),
+        )
+        .unwrap();
+        let mut text = TestText;
+        ui.set_environment(Rc::new(Theme::dark()), true);
+        settle(&mut ui, &mut text);
+        let spacious = ui.root().mounted_rows();
+        ui.set_environment(Rc::new(Theme::compact()), true);
+        settle(&mut ui, &mut text);
+        let compact = ui.root().mounted_rows();
+        assert_eq!(
+            compact > spacious,
+            follows,
+            "shorter rows should mean more of them mounted: {spacious} then {compact}"
+        );
+    }
+}

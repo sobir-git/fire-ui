@@ -104,10 +104,13 @@ pub enum Lifecycle {
     CancelKeys,
     Hover(bool),
     Anchor(bool),
-    /// An inherited environment value changed, and this widget publishes its own
-    /// to at least one child. Anything derived from the ambient value — a theme
-    /// adjusted for a filled button's label, say — has to be published again, or
-    /// that child keeps the value it was given when it was first set.
+    /// An inherited environment value changed. The new value is already readable
+    /// through `Update::environment`.
+    ///
+    /// Layout re-reads the environment on its own, so most widgets ignore this.
+    /// It matters when something outside layout derives from the ambient value: a
+    /// theme a control publishes to its own content, which would otherwise keep the
+    /// value it was first given, or a decision about which children to own at all.
     Inherited,
 }
 

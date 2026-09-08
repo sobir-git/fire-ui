@@ -341,7 +341,6 @@ impl<W: Widget> Ui<W> {
                 self.tree.invalidate(id);
             }
         }
-        let mut blocked = false;
         for child in children {
             if self
                 .tree
@@ -349,15 +348,11 @@ impl<W: Widget> Ui<W> {
                 .is_some_and(|n| !n.environment_boundary)
             {
                 self.inherit_environment(child, value.clone(), layout);
-            } else {
-                blocked = true
             }
         }
-        // A child holding its own value stops inheritance there. Its owner is the
-        // only one that can bring it back in line, so tell the owner.
-        if blocked {
-            self.notice(id, Lifecycle::Inherited)
-        }
+        // The node's own value is already in place, so a widget reading it here sees
+        // the new one. This is a direct call, not a queued message.
+        self.notice(id, Lifecycle::Inherited);
         self.repaint();
     }
     fn invoke(

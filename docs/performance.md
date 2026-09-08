@@ -15,6 +15,48 @@ socket. It leaves the user's desktop and accessibility preferences unchanged.
 
 ## Minimal consumer
 
+### History of the missed memory limit
+
+The native host does not meet Fire Notes' 3,000,000-byte private-memory budget.
+This is a preexisting renderer constraint, not evidence of a new 0.5.0 renderer
+regression. The relevant history is:
+
+| Commit | Change | Memory consequence |
+| --- | --- | --- |
+| `2431ebd`, 2026-09-06 | First framework prototype stores `Canvas<OpenGl>` and creates a GL context unconditionally in `crates/fire-ui-native/src/window.rs`. | Native applications cannot select a lighter renderer. |
+| `0f3087d`, 2026-09-06 | Typed-widget rewrite preserves that native rendering path. | Separating core/widgets from native code does not remove the native renderer's startup cost. |
+| `922cfbd`, 2026-09-08, 0.4.0 | Services, font files and retained repainting become explicit choices. | Real dependency reductions, but `glutin` and `femtovg` remain mandatory. |
+| `7566422`, 2026-09-08, 0.5.0 | Adds controls, layout policies, theme tokens and brush translations. | Native window, text and presentation implementations, native dependencies and external lockfile versions are unchanged from the 0.4.0 tag. |
+
+The September 6 performance report already recorded roughly 130–140 MiB native
+RSS under software GL and left hardware-driver profiling unfinished. The 0.4.0
+minimal report below records 106.7 MiB RSS. Neither is proof of low native RAM.
+The 2.66 MiB figure is executable size, not process memory.
+
+The missing acceptance check allowed this to remain unresolved: `lean_probe.py`
+records RSS/PSS and checks dependency selection, pixels and resize behavior, but
+does not fail on a RAM ceiling. `native_probe.py` also records memory without a
+budget. CI invokes the studio/input probes and compiles feature combinations;
+it does not run the minimal-consumer memory experiment or impose a RAM limit.
+
+A September 8 desktop isolation test on Intel Iris Xe measured 25.6 MiB private
+dirty memory for the released no-font/no-service minimal window. A plain GLX
+window without Fire UI measured 12.8 MiB. A separate X11/Cairo text-drawing control
+measured 1.3 MiB. All had zero swap. These controls identify the current native
+path as a blocker; they do not establish that a complete Cairo editor meets the
+budget. Source and raw measurements live in the consumer's
+[renderer isolation record](../../fire-notes/docs/benchmarks/renderer-isolation.json).
+
+The app now has a failing acceptance command, `python3 tools/memory_probe.py
+--output artifacts/memory.json`, run in Fire Notes on the target desktop. It
+rejects private dirty memory at or above 3,000,000 bytes or any swap at startup,
+after typing, during selected-text fire and after resizing. It writes evidence
+before returning failure. This is a sampled local acceptance check, not an
+already-integrated framework CI gate or a proof about all documents and frames.
+The current release fails it. A replacement native rendering path must pass this
+budget together with native interaction, IME, accessibility and animation checks
+before it can be accepted for this consumer.
+
 `tools/lean_probe.py` builds the same draw-only 640×480 window in two independent
 consumer workspaces. The minimal variant selects only `x11`; the other enables
 accessibility, inspection, clipboard, dialogs and bitmap fonts. Neither loads fonts

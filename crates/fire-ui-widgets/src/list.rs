@@ -40,6 +40,36 @@ impl<K: Data, O: Data> Data for ListOutput<K, O> {
     }
 }
 /// A fixed-height virtual list. Row content is supplied by the consumer through ordinary widgets.
+/// How tall each row of a virtual list is.
+///
+/// Virtualisation needs one height it can multiply, so this is not a per-row
+/// measurement. It can still be a rule rather than a number: `Scaled` is read from
+/// the theme on every layout, so rows follow a theme change, while `Fixed` pins a
+/// height that must not move — a row sized to an image, say.
+#[derive(Clone, Copy)]
+pub enum RowHeight {
+    Fixed(f32),
+    Scaled(fn(&crate::Scale) -> f32),
+}
+impl RowHeight {
+    fn resolve(self, scale: &crate::Scale) -> f32 {
+        let height = match self {
+            Self::Fixed(height) => height,
+            Self::Scaled(rule) => rule(scale),
+        };
+        assert!(
+            height.is_finite() && height > 0.,
+            "row height must be positive"
+        );
+        height
+    }
+}
+impl From<f32> for RowHeight {
+    fn from(height: f32) -> Self {
+        Self::Fixed(height)
+    }
+}
+
 pub struct VirtualList<K, R, F>
 where
     K: Data + Clone + Eq + Hash,
@@ -50,6 +80,8 @@ where
     indices: HashMap<K, usize>,
     rows: Vec<(K, Child<R>)>,
     factory: F,
+    height_rule: RowHeight,
+    /// The resolved height from the last layout, used by input and painting.
     row_height: f32,
     offset: f32,
     height: f32,
@@ -62,10 +94,10 @@ where
     bar_drag: Option<(u32, f32)>,
     /// Whether the pointer is resting on the scrollbar.
     bar_hover: bool,
-    /// Viewport width from the last layout, for cursor resolution.
+    /// Viewport width and scrollbar strip from the last layout, so input and the
+    /// context-free `cursor` can reproduce the bar without keeping a palette.
     width: f32,
-    /// Theme from the last layout, so input can reproduce the bar's geometry.
-    theme: crate::Theme,
+    bar: f32,
 }
 impl<K, R, F> VirtualList<K, R, F>
 where
@@ -73,15 +105,17 @@ where
     R: Widget<Output: Clone>,
     F: Fn(&K) -> Element<R> + 'static,
 {
-    pub fn new(keys: Vec<K>, row_height: f32, factory: F) -> Self {
-        assert!(row_height.is_finite() && row_height > 0.);
+    /// A list whose rows are `height` tall: a number, or a rule read from the theme.
+    pub fn new(keys: Vec<K>, height: impl Into<RowHeight>, factory: F) -> Self {
+        let height_rule = height.into();
         let indices = Self::index(&keys);
         Self {
             keys,
             indices,
             rows: vec![],
             factory,
-            row_height,
+            row_height: height_rule.resolve(&crate::Scale::default()),
+            height_rule,
             offset: 0.,
             height: 0.,
             selected: None,
@@ -92,7 +126,7 @@ where
             bar_drag: None,
             bar_hover: false,
             width: 0.,
-            theme: crate::Theme::default(),
+            bar: 0.,
         }
     }
     pub fn select_on_hover(mut self, enabled: bool) -> Self {
@@ -127,12 +161,12 @@ where
     }
     /// The scrollbar for the current geometry, or `None` when everything fits.
     fn bar(&self, bounds: Rect) -> Option<crate::Scrollbar> {
-        crate::Scrollbar::new(bounds, self.height, self.extent(), self.offset, &self.theme)
+        crate::Scrollbar::new(bounds, self.height, self.extent(), self.offset, self.bar)
     }
     /// The strip the bar occupies, or zero when the rows all fit.
     fn bar_strip(&self) -> f32 {
         if self.extent() > self.height {
-            crate::Scrollbar::width(&self.theme)
+            self.bar
         } else {
             0.
         }
@@ -234,9 +268,26 @@ where
     type Command = ListCommand<K, R::Output>;
     type Output = ListOutput<K, R::Output>;
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
-        if matches!(event, Lifecycle::Mount | Lifecycle::Resized) {
-            self.height = cx.bounds().height;
-            self.sync(cx)
+        match event {
+            Lifecycle::Mount | Lifecycle::Resized => {
+                self.height = cx.bounds().height;
+                self.sync(cx)
+            }
+            // Which rows are worth owning depends on how tall a row is, and a themed
+            // rule makes that a function of the theme. Layout alone cannot fix this:
+            // it learns the new height but cannot mount or retire anything.
+            Lifecycle::Inherited => {
+                let scale = cx
+                    .environment::<crate::Theme>()
+                    .map_or_else(crate::Scale::default, |t| t.scale);
+                let height = self.height_rule.resolve(&scale);
+                if height != self.row_height {
+                    self.row_height = height;
+                    self.sync(cx);
+                    cx.relayout()
+                }
+            }
+            _ => {}
         }
     }
     fn frame(&mut self, cx: &mut Update<'_, Self>, _: FrameTime) {
@@ -291,17 +342,16 @@ where
         true
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        self.theme = crate::theme(cx);
+        let theme = crate::theme(cx);
         self.width = c.max.width;
+        self.bar = crate::Scrollbar::width(&theme);
+        // Re-resolved every layout, so a themed rule follows a theme change.
+        self.row_height = self.height_rule.resolve(&theme.scale);
         let extent = self.keys.len() as f32 * self.row_height;
         let size = c.constrain(Size::new(c.max.width, extent.min(c.max.height)));
         self.height = size.height;
         // Rows stop where the scrollbar begins rather than running underneath it.
-        let bar = if extent > size.height {
-            crate::Scrollbar::width(&self.theme)
-        } else {
-            0.
-        };
+        let bar = if extent > size.height { self.bar } else { 0. };
         let row_width = (size.width - bar).max(0.);
         for (key, child) in &self.rows {
             if let Some(index) = self.indices.get(key).copied() {

@@ -105,8 +105,8 @@ and appearance. Decorative content leaves activation to the button. A virtual li
 accepts a row factory and unique stable keys, keeps visible rows plus overscan mounted,
 and owns selection/navigation. Selection is published to row content through
 `ListRowState`; optional hover selection supports pickers. Navigation can be driven
-by an owner while focus remains in its search field. Its fixed row height is explicit, and being fixed at
-construction it does not follow a later theme change. Key indexing avoids
+by an owner while focus remains in its search field. Its single row height is explicit, and may be a
+number or a rule read from the theme, in which case rows follow a theme change. Key indexing avoids
 scanning the entire dataset while laying out visible rows.
 
 One `Scrollbar` serves every scrolling surface — viewport, virtual list and editor —

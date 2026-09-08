@@ -277,7 +277,13 @@ impl<D: Document> Editor<D> {
             return None;
         }
         let total = self.paragraph.as_ref()?.size.height + 2. * self.insets().y;
-        crate::Scrollbar::new(bounds, bounds.height, total, self.scroll.y, &self.theme)
+        crate::Scrollbar::new(
+            bounds,
+            bounds.height,
+            total,
+            self.scroll.y,
+            crate::Scrollbar::width(&self.theme),
+        )
     }
     pub fn padding(mut self, horizontal: f32, vertical: f32) -> Self {
         assert!(
