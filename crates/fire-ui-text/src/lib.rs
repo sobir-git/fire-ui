@@ -474,7 +474,8 @@ mod plan_tests {
     use super::*;
     #[test]
     fn previous_layout_matches_fresh_after_edits_and_width_changes() {
-        let fonts = Fonts::load(&["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]).unwrap();
+        let fonts =
+            Fonts::load(&[system_font().expect("test requires an installed system font")]).unwrap();
         let mut engine = Text::new(fonts).unwrap();
         let original = "first café e\u{301}\nالعربية שלום\nlong wrapped line with many words and a\ttab\nlast\n";
         for before_width in [None, Some(40.), Some(180.)] {
@@ -524,6 +525,7 @@ mod plan_tests {
         }
     }
     #[test]
+    #[cfg(target_os = "linux")]
     fn reused_plans_and_buffers_match_fresh_shaping_for_alternating_fonts_and_scripts() {
         let fonts = Fonts::load(&[
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",

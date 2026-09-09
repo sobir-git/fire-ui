@@ -2,10 +2,8 @@ use fire_ui::*;
 use fire_ui_fonts::Fonts;
 use fire_ui_text::Text;
 fn text() -> Result<Text, String> {
-    Ok(Text::new(Fonts::load(&[
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ])?)
-    .unwrap())
+    let font = fire_ui_text::system_font().ok_or("Install a TrueType font or set FIRE_UI_FONT")?;
+    Text::new(Fonts::load(&[font])?)
 }
 use std::sync::Arc;
 #[test]

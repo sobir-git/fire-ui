@@ -9,7 +9,7 @@ The original 3,000,000-byte private-dirty target remains a reported target. On
 September 9 the product requirement was revised: avoid waste in both memory and
 CPU, and reject memory savings that harm responsiveness or correctness. Normal
 allocator settings are the default; tuned allocator experiments are
-separate diagnostic evidence. No replacement has been installed or released.
+separate diagnostic evidence. Verification does not install the app.
 
 Heaptrack traces identified duplicate paragraph ownership and per-line/glyph
 allocations, as well as native XIM and font resources. Changes share immutable
