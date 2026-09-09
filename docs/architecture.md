@@ -227,12 +227,17 @@ pointer moves coalesce before edge events or rendering; paddle position is assig
 directly. Resize reconfigures the surface at paint time. Frame requests are paced to
 the monitor refresh rate even when software GL does not enforce swap interval.
 
-Drawing streams through a portable `Painter` on one UI thread. OpenGL is the current
-backend. Custom backend painting is an explicit optional capability returning whether
-it was handled. Local repaint requests accumulate window-coordinate damage. Layout
-changes invalidate the full window. The host retains a framebuffer image and repaints
-intersecting branches into it, then copies that image to the swap surface. Decoration
-bounds and caret blinking use local damage. No render thread is required.
+Drawing streams through a portable `Painter` on one UI thread. The native host
+accepts separate text and rendering implementations. `fire-ui-fonts` shares immutable
+bytes and selected file faces without initializing a shaper or renderer. `fire-ui-text` produces
+positioned glyphs and editing geometry from explicitly selected font resources.
+Both renderers and custom widgets consume that same paragraph contract.
+
+Local repaint requests accumulate window-coordinate damage. Layout changes
+invalidate the full window. The Cairo X11 renderer draws directly into the window
+without a client framebuffer. OpenGL can explicitly retain a framebuffer and
+copy it to the swap surface. Custom backend painting reports whether the selected
+renderer handled it. No render thread is required.
 
 ## Verification and remaining work
 

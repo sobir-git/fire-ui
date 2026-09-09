@@ -69,7 +69,7 @@ pub(crate) struct Node {
     /// against the window, `Some(Some(id))` for one that follows a node.
     pub anchor: Option<Option<Id>>,
     pub size: Size,
-    pub cache: Option<(Constraints, u64, Metrics)>,
+    pub cache: Option<(Constraints, TextRevision, Metrics)>,
     pub dirty: bool,
     pub geometry_dirty: bool,
     pub geometry: Geometry,
@@ -330,7 +330,7 @@ impl Layout<'_> {
     pub fn paragraph(&mut self, request: TextRequest) -> std::sync::Arc<Paragraph> {
         self.text.layout(request)
     }
-    pub fn text_revision(&self) -> u64 {
+    pub fn text_revision(&self) -> TextRevision {
         self.text.revision()
     }
     /// The window's rectangle. Window-anchored overlays measure against it.

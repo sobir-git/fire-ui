@@ -6,15 +6,23 @@ use fire_ui::{SemanticAction, SemanticActionKind, SemanticNode};
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Default)]
 pub(crate) struct AccessibilityTree {
-    runs: HashMap<(u64, usize), NodeId>,
+    runs: HashMap<(u64, usize), (NodeId, usize)>,
     next: u64,
-    previous: HashMap<NodeId, Node>,
+    positioned: bool,
+}
+impl Default for AccessibilityTree {
+    fn default() -> Self {
+        Self::new(true)
+    }
 }
 impl AccessibilityTree {
-    pub(crate) fn reset(&mut self) {
-        self.previous.clear();
+    pub(crate) fn new(positioned: bool) -> Self {
+        Self {
+            runs: HashMap::new(),
+            next: 0,
+            positioned,
+        }
     }
     pub(crate) fn action(
         &self,
@@ -37,21 +45,20 @@ impl AccessibilityTree {
                 let node = source.iter().find(|n| n.id == request.target_node.0)?;
                 let paragraph = node.semantics.text.as_ref()?.paragraph.as_ref()?;
                 let byte = |position: TextPosition| {
-                    let (&(owner, index), _) =
-                        self.runs.iter().find(|(_, id)| **id == position.node)?;
-                    if owner != node.id {
+                    let (&(owner, start), &(_, end)) =
+                        self.runs.iter().find(|(_, (id, _))| *id == position.node)?;
+                    if owner != node.id || (self.positioned && position.character_index > 255) {
                         return None;
                     }
-                    let line = paragraph.lines.get(index)?;
-                    let end = paragraph
-                        .lines
-                        .get(index + 1)
-                        .map_or(paragraph.text.len(), |l| l.range.start);
-                    characters(&paragraph.text[line.range.start..end])
-                        .into_iter()
-                        .map(|(b, _)| line.range.start + b)
-                        .chain(std::iter::once(end))
-                        .nth(position.character_index)
+                    (if self.positioned {
+                        run_characters(paragraph, start, end)?
+                    } else {
+                        characters(&paragraph.text)
+                    })
+                    .into_iter()
+                    .map(|(b, _)| b)
+                    .chain(std::iter::once(end))
+                    .nth(position.character_index)
                 };
                 Some(SemanticAction::SetSelection {
                     anchor: byte(selection.anchor)?,
@@ -119,8 +126,17 @@ impl AccessibilityTree {
             if let Some(key) = n.semantics.key {
                 node.set_author_id(key);
             }
-            if let Some(value) = n.semantics.value {
-                node.set_value(value);
+            let compact_text_input = cfg!(target_os = "linux")
+                && !self.positioned
+                && matches!(role, Role::TextInput | Role::MultilineTextInput)
+                && n.semantics
+                    .text
+                    .as_ref()
+                    .is_some_and(|text| text.paragraph.is_some());
+            if !compact_text_input {
+                if let Some(value) = n.semantics.value {
+                    node.set_value(value);
+                }
             }
             if let Some(range) = n.semantics.range {
                 node.set_numeric_value(range.now as f64);
@@ -157,7 +173,10 @@ impl AccessibilityTree {
                 for action in n.semantics.actions {
                     // AccessKit has no atomic range replacement action. The Linux
                     // EditableText adapter sends it directly through the shared UI API.
-                    if action == SemanticActionKind::ReplaceText {
+                    if matches!(
+                        action,
+                        SemanticActionKind::ReplaceText | SemanticActionKind::ScrollBy
+                    ) {
                         continue;
                     }
                     node.add_action(match action {
@@ -166,7 +185,9 @@ impl AccessibilityTree {
                         SemanticActionKind::SetValue => Action::SetValue,
                         SemanticActionKind::ReplaceSelectedText => Action::ReplaceSelectedText,
                         SemanticActionKind::SetSelection => Action::SetTextSelection,
-                        SemanticActionKind::ReplaceText => unreachable!(),
+                        SemanticActionKind::ReplaceText | SemanticActionKind::ScrollBy => {
+                            unreachable!()
+                        }
                     });
                 }
             }
@@ -174,111 +195,182 @@ impl AccessibilityTree {
             let mut child_ids = children.remove(&n.id).unwrap_or_default();
             if let Some(text) = n.semantics.text {
                 if let Some(p) = text.paragraph {
-                    let mut positions = vec![];
-                    for (index, line) in p.lines.iter().enumerate() {
-                        let key = (n.id, index);
+                    if !self.positioned {
+                        let key = (n.id, 0);
                         live_runs.insert(key);
-                        let id = *self.runs.entry(key).or_insert_with(|| {
+                        let entry = self.runs.entry(key).or_insert_with(|| {
                             self.next += 1;
-                            NodeId((1 << 63) | self.next)
+                            (NodeId((1 << 63) | self.next), p.text.len())
                         });
-                        let end = p
-                            .lines
-                            .get(index + 1)
-                            .map_or(p.text.len(), |l| l.range.start);
-                        let value = &p.text[line.range.start..end];
+                        entry.1 = p.text.len();
+                        let id = entry.0;
+                        let mut lengths = Vec::new();
+                        let mut anchor = 0;
+                        let mut focus = 0;
+                        for (byte, len) in character_iter(&p.text) {
+                            if byte < text.anchor {
+                                anchor += 1
+                            }
+                            if byte < text.caret.byte {
+                                focus += 1
+                            }
+                            lengths.push(len);
+                        }
                         let mut run = Node::new(Role::TextRun);
-                        run.set_value(value);
-                        run.set_character_lengths(
-                            characters(value)
-                                .iter()
-                                .map(|(_, len)| *len)
-                                .collect::<Vec<_>>(),
-                        );
-                        let character_geometry: Vec<_> = characters(value)
-                            .iter()
-                            .map(|(byte, _)| {
-                                let byte = line.range.start + byte;
-                                let r = line
-                                    .cells
-                                    .get(line.cells.partition_point(|c| c.range.end <= byte))
-                                    .filter(|c| c.range.contains(&byte))
-                                    .map_or(
-                                        fire_ui::Rect::new(line.width, line.y, 0., p.line_height),
-                                        |c| fire_ui::Rect::new(c.x, line.y, c.width, p.line_height),
-                                    );
-                                n.transform.rect(fire_ui::Rect::new(
-                                    r.x + text.origin.x,
-                                    r.y + text.origin.y,
-                                    r.width,
-                                    r.height,
-                                ))
-                            })
-                            .collect();
-                        let run_bounds = n.transform.rect(fire_ui::Rect::new(
-                            text.origin.x,
-                            text.origin.y + line.y,
-                            line.width,
-                            p.line_height,
-                        ));
-                        run.set_text_direction(accesskit::TextDirection::LeftToRight);
-                        run.set_character_positions(
-                            character_geometry
-                                .iter()
-                                .map(|r| ((r.x - run_bounds.x) as f64 * scale) as f32)
-                                .collect::<Vec<_>>(),
-                        );
-                        run.set_character_widths(
-                            character_geometry
-                                .iter()
-                                .map(|r| (r.width as f64 * scale) as f32)
-                                .collect::<Vec<_>>(),
-                        );
-                        run.set_word_starts(
-                            value
-                                .unicode_word_indices()
-                                .filter_map(|(b, _)| {
-                                    u8::try_from(characters(&value[..b]).len()).ok()
-                                })
-                                .collect::<Vec<_>>(),
-                        );
-                        run.set_bounds(bounds(
-                            n.transform.rect(fire_ui::Rect::new(
-                                text.origin.x,
-                                text.origin.y + line.y,
-                                line.width,
-                                p.line_height,
-                            )),
-                            scale,
-                        ));
-                        positions.push((line.range.start, end, id));
+                        run.set_value(p.text.as_ref());
+                        run.set_character_lengths(lengths);
+                        node.set_text_selection(TextSelection {
+                            anchor: TextPosition {
+                                node: id,
+                                character_index: anchor,
+                            },
+                            focus: TextPosition {
+                                node: id,
+                                character_index: focus,
+                            },
+                        });
                         child_ids.push(id);
                         nodes.push((id, run));
-                    }
-                    let position = |byte: usize, affinity: fire_ui::Affinity| {
-                        let mut i = positions
-                            .partition_point(|(start, _, _)| *start <= byte)
-                            .saturating_sub(1);
-                        if affinity == fire_ui::Affinity::Upstream
-                            && i > 0
-                            && p.lines[i - 1].range.end == byte
-                        {
-                            i -= 1;
+                    } else {
+                        let mut positions = vec![];
+                        for (index, line) in p.lines.iter().enumerate() {
+                            let end = p
+                                .lines
+                                .get(index + 1)
+                                .map_or(p.text.len(), |l| l.range.start);
+                            let value = &p.text[line.range.start..end];
+                            let chars = characters(value);
+                            let words: Vec<_> = value
+                                .unicode_word_indices()
+                                .map(|(b, _)| chars.partition_point(|(offset, _)| *offset < b))
+                                .collect();
+                            let first_node = nodes.len();
+                            // Word-start indices are u8 in AccessKit. Split long visual
+                            // lines without inventing word or line boundaries at splits.
+                            for offset in (0..chars.len().max(1)).step_by(255) {
+                                let limit = (offset + 255).min(chars.len());
+                                let start = line.range.start + chars.get(offset).map_or(0, |c| c.0);
+                                let end = line.range.start
+                                    + chars.get(limit).map_or(value.len(), |c| c.0);
+                                let key = (n.id, start);
+                                live_runs.insert(key);
+                                let entry = self.runs.entry(key).or_insert_with(|| {
+                                    self.next += 1;
+                                    (NodeId((1 << 63) | self.next), end)
+                                });
+                                entry.1 = end;
+                                let id = entry.0;
+                                let mut run = Node::new(Role::TextRun);
+                                run.set_value(&p.text[start..end]);
+                                run.set_character_lengths(
+                                    chars[offset..limit]
+                                        .iter()
+                                        .map(|(_, len)| *len)
+                                        .collect::<Vec<_>>(),
+                                );
+                                let mut character_positions = Vec::with_capacity(limit - offset);
+                                let mut character_widths = Vec::with_capacity(limit - offset);
+                                let line_bounds = n.transform.rect(fire_ui::Rect::new(
+                                    text.origin.x,
+                                    text.origin.y + line.y,
+                                    line.width,
+                                    p.line_height,
+                                ));
+                                let mut left = f32::INFINITY;
+                                let mut right = f32::NEG_INFINITY;
+                                for (byte, _) in &chars[offset..limit] {
+                                    let byte = line.range.start + byte;
+                                    let r = line.cell_at(byte).map_or(
+                                        fire_ui::Rect::new(line.width, line.y, 0., p.line_height),
+                                        |c| {
+                                            fire_ui::Rect::new(
+                                                c.x,
+                                                line.y,
+                                                c.width(),
+                                                p.line_height,
+                                            )
+                                        },
+                                    );
+                                    let r = n.transform.rect(fire_ui::Rect::new(
+                                        r.x + text.origin.x,
+                                        r.y + text.origin.y,
+                                        r.width,
+                                        r.height,
+                                    ));
+                                    left = left.min(r.x);
+                                    right = right.max(r.x + r.width);
+                                    character_positions.push(r.x);
+                                    character_widths.push((r.width as f64 * scale) as f32);
+                                }
+                                if character_positions.is_empty() {
+                                    left = line_bounds.x;
+                                    right = left;
+                                }
+                                for x in &mut character_positions {
+                                    *x = ((*x - left) as f64 * scale) as f32;
+                                }
+                                run.set_text_direction(accesskit::TextDirection::LeftToRight);
+                                run.set_character_positions(character_positions);
+                                run.set_character_widths(character_widths);
+                                run.set_word_starts(
+                                    words
+                                        .iter()
+                                        .copied()
+                                        .skip_while(|w| *w < offset)
+                                        .take_while(|w| *w < limit)
+                                        .map(|w| (w - offset) as u8)
+                                        .collect::<Vec<_>>(),
+                                );
+                                run.set_bounds(bounds(
+                                    fire_ui::Rect::new(
+                                        left,
+                                        line_bounds.y,
+                                        right - left,
+                                        line_bounds.height,
+                                    ),
+                                    scale,
+                                ));
+                                if nodes.len() > first_node {
+                                    let (previous_id, previous) = nodes.last_mut().unwrap();
+                                    run.set_previous_on_line(*previous_id);
+                                    previous.set_next_on_line(id);
+                                }
+                                let upstream_end = if limit == chars.len() {
+                                    line.range.end
+                                } else {
+                                    end
+                                };
+                                positions.push((start, end, id, upstream_end));
+                                child_ids.push(id);
+                                nodes.push((id, run));
+                            }
                         }
-                        let (start, end, id) = *positions.get(i)?;
-                        if byte > end || !p.text.is_char_boundary(byte) {
-                            return None;
+                        let position = |byte: usize, affinity: fire_ui::Affinity| {
+                            let mut i = positions
+                                .partition_point(|(start, _, _, _)| *start <= byte)
+                                .saturating_sub(1);
+                            if affinity == fire_ui::Affinity::Upstream
+                                && i > 0
+                                && positions[i - 1].3 == byte
+                            {
+                                i -= 1;
+                            }
+                            let (start, end, id, _) = *positions.get(i)?;
+                            if byte > end || !p.text.is_char_boundary(byte) {
+                                return None;
+                            }
+                            Some(TextPosition {
+                                node: id,
+                                character_index: run_characters(&p, start, end)?
+                                    .partition_point(|(offset, _)| *offset < byte),
+                            })
+                        };
+                        if let (Some(anchor), Some(focus)) = (
+                            position(text.anchor, fire_ui::Affinity::Downstream),
+                            position(text.caret.byte, text.caret.affinity),
+                        ) {
+                            node.set_text_selection(TextSelection { anchor, focus });
                         }
-                        Some(TextPosition {
-                            node: id,
-                            character_index: characters(&p.text[start..byte]).len(),
-                        })
-                    };
-                    if let (Some(anchor), Some(focus)) = (
-                        position(text.anchor, fire_ui::Affinity::Downstream),
-                        position(text.caret.byte, text.caret.affinity),
-                    ) {
-                        node.set_text_selection(TextSelection { anchor, focus });
                     }
                 }
             }
@@ -286,9 +378,6 @@ impl AccessibilityTree {
             nodes.push((NodeId(n.id), node));
         }
         self.runs.retain(|key, _| live_runs.contains(key));
-        let current: HashMap<_, _> = nodes.iter().cloned().collect();
-        nodes.retain(|(id, node)| self.previous.get(id) != Some(node));
-        self.previous = current;
         TreeUpdate {
             nodes,
             tree: Some(TreeInfo::new(NodeId(0))),
@@ -297,6 +386,27 @@ impl AccessibilityTree {
         }
     }
 }
+// Always segment with the original visual-line context. A run may split the
+// scalar representation of a grapheme longer than AccessKit's u8 byte length.
+fn run_characters(p: &fire_ui::Paragraph, start: usize, end: usize) -> Option<Vec<(usize, u8)>> {
+    let index = p
+        .lines
+        .partition_point(|line| line.range.start <= start)
+        .checked_sub(1)?;
+    let line = &p.lines[index];
+    let line_end = p
+        .lines
+        .get(index + 1)
+        .map_or(p.text.len(), |line| line.range.start);
+    Some(
+        characters(p.text.get(line.range.start..line_end)?)
+            .into_iter()
+            .map(|(byte, len)| (line.range.start + byte, len))
+            .filter(|(byte, _)| *byte >= start && *byte < end)
+            .collect(),
+    )
+}
+
 fn bounds(r: fire_ui::Rect, scale: f64) -> accesskit::Rect {
     accesskit::Rect::new(
         r.x as f64 * scale,
@@ -308,20 +418,20 @@ fn bounds(r: fire_ui::Rect, scale: f64) -> accesskit::Rect {
 
 // AccessKit stores character lengths in u8. Pathological clusters longer than 255 bytes
 // are described as scalars; the editor still rejects selection inside a grapheme.
+fn character_iter(value: &str) -> impl Iterator<Item = (usize, u8)> + '_ {
+    value.grapheme_indices(true).flat_map(|(base, g)| {
+        let long = g.len() > 255;
+        std::iter::once((base, g.len() as u8))
+            .take(usize::from(!long))
+            .chain(
+                g.char_indices()
+                    .take(if long { usize::MAX } else { 0 })
+                    .map(move |(b, c)| (base + b, c.len_utf8() as u8)),
+            )
+    })
+}
 fn characters(value: &str) -> Vec<(usize, u8)> {
-    value
-        .grapheme_indices(true)
-        .flat_map(|(base, grapheme)| {
-            if let Ok(len) = u8::try_from(grapheme.len()) {
-                vec![(base, len)]
-            } else {
-                grapheme
-                    .char_indices()
-                    .map(|(b, c)| (base + b, c.len_utf8() as u8))
-                    .collect()
-            }
-        })
-        .collect()
+    character_iter(value).collect()
 }
 
 #[cfg(test)]
@@ -329,6 +439,215 @@ mod tests {
     use super::*;
     use fire_ui::*;
     use fire_ui_widgets::Editor;
+    fn editor(text: &str, anchor: usize, caret: usize) -> Ui<Editor> {
+        let mut ui = Ui::new(
+            Element::leaf(Editor::new(text).restore(fire_ui_widgets::EditorState {
+                wrap: false,
+                ..Default::default()
+            })),
+            Size::new(300., 200.),
+            Limits::default(),
+        )
+        .unwrap();
+        ui.pump(100, |_| {}, |_| {});
+        ui.layout(
+            &mut fire_ui_text::Text::new(
+                fire_ui_fonts::Fonts::load(&["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let id = ui.semantics()[0].id;
+        ui.accessibility(id, SemanticAction::SetSelection { anchor, caret })
+            .unwrap();
+        ui
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn compact_text_input_uses_run_value_and_preserves_other_value_cases() {
+        let ui = editor("alpha café", 0, 0);
+        let source = ui.semantics();
+        let owner = NodeId(source[0].id);
+        for positioned in [false, true] {
+            let update = AccessibilityTree::new(positioned).tree(source.clone(), "Test", 1.);
+            let parent = &update.nodes.iter().find(|(id, _)| *id == owner).unwrap().1;
+            assert_eq!(parent.value(), positioned.then_some("alpha café"));
+            assert_eq!(
+                update
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.role() == accesskit::Role::TextRun)
+                    .map(|(_, n)| n.value().unwrap())
+                    .collect::<String>(),
+                "alpha café"
+            );
+        }
+        let mut no_paragraph = source.clone();
+        no_paragraph[0].semantics.text.as_mut().unwrap().paragraph = None;
+        let update = AccessibilityTree::new(false).tree(no_paragraph, "Test", 1.);
+        assert_eq!(
+            update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == owner)
+                .unwrap()
+                .1
+                .value(),
+            Some("alpha café")
+        );
+        let mut slider = source.clone();
+        slider[0].semantics.role = fire_ui::Role::Slider;
+        slider[0].semantics.range = Some(fire_ui::Range {
+            now: 4.,
+            min: 0.,
+            max: 10.,
+            step: 1.,
+        });
+        let update = AccessibilityTree::new(false).tree(slider, "Test", 1.);
+        let parent = &update.nodes.iter().find(|(id, _)| *id == owner).unwrap().1;
+        assert_eq!(parent.value(), Some("alpha café"));
+        assert_eq!(parent.numeric_value(), Some(4.));
+        assert_eq!(parent.min_numeric_value(), Some(0.));
+        assert_eq!(parent.max_numeric_value(), Some(10.));
+        assert_eq!(parent.numeric_value_step(), Some(1.));
+        let mut label = source.clone();
+        label[0].semantics.role = fire_ui::Role::Text;
+        let update = AccessibilityTree::new(false).tree(label, "Test", 1.);
+        assert_eq!(
+            update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == owner)
+                .unwrap()
+                .1
+                .value(),
+            Some("alpha café")
+        );
+    }
+
+    #[test]
+    fn long_visual_line_preserves_words_links_geometry_and_selection() {
+        let value = "alpha ".repeat(100);
+        let ui = editor(&value, 255, 512);
+        let source = ui.semantics();
+        let owner = source[0].id;
+        let mut bridge = AccessibilityTree::default();
+        let update = bridge.tree(source.clone(), "Test", 2.);
+        let runs: Vec<_> = update
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.role() == accesskit::Role::TextRun)
+            .collect();
+        assert_eq!(runs.len(), 3);
+        let mut base = 0;
+        let mut words = vec![];
+        let p = source[0]
+            .semantics
+            .text
+            .as_ref()
+            .unwrap()
+            .paragraph
+            .as_ref()
+            .unwrap();
+        let text = source[0].semantics.text.as_ref().unwrap();
+        for (i, (id, run)) in runs.iter().enumerate() {
+            assert!(run.character_lengths().len() <= 255);
+            assert_eq!(run.previous_on_line(), i.checked_sub(1).map(|j| runs[j].0));
+            assert_eq!(run.next_on_line(), runs.get(i + 1).map(|n| n.0));
+            words.extend(run.word_starts().iter().map(|w| base + *w as usize));
+            for (j, x) in run.character_positions().unwrap().iter().enumerate() {
+                let cell = &p.lines[0].cells[base + j];
+                let rect = source[0].transform.rect(Rect::new(
+                    cell.x + text.origin.x,
+                    text.origin.y,
+                    cell.width(),
+                    p.line_height,
+                ));
+                assert!((run.bounds().unwrap().x0 + *x as f64 - rect.x as f64 * 2.).abs() < 0.001);
+            }
+            base += run.character_lengths().len();
+            assert_eq!(
+                bridge.runs[&(owner, if i == 0 { 0 } else { i * 255 })].0,
+                *id
+            );
+        }
+        assert_eq!(base, value.len());
+        assert_eq!(words, (0..600).step_by(6).collect::<Vec<_>>());
+        let node = &update.nodes.iter().find(|(id, _)| id.0 == owner).unwrap().1;
+        let selection = *node.text_selection().unwrap();
+        assert_eq!(selection.anchor.node, runs[1].0);
+        assert_eq!(selection.anchor.character_index, 0);
+        assert_eq!(selection.focus.node, runs[2].0);
+        assert_eq!(selection.focus.character_index, 2);
+        assert_eq!(
+            bridge.action(
+                ActionRequest {
+                    action: Action::SetTextSelection,
+                    target_tree: TreeId::ROOT,
+                    target_node: NodeId(owner),
+                    data: Some(ActionData::SetTextSelection(selection)),
+                },
+                &source
+            ),
+            Some(SemanticAction::SetSelection {
+                anchor: 255,
+                caret: 512
+            })
+        );
+    }
+
+    #[test]
+    fn oversized_grapheme_split_keeps_scalar_indices_and_text_integrity() {
+        let value = format!("a{}", "\u{301}".repeat(300));
+        let ui = editor(&value, 0, value.len());
+        let source = ui.semantics();
+        let owner = source[0].id;
+        let mut bridge = AccessibilityTree::default();
+        let update = bridge.tree(source.clone(), "Test", 1.);
+        let runs: Vec<_> = update
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.role() == accesskit::Role::TextRun)
+            .collect();
+        assert_eq!(
+            runs.iter()
+                .map(|(_, n)| n.value().unwrap())
+                .collect::<String>(),
+            value
+        );
+        assert_eq!(
+            runs.iter()
+                .map(|(_, n)| n.character_lengths().len())
+                .collect::<Vec<_>>(),
+            vec![255, 46]
+        );
+        let selection = *update
+            .nodes
+            .iter()
+            .find(|(id, _)| id.0 == owner)
+            .unwrap()
+            .1
+            .text_selection()
+            .unwrap();
+        assert_eq!(selection.focus.character_index, 46);
+        assert_eq!(
+            bridge.action(
+                ActionRequest {
+                    action: Action::SetTextSelection,
+                    target_tree: TreeId::ROOT,
+                    target_node: NodeId(owner),
+                    data: Some(ActionData::SetTextSelection(selection)),
+                },
+                &source
+            ),
+            Some(SemanticAction::SetSelection {
+                anchor: 0,
+                caret: value.len()
+            })
+        );
+    }
+
     #[test]
     fn text_tree_round_trips_unicode_selection_and_rejects_cross_editor_positions() {
         let mut ui = Ui::new(
@@ -338,7 +657,13 @@ mod tests {
         )
         .unwrap();
         ui.pump(100, |_| {}, |_| {});
-        ui.layout(&mut crate::NativeText::new().unwrap());
+        ui.layout(
+            &mut fire_ui_text::Text::new(
+                fire_ui_fonts::Fonts::load(&["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
         let id = ui.semantics()[0].id;
         ui.accessibility(
             id,

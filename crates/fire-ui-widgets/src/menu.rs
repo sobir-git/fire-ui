@@ -316,6 +316,7 @@ impl Widget for MenuRow {
                 .is_none_or(|p| p.style != style || p.service_revision != cx.text_revision())
             {
                 *target = Some(cx.paragraph(TextRequest {
+                    previous: None,
                     text: source.clone(),
                     style,
                     width: None,

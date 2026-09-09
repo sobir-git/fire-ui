@@ -1,78 +1,43 @@
-# fire-ui-native
+# Fire UI native
 
-Native desktop host for Fire UI. The default build includes X11 windows,
-OpenGL rendering and text shaping. Core semantics and IME handling remain available.
-Optional services are selected by the application:
+Desktop windows, input routing and optional platform services. The host accepts
+an explicit `TextEngine` and `RendererFactory`; it does not initialize a renderer,
+load fonts, or discover a font collection itself.
 
-| Cargo feature | Adds |
+| Feature | Adds |
 | --- | --- |
-| `x11` (default) | Linux X11 window and GLX backend |
-| `accessibility` | Native screen-reader bridge; Linux AT-SPI EditableText |
-| `inspection` | Unix JSON inspection socket for agents |
+| `x11` (default) | Linux X11 windows and keyboard input |
+| `accessibility` | Native screen-reader bridge and Linux AT-SPI editing |
+| `inspection` | Optional Unix inspection socket |
 | `clipboard` | System clipboard ownership and transfers |
-| `dialogs` | `open_file` and `save_file` system choosers |
-| `bitmap-fonts` | PNG decoding for bitmap glyphs, including color emoji |
+| `dialogs` | Explicitly invoked native file choosers |
 
-```toml
-fire-ui-native = { git = "https://github.com/sobir-git/fire-ui", tag = "v0.5.0", default-features = false, features = ["x11", "accessibility", "clipboard"] }
-```
+Call `run(root, options, text, renderer)` on the main thread. `run_with` also
+receives root outputs and a `WakeHandle` for application background work.
+`WindowOptions` controls window properties and runtime limits. Rendering policy
+and text resources belong to their respective implementations.
 
-Call `run` on the main thread. `run_with` additionally receives root outputs and a
-`WakeHandle` for background work. `WindowOptions` controls window properties,
-resource limits, font files and repaint policy. Windows uses WGL and macOS uses CGL;
-Linux builds with defaults disabled must explicitly select `x11`. Native Wayland
-support is deferred.
+`fire-ui-cairo` provides direct X11 drawing. `fire-ui-gl` provides optional OpenGL
+drawing and retained repainting. Both consume the same public `Painter` and
+positioned-glyph paragraph contract. Custom renderers implement the same
+`RendererFactory` and `Renderer` interfaces as these implementations.
 
-The host loads **no fonts by default**. Draw-only apps need no font files. Apps with
-text must set `font: Some(path)`; requesting text without a font returns a native
-render error. `system_font()` is an explicit convenience for discovering one common
-system font, respecting `FIRE_UI_FONT`. For predictable deployment, supply your own
-licensed file. `fallback_fonts` is an empty, ordered list unless the app provides
-additional faces. No fonts are bundled. Invalid configured files return an error.
-Bitmap-only glyphs require `bitmap-fonts`; without it, use outline fonts. Enabling
-that feature does not discover or load fonts. The renderer still compiles its
-shaping dependencies even in a draw-only build.
+Linux requires X11 and xkbcommon libraries, including `libxkbcommon-x11-0` on
+Debian/Ubuntu. GPU libraries are required only by the OpenGL renderer. Native
+Wayland support is not implemented. Windows and macOS retain the OpenGL host
+path and CI build checks; their native interaction parity needs verification.
 
-Accessibility does not require clipboard support. Without `clipboard`, native
-CopyText, CutText and PasteText return an unsupported-operation error; Set, Insert
-and Delete remain available. Built-in keyboard clipboard shortcuts require the
-`clipboard` feature; disabled Cut preserves the selection. Custom hosts explicitly
-call `Ui::set_clipboard_enabled(true)` when they service clipboard requests. In-process semantics need neither native bridge nor socket.
+Core semantics and IME routing do not require accessibility or inspection.
+Accessibility can be built without clipboard support; AT-SPI clipboard methods
+then report unsupported operations while set, insert and delete remain available.
+Editor validation and undo also apply to native accessibility edits.
 
-Linux/X11 requires the system X11, GLX/OpenGL and xkbcommon libraries at runtime.
-On Debian/Ubuntu, install `libxkbcommon-x11-0` as well as `libxkbcommon0` and
-your OpenGL driver. The X11 keyboard library is loaded dynamically by winit.
+With `inspection`, set `FIRE_UI_INSPECT` to a socket path in a private directory.
+No socket exists by default. See the repository's `docs/inspection.md` for its
+semantic query/action protocol.
 
-Linux X11 is verified with real native interactions on Xvfb. Windows and macOS are
-build/test targets in CI; native behavior on those desktops still needs testing.
-Browser, mobile and embedded hosts are not implemented. Mixed-direction shaping,
-visual selection/caret geometry, IME composition selection and AccessKit text runs
-are implemented. Linux probes exercise real IBus Cangjie5/XIM composition and Orca
-speech generation/navigation. All six AT-SPI EditableText methods share editor
-validation and undo; AT-SPI clipboard reads do not block the UI thread. The private Linux
-transport derives from AccessKit Unix 0.23 under its MIT license, with the published
-common adapter providing tree translation. Windows/macOS use AccessKit's platform
-adapters; their native IME and screen-reader verification is future work.
+`WindowOptions::overlay` creates a passive, click-through window. Linux overlays
+require X11/XWayland; macOS and Windows overlay interaction remains unverified.
 
-Enable `inspection` and set `FIRE_UI_INSPECT` to a socket path in a private directory to inspect and operate
-widgets on Unix. Requests use the same semantic actions as native accessibility.
-See [the inspection protocol](https://github.com/sobir-git/fire-ui/blob/v0.5.0/docs/inspection.md).
-No socket exists by default.
-
-The default renderer paints directly to the window, with no retained window image.
-Set `WindowOptions::partial_repaint` to `true` to retain pixels and repaint damaged
-regions. This trades a window-sized RGBA image and stencil storage for less drawing
-work during local animation. OpenGL 3+ blits the retained image; older contexts draw
-its texture. Geometry changes invalidate it. Both modes sleep when idle.
-
-Cargo features are additive. A richer app in the same workspace can enable its
-features for other consumers during a shared build. Use a separate consumer build
-to measure the minimal package; `tools/lean_probe.py` does this in the repository.
-
-See the [quick start](https://github.com/sobir-git/fire-ui#start-an-app).
-Experimental 0.x API; MIT licensed.
-
-`WindowOptions::overlay` creates a passive, click-through window above normal
-windows. Set `min_size` for small indicators. Linux overlays require X11/XWayland;
-native Wayland does not provide this overlay behavior. macOS and Windows overlay
-interaction has not been verified.
+Cargo features are additive across a shared build. `tools/lean_probe.py` builds
+independent consumers to expose the actual cost of optional integrations.

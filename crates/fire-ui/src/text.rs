@@ -1,5 +1,11 @@
 use crate::{Point, Rect, Size};
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
     pub size: f32,
@@ -35,31 +41,122 @@ pub struct Stop {
 }
 #[derive(Clone, Debug)]
 pub struct TextCell {
-    pub range: Range<usize>,
+    /// Exclusive UTF-8 byte boundary in the paragraph source.
+    ///
+    /// The start is the preceding cell's end, or the containing line's range start.
+    /// See [`TextLine::cells`] for the logical coverage contract.
+    pub end: usize,
     pub x: f32,
-    pub width: f32,
+    /// Signed advance: negative for a right-to-left cell; x remains the left edge.
+    pub advance: f32,
+}
+impl TextCell {
+    pub fn width(&self) -> f32 {
+        self.advance.abs()
+    }
+}
+#[derive(Clone, Debug)]
+pub struct Glyph {
+    pub index: u32,
+    pub offset: Point,
 }
 #[derive(Clone, Debug)]
 pub struct TextRun {
+    /// Entry in the ordered font resource list shared by the text engine and renderer.
+    /// This is not the face index within a font file or collection file.
+    pub font: u32,
+    pub glyphs: Box<[Glyph]>,
     pub x: f32,
-    /// Host-shaped display text; source byte offsets remain in TextCell and Stop.
-    pub display: Arc<str>,
 }
 #[derive(Clone, Debug)]
 pub struct TextLine {
     pub range: Range<usize>,
     pub y: f32,
     pub width: f32,
-    pub stops: Vec<Stop>,
+    /// Cells partition `range` in logical source order, independently of visual x.
+    /// Ends must strictly increase on UTF-8 boundaries, with the final end equal
+    /// to `range.end`. An empty line has no cells; a nonempty line has at least one.
+    /// Invisible source characters remain represented, using zero advance when
+    /// appropriate. A cell may span a shaped cluster or part of a ligature.
+    /// Custom text engines must uphold these invariants when constructing lines.
     pub cells: Vec<TextCell>,
     pub runs: Vec<TextRun>,
+}
+impl TextLine {
+    /// Logical source ranges and their geometry, without allocating range storage.
+    pub fn cells(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (Range<usize>, &TextCell)> + ExactSizeIterator {
+        self.cells
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| (self.cell_range(index).unwrap(), cell))
+    }
+    pub fn cell_at(&self, byte: usize) -> Option<&TextCell> {
+        self.range
+            .contains(&byte)
+            .then(|| {
+                self.cells
+                    .get(self.cells.partition_point(|c| c.end <= byte))
+            })
+            .flatten()
+    }
+    pub fn cell_range(&self, index: usize) -> Option<Range<usize>> {
+        self.cells.get(index).map(|cell| {
+            self.cells
+                .get(index.wrapping_sub(1))
+                .map_or(self.range.start, |c| c.end)..cell.end
+        })
+    }
+
+    /// Caret edges derived from cells without a second per-grapheme allocation.
+    pub fn stops(&self) -> impl Iterator<Item = Stop> + '_ {
+        self.cells
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                let (start, end) = if c.advance.is_sign_negative() {
+                    (c.x + c.width(), c.x)
+                } else {
+                    (c.x, c.x + c.width())
+                };
+                let shared = self.cells.get(i + 1).is_some_and(|next| {
+                    let x = if next.advance.is_sign_negative() {
+                        next.x + next.width()
+                    } else {
+                        next.x
+                    };
+                    (x - end).abs() < 0.01
+                });
+                [
+                    Some(Stop {
+                        caret: Caret::at(self.cell_range(i).unwrap().start),
+                        x: start,
+                    }),
+                    (!shared).then_some(Stop {
+                        caret: Caret {
+                            byte: c.end,
+                            affinity: Affinity::Upstream,
+                        },
+                        x: end,
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .chain(self.cells.is_empty().then_some(Stop {
+                caret: Caret::at(self.range.start),
+                x: 0.,
+            }))
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Paragraph {
     pub text: Arc<str>,
     pub style: TextStyle,
     pub revision: u64,
-    pub service_revision: u64,
+    /// Identity of the text engine metrics used for this paragraph.
+    pub service_revision: TextRevision,
     pub width: Option<f32>,
     pub size: Size,
     pub baseline: f32,
@@ -81,10 +178,9 @@ impl Paragraph {
         let line = self.lines.get(index);
         line.map(|l| {
             Point::new(
-                l.stops
-                    .iter()
+                l.stops()
                     .find(|s| s.caret == caret)
-                    .or_else(|| l.stops.iter().find(|s| s.caret.byte == caret.byte))
+                    .or_else(|| l.stops().find(|s| s.caret.byte == caret.byte))
                     .map_or(l.width, |s| s.x),
                 l.y,
             )
@@ -96,8 +192,7 @@ impl Paragraph {
         self.lines
             .get(index.min(self.lines.len().saturating_sub(1)))
             .and_then(|l| {
-                l.stops
-                    .iter()
+                l.stops()
                     .min_by(|a, b| (a.x - p.x).abs().total_cmp(&(b.x - p.x).abs()))
             })
             .map_or(Caret::at(0), |s| s.caret)
@@ -110,8 +205,7 @@ impl Paragraph {
         };
         let line = &self.lines[index];
         let next = line
-            .stops
-            .iter()
+            .stops()
             .filter(|s| {
                 if right {
                     s.x > point.x + 0.01
@@ -130,7 +224,7 @@ impl Paragraph {
         };
         adjacent
             .and_then(|l| {
-                l.stops.iter().min_by(|a, b| {
+                l.stops().min_by(|a, b| {
                     if right {
                         a.x.total_cmp(&b.x)
                     } else {
@@ -146,7 +240,7 @@ impl Paragraph {
             .iter()
             .find(|l| (l.y - point.y).abs() < 0.1)
             .and_then(|l| {
-                l.stops.iter().min_by(|a, b| {
+                l.stops().min_by(|a, b| {
                     if right {
                         b.x.total_cmp(&a.x)
                     } else {
@@ -169,13 +263,13 @@ impl Paragraph {
             .flat_map(|l| {
                 let mut rects: Vec<Rect> = vec![];
                 let mut cells: Vec<_> = l
-                    .cells
-                    .iter()
-                    .filter(|cell| cell.range.start < range.end && cell.range.end > range.start)
+                    .cells()
+                    .filter(|(cell, _)| cell.start < range.end && cell.end > range.start)
+                    .map(|(_, cell)| cell)
                     .collect();
                 cells.sort_by(|a, b| a.x.total_cmp(&b.x));
                 for cell in cells {
-                    let r = Rect::new(cell.x, l.y, cell.width, self.line_height);
+                    let r = Rect::new(cell.x, l.y, cell.width(), self.line_height);
                     if let Some(last) = rects
                         .last_mut()
                         .filter(|last| (last.x + last.width - r.x).abs() < 0.1)
@@ -190,21 +284,53 @@ impl Paragraph {
             .collect()
     }
 }
-pub struct TextRequest {
+pub struct TextRequest<'a> {
+    /// Optional existing layout owned by the caller. Engines may reuse unchanged
+    /// lines; they must validate text, metrics and wrapping before doing so.
+    /// This borrow does not create a persistent cache or extend its lifetime.
+    pub previous: Option<&'a Paragraph>,
     pub text: Arc<str>,
     pub style: TextStyle,
     pub width: Option<f32>,
     pub revision: u64,
 }
-pub trait TextEngine {
-    fn revision(&self) -> u64 {
-        0
+/// Cache identity for one immutable text-engine metric configuration.
+///
+/// Create a token for each independent configuration and replace it whenever fonts,
+/// shaping policy or other metrics change. Clones of an unchanged configuration may
+/// share its token. Document revisions are independent of this identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TextRevision(u64);
+impl TextRevision {
+    /// Issue a process-unique token without allocating heap storage.
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .expect("text revision tokens exhausted"),
+        )
     }
+}
+impl Default for TextRevision {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+pub trait TextEngine {
+    /// Stable while this engine's metrics are unchanged, and distinct from engines
+    /// with different metrics. Return the same token in [`Paragraph::service_revision`].
+    fn revision(&self) -> TextRevision;
     fn layout(&mut self, request: TextRequest) -> Arc<Paragraph>;
 }
 /// Deterministic metrics for behavioral tests, never substituted for native shaping.
 pub struct TestText;
 impl TextEngine for TestText {
+    fn revision(&self) -> TextRevision {
+        // Every TestText instance has the same immutable metrics. Zero is private.
+        TextRevision(0)
+    }
     fn layout(&mut self, r: TextRequest) -> Arc<Paragraph> {
         let advance = r.style.size * 0.6;
         let height = r.style.size * 1.5;
@@ -223,11 +349,12 @@ impl TextEngine for TestText {
                     width: x,
                     cells: cells(&stops),
                     runs: vec![TextRun {
+                        font: 0,
+                        glyphs: Box::default(),
                         x: 0.,
-                        display: Arc::from(&r.text[start..byte]),
                     }],
-                    stops: std::mem::take(&mut stops),
                 });
+                stops.clear();
                 start = if ch == '\n' { byte + 1 } else { byte };
                 x = 0.;
                 stops.push(Stop {
@@ -250,10 +377,10 @@ impl TextEngine for TestText {
             width: x,
             cells: cells(&stops),
             runs: vec![TextRun {
+                font: 0,
+                glyphs: Box::default(),
                 x: 0.,
-                display: Arc::from(&r.text[start..]),
             }],
-            stops,
         });
         let size = Size::new(
             lines.iter().map(|l| l.width).fold(0., f32::max),
@@ -263,7 +390,7 @@ impl TextEngine for TestText {
             text: r.text,
             style: r.style,
             revision: r.revision,
-            service_revision: 0,
+            service_revision: self.revision(),
             width: r.width,
             size,
             baseline: r.style.size * 1.1,
@@ -277,9 +404,9 @@ fn cells(stops: &[Stop]) -> Vec<TextCell> {
     stops
         .windows(2)
         .map(|w| TextCell {
-            range: w[0].caret.byte..w[1].caret.byte,
+            end: w[1].caret.byte,
             x: w[0].x.min(w[1].x),
-            width: (w[1].x - w[0].x).abs(),
+            advance: w[1].x - w[0].x,
         })
         .collect()
 }

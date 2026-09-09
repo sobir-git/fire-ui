@@ -155,8 +155,9 @@ pub enum SemanticActionKind {
     ReplaceSelectedText,
     ReplaceText,
     SetSelection,
+    ScrollBy,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAction {
     Focus,
     Activate,
@@ -169,6 +170,8 @@ pub enum SemanticAction {
         end: usize,
         text: String,
     },
+    /// Move content by a logical displacement, using the same sign as wheel input.
+    ScrollBy(Point),
     /// UTF-8 byte offsets, preserving selection direction.
     SetSelection {
         anchor: usize,
@@ -184,6 +187,7 @@ impl SemanticAction {
             Self::ReplaceSelectedText(_) => SemanticActionKind::ReplaceSelectedText,
             Self::ReplaceText { .. } => SemanticActionKind::ReplaceText,
             Self::SetSelection { .. } => SemanticActionKind::SetSelection,
+            Self::ScrollBy(_) => SemanticActionKind::ScrollBy,
         }
     }
 }

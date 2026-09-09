@@ -7,7 +7,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            crate_args: ""
+          - os: macos-latest
+            crate_args: "--exclude fire-ui-cairo"
+          - os: windows-latest
+            crate_args: "--exclude fire-ui-cairo"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -16,17 +22,22 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev fonts-dejavu-core
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libcairo2-dev libfreetype6-dev fonts-dejavu-core fonts-wqy-zenhei
       - run: cargo fmt --all --check
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - run: cargo test --workspace ${{ matrix.crate_args }} --locked
+      - run: cargo clippy --workspace ${{ matrix.crate_args }} --locked --all-targets -- -D warnings
       - if: runner.os == 'Linux'
         name: Independent native features
         run: |
-          for features in x11 x11,accessibility x11,inspection x11,clipboard x11,dialogs x11,bitmap-fonts; do
+          for features in x11 x11,accessibility x11,inspection x11,clipboard x11,dialogs; do
             cargo clippy -p fire-ui-native --all-targets --no-default-features --features "$features" --locked -- -D warnings
           done
-      - run: cargo doc --workspace --locked --no-deps
+      - if: runner.os == 'Linux'
+        name: Independent renderer features
+        run: |
+          cargo clippy -p fire-ui-cairo --all-targets --all-features --locked -- -D warnings
+          cargo clippy -p fire-ui-gl --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace ${{ matrix.crate_args }} --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
   package:
@@ -36,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: stable
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libcairo2-dev libfreetype6-dev
       - run: cargo package --workspace --exclude fire-ui-studio --locked
       - uses: actions/upload-artifact@v7
         with:
@@ -51,7 +62,7 @@ jobs:
           toolchain: stable
       - run: >-
           sudo apt-get update && sudo apt-get install -y
-          libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev fonts-dejavu-core
+          libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libcairo2-dev libfreetype6-dev fonts-dejavu-core
           fonts-droid-fallback fonts-noto-color-emoji xvfb xdotool dbus-x11
           ibus ibus-table-cangjie5 orca x11-utils python3-pil
       - run: cargo build --release -p fire-ui-studio --locked
@@ -69,5 +80,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.88.0
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libcairo2-dev libfreetype6-dev
       - run: cargo check --workspace --all-targets --locked

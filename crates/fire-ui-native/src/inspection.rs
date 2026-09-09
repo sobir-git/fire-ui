@@ -33,6 +33,8 @@ pub(crate) struct Request {
     pub caret: Option<usize>,
     pub start: Option<usize>,
     pub end: Option<usize>,
+    pub x: Option<f32>,
+    pub y: Option<f32>,
 }
 pub(crate) struct Pending {
     pub request: Request,
@@ -80,6 +82,10 @@ pub(crate) fn apply<W: Widget>(ui: &mut Ui<W>, r: &Request) -> Result<(), String
             end: r.end.ok_or("action requires end")?,
             text: value()?,
         },
+        "scroll_by" => SemanticAction::ScrollBy(Point::new(
+            r.x.ok_or("action requires x")?,
+            r.y.ok_or("action requires y")?,
+        )),
         "set_selection" => SemanticAction::SetSelection {
             anchor: r.anchor.ok_or("action requires anchor")?,
             caret: r.caret.ok_or("action requires caret")?,
@@ -98,6 +104,7 @@ pub(crate) fn snapshot<W: Widget>(ui: &Ui<W>) -> Value {
             SemanticActionKind::ReplaceSelectedText => "replace_selected_text",
             SemanticActionKind::ReplaceText => "replace_text",
             SemanticActionKind::SetSelection => "set_selection",
+            SemanticActionKind::ScrollBy => "scroll_by",
         }).collect();
         if n.focusable && !actions.contains(&"focus") { actions.push("focus"); }
         if s.disabled { actions.clear(); }

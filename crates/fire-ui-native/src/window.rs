@@ -1,17 +1,7 @@
-use crate::{GlPainter, NativeText};
-use femtovg::{renderer::OpenGl, Canvas};
+use crate::{Renderer, RendererFactory};
 use fire_ui::*;
-use glutin::{
-    config::ConfigTemplateBuilder,
-    context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentContext},
-    display::GetGlDisplay,
-    prelude::*,
-    surface::{Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface},
-};
-use glutin_winit::DisplayBuilder;
 use raw_window_handle::HasWindowHandle;
 use std::{
-    num::NonZeroU32,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -34,12 +24,6 @@ pub struct WindowOptions {
     pub overlay: bool,
     pub min_size: Size,
     pub position: Option<(i32, i32)>,
-    /// Primary font file. None loads no font; text requires an explicit face.
-    pub font: Option<std::path::PathBuf>,
-    /// Ordered fallback faces for characters missing from the primary font.
-    pub fallback_fonts: Vec<std::path::PathBuf>,
-    /// Retain a window image to repaint only damage, trading graphics memory for CPU.
-    pub partial_repaint: bool,
     pub size: Size,
     pub background: Color,
     pub limits: Limits,
@@ -52,9 +36,6 @@ impl Default for WindowOptions {
             overlay: false,
             min_size: Size::new(420., 360.),
             position: None,
-            font: None,
-            fallback_fonts: vec![],
-            partial_repaint: false,
             size: Size::new(1100., 780.),
             background: Color::hex(0x171918),
             limits: Limits::default(),
@@ -182,7 +163,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
         }
     }
 }
-// Drop GPU resources before the context and window.
+// Drop drawing and text resources before their native window.
 struct State<W: Widget> {
     #[cfg(feature = "accessibility")]
     accessibility: crate::platform_accessibility::Adapter,
@@ -190,20 +171,16 @@ struct State<W: Widget> {
     accessibility_tree: crate::accessibility::AccessibilityTree,
     #[cfg(feature = "accessibility")]
     semantic_revision: Option<u64>,
-    canvas: Canvas<OpenGl>,
-    backing: Option<femtovg::ImageId>,
-    partial_repaint: bool,
-    presenter: Option<crate::present::Presenter>,
-    text: NativeText,
+    renderer: Box<dyn Renderer>,
+    text: Box<dyn TextEngine>,
     ui: Ui<W>,
-    surface: Surface<WindowSurface>,
-    context: PossiblyCurrentContext,
-    window: Window,
-    surface_size: (u32, u32),
+    window: Arc<Window>,
     occluded: bool,
     resize_at: Option<Instant>,
 }
-struct Host<W: Widget, F> {
+struct Host<W: Widget, F, R> {
+    factory: Option<R>,
+    text: Option<Box<dyn TextEngine>>,
     root: Option<Element<W>>,
     options: WindowOptions,
     state: Option<State<W>>,
@@ -225,12 +202,19 @@ struct Host<W: Widget, F> {
     profile: bool,
     pending_posts: std::collections::VecDeque<Pending<W>>,
 }
-pub fn run<W: Widget>(root: Element<W>, options: WindowOptions) -> Result<(), String> {
-    run_with(root, options, |_, _| {})
+pub fn run<W: Widget>(
+    root: Element<W>,
+    options: WindowOptions,
+    text: impl TextEngine + 'static,
+    renderer: impl RendererFactory,
+) -> Result<(), String> {
+    run_with(root, options, text, renderer, |_, _| {})
 }
 pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
     root: Element<W>,
     options: WindowOptions,
+    text: impl TextEngine + 'static,
+    renderer: impl RendererFactory,
     output: F,
 ) -> Result<(), String> {
     let event_loop = EventLoop::<HostEvent>::with_user_event()
@@ -254,6 +238,8 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         None
     };
     let mut host = Host {
+        factory: Some(renderer),
+        text: Some(Box::new(text)),
         root: Some(root),
         options,
         state: None,
@@ -281,7 +267,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
     result.map_err(|e| e.to_string())?;
     host.error.map_or(Ok(()), Err)
 }
-impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
+impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W, F, R> {
     fn service(&mut self) {
         let Some(s) = &mut self.state else { return };
         let now = self.start.elapsed();
@@ -380,7 +366,29 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
                 }
             }
         }
-        s.ui.layout(&mut s.text);
+        #[cfg(all(feature = "accessibility", target_os = "linux"))]
+        s.accessibility
+            .synchronize(s.ui.layout_pending(s.text.as_ref()), |active| {
+                s.ui.layout(s.text.as_mut());
+                let revision = s.ui.semantic_revision();
+                if !active || s.semantic_revision == Some(revision) {
+                    return None;
+                }
+                let started = Instant::now();
+                let source = s.ui.semantics();
+                let snapshots =
+                    crate::linux_atspi::text::snapshots(&source, s.window.scale_factor());
+                let tree =
+                    s.accessibility_tree
+                        .tree(source, &self.options.title, s.window.scale_factor());
+                if self.profile {
+                    eprintln!("accessibility_update_us={}", started.elapsed().as_micros());
+                }
+                s.semantic_revision = Some(revision);
+                Some((tree, snapshots))
+            });
+        #[cfg(not(all(feature = "accessibility", target_os = "linux")))]
+        s.ui.layout(s.text.as_mut());
         let edge = if !self.options.decorations {
             resize_edge(self.pointer, s.ui.size())
         } else {
@@ -405,10 +413,11 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
             self.cursor = Some(cursor);
         }
 
-        #[cfg(feature = "accessibility")]
+        #[cfg(all(feature = "accessibility", not(target_os = "linux")))]
         {
             let revision = s.ui.semantic_revision();
             if s.semantic_revision != Some(revision) {
+                let started = Instant::now();
                 s.accessibility.update_if_active(|| {
                     s.accessibility_tree.tree(
                         s.ui.semantics(),
@@ -416,6 +425,9 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
                         s.window.scale_factor(),
                     )
                 });
+                if self.profile {
+                    eprintln!("accessibility_update_us={}", started.elapsed().as_micros());
+                }
                 s.semantic_revision = Some(revision);
             }
         }
@@ -452,7 +464,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
     fn input(&mut self, input: Input) {
         if let Some(s) = &mut self.state {
             s.ui.advance(self.start.elapsed(), 128);
-            s.ui.dispatch(input, &mut s.text);
+            s.ui.dispatch(input, s.text.as_mut());
         }
         self.service();
     }
@@ -465,7 +477,9 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> Host<W, F> {
         }
     }
 }
-impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEvent> for Host<W, F> {
+impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
+    ApplicationHandler<HostEvent> for Host<W, F, R>
+{
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -474,6 +488,8 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
             event_loop,
             &self.options,
             self.root.take().unwrap(),
+            self.text.take().unwrap(),
+            self.factory.take().unwrap(),
             #[cfg(feature = "accessibility")]
             self.wake.proxy.clone(),
         ) {
@@ -538,9 +554,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                 } = pending.operation
                 {
                     #[cfg(not(feature = "clipboard"))]
-                    let _ = pending
-                        .reply
-                        .try_send(Err("native clipboard feature is disabled".into()));
+                    pending.complete(Err("native clipboard feature is disabled".into()));
                     #[cfg(feature = "clipboard")]
                     {
                         let prepared = self
@@ -565,7 +579,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                                 });
                             }
                             Err(error) => {
-                                let _ = pending.reply.try_send(Err(error));
+                                pending.complete(Err(error));
                             }
                         }
                     }
@@ -588,7 +602,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                             })
                         });
                     self.service();
-                    let _ = pending.reply.try_send(result);
+                    pending.complete(result);
                 }
             }
             #[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
@@ -617,7 +631,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                     })
                 });
                 self.service();
-                let _ = pending.reply.try_send(result);
+                pending.complete(result);
             }
             #[cfg(feature = "accessibility")]
             HostEvent::Accessibility(event) => {
@@ -628,7 +642,6 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                     match event.window_event {
                         accesskit_winit::WindowEvent::InitialTreeRequested => {
                             s.semantic_revision = None;
-                            s.accessibility_tree.reset();
                         }
                         accesskit_winit::WindowEvent::ActionRequested(request) => {
                             if let Some(action) = s
@@ -640,7 +653,6 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>)> ApplicationHandler<HostEven
                         }
                         accesskit_winit::WindowEvent::AccessibilityDeactivated => {
                             s.semantic_revision = None;
-                            s.accessibility_tree.reset();
                         }
                     }
                 }
@@ -914,6 +926,8 @@ fn create<W: Widget>(
     event_loop: &ActiveEventLoop,
     options: &WindowOptions,
     root: Element<W>,
+    text: Box<dyn TextEngine>,
+    factory: impl RendererFactory,
     #[cfg(feature = "accessibility")] proxy: EventLoopProxy<HostEvent>,
 ) -> Result<State<W>, String> {
     let attrs = Window::default_attributes()
@@ -945,22 +959,7 @@ fn create<W: Widget>(
     } else {
         attrs
     };
-    let (window, config) = DisplayBuilder::new()
-        .with_window_attributes(Some(attrs))
-        .build(
-            event_loop,
-            ConfigTemplateBuilder::new()
-                .with_alpha_size(8)
-                .with_stencil_size(8)
-                .with_depth_size(0),
-            |configs| {
-                configs
-                    .min_by_key(|c| (c.num_samples(), c.depth_size()))
-                    .expect("GL config")
-            },
-        )
-        .map_err(|e| e.to_string())?;
-    let window = window.ok_or("Window creation failed")?;
+    let (window, renderer) = factory.create(event_loop, attrs)?;
     #[cfg(feature = "accessibility")]
     let accessibility =
         crate::platform_accessibility::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
@@ -976,41 +975,6 @@ fn create<W: Widget>(
             .map_err(|e| e.to_string())?;
     }
     window.set_visible(true);
-    let display = config.display();
-    let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
-    let attrs = ContextAttributesBuilder::new().build(Some(handle));
-    let fallback = ContextAttributesBuilder::new()
-        .with_context_api(ContextApi::Gles(None))
-        .build(Some(handle));
-    // SAFETY: these handles belong to the live window; the GL context stays on this UI thread.
-    let context = unsafe {
-        display
-            .create_context(&config, &attrs)
-            .or_else(|_| display.create_context(&config, &fallback))
-    }
-    .map_err(|e| e.to_string())?;
-    let size = window.inner_size();
-    let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        handle,
-        NonZeroU32::new(size.width.max(1)).unwrap(),
-        NonZeroU32::new(size.height.max(1)).unwrap(),
-    );
-    let surface =
-        unsafe { display.create_window_surface(&config, &attrs) }.map_err(|e| e.to_string())?;
-    let context = context.make_current(&surface).map_err(|e| e.to_string())?;
-    let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
-    let renderer = unsafe { OpenGl::new_from_function_cstr(|name| display.get_proc_address(name)) }
-        .map_err(|e| e.to_string())?;
-    let mut text = if let Some(path) = &options.font {
-        NativeText::with_font(path)?
-    } else {
-        NativeText::empty()
-    };
-    for path in &options.fallback_fonts {
-        text.add_font(path)?;
-    }
-    let canvas =
-        Canvas::new_with_text_context(renderer, text.context.clone()).map_err(|e| e.to_string())?;
     let mut ui = Ui::new(root, options.size, options.limits)
         .map_err(|e| format!("UI admission failed: {e:?}"))?;
     ui.set_clipboard_enabled(cfg!(feature = "clipboard"));
@@ -1018,173 +982,32 @@ fn create<W: Widget>(
         #[cfg(feature = "accessibility")]
         accessibility,
         #[cfg(feature = "accessibility")]
-        accessibility_tree: Default::default(),
+        accessibility_tree: crate::accessibility::AccessibilityTree::new(!cfg!(
+            target_os = "linux"
+        )),
         #[cfg(feature = "accessibility")]
         semantic_revision: None,
-        canvas,
-        backing: None,
-        partial_repaint: options.partial_repaint,
-        presenter: if options.partial_repaint {
-            unsafe { crate::present::Presenter::new(|name| display.get_proc_address(name)) }
-        } else {
-            None
-        },
+        renderer,
         text,
         ui,
-        surface,
-        context,
         window,
-        surface_size: (size.width, size.height),
         occluded: false,
         resize_at: None,
     })
 }
 fn render<W: Widget>(s: &mut State<W>, background: Color, profile: bool) -> Result<(), String> {
-    if s.text.fonts.is_empty() && s.text.layouts != 0 {
-        return Err("Text requires a font; set WindowOptions::font or fallback_fonts".into());
-    }
-    let size = s.window.inner_size();
-    if size.width == 0 || size.height == 0 {
-        return Ok(());
-    }
-    if s.surface_size != (size.width, size.height) {
-        s.surface.resize(
-            &s.context,
-            NonZeroU32::new(size.width).unwrap(),
-            NonZeroU32::new(size.height).unwrap(),
-        );
-        s.surface_size = (size.width, size.height);
-        if let Some(image) = s.backing.take() {
-            s.canvas.delete_image(image);
-        }
-        s.ui.repaint();
-    }
-    s.canvas.set_size(size.width, size.height, 1.);
-    if s.partial_repaint {
-        if s.backing.is_none() {
-            s.backing = Some(
-                s.canvas
-                    .create_image_empty(
-                        size.width as usize,
-                        size.height as usize,
-                        femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::FLIP_Y
-                            | femtovg::ImageFlags::PREMULTIPLIED
-                            | femtovg::ImageFlags::NEAREST,
-                    )
-                    .map_err(|e| e.to_string())?,
-            );
-            s.ui.repaint();
-        }
-        let backing = s.backing.unwrap();
-        let scale = s.window.scale_factor() as f32;
-        if let Some(damage) = s.ui.paint_damage() {
-            // Round outwards and include antialiasing at the damage edge.
-            let x = (damage.x * scale - 2.).floor().max(0.);
-            let y = (damage.y * scale - 2.).floor().max(0.);
-            let right = ((damage.x + damage.width) * scale + 2.)
-                .ceil()
-                .min(size.width as f32);
-            let bottom = ((damage.y + damage.height) * scale + 2.)
-                .ceil()
-                .min(size.height as f32);
-            let region = Rect::new(
-                x / scale,
-                y / scale,
-                (right - x) / scale,
-                (bottom - y) / scale,
-            );
-            s.canvas
-                .set_render_target(femtovg::RenderTarget::Image(backing));
-            s.canvas.reset();
-            s.canvas.clear_rect(
-                x as u32,
-                y as u32,
-                (right - x) as u32,
-                (bottom - y) as u32,
-                femtovg::Color::rgbaf(background.0, background.1, background.2, background.3),
-            );
-            s.canvas.scale(scale, scale);
-            s.ui.paint_region(
-                &mut GlPainter::new(
-                    &mut s.canvas,
-                    &s.text,
-                    Rect::new(0., 0., size.width as f32, size.height as f32),
-                ),
-                region,
-            );
-            if profile {
-                eprintln!("paint_area_pixels={}", (right - x) * (bottom - y));
+    let damage = s.ui.paint_damage();
+    s.renderer
+        .render(&s.window, background, damage, &mut |painter, region| {
+            if let Some(region) = region {
+                s.ui.paint_region(painter, region);
+            } else {
+                s.ui.paint(painter);
             }
-        }
-        s.canvas.set_render_target(femtovg::RenderTarget::Screen);
-        if let Some(presenter) = &s.presenter {
-            s.canvas.flush();
-            presenter.copy(
-                s.canvas
-                    .get_native_texture(backing)
-                    .map_err(|e| e.to_string())?,
-                size.width,
-                size.height,
-            )?;
-        } else {
-            s.canvas.reset();
-            s.canvas.clear_rect(
-                0,
-                0,
-                size.width,
-                size.height,
-                femtovg::Color::rgba(0, 0, 0, 0),
-            );
-            s.canvas
-                .global_composite_operation(femtovg::CompositeOperation::Copy);
-            let mut path = femtovg::Path::new();
-            path.rect(0., 0., size.width as f32, size.height as f32);
-            s.canvas.fill_path(
-                &path,
-                &femtovg::Paint::image(
-                    backing,
-                    0.,
-                    0.,
-                    size.width as f32,
-                    size.height as f32,
-                    0.,
-                    1.,
-                ),
-            );
-            s.canvas.flush();
-        }
-    } else {
-        s.canvas.set_render_target(femtovg::RenderTarget::Screen);
-        s.canvas.reset();
-        s.canvas.clear_rect(
-            0,
-            0,
-            size.width,
-            size.height,
-            femtovg::Color::rgbaf(background.0, background.1, background.2, background.3),
-        );
-        let scale = s.window.scale_factor() as f32;
-        s.canvas.scale(scale, scale);
-        s.ui.paint(&mut GlPainter::new(
-            &mut s.canvas,
-            &s.text,
-            Rect::new(0., 0., size.width as f32, size.height as f32),
-        ));
-        s.canvas.flush();
-        if profile {
-            eprintln!(
-                "paint_area_pixels={}",
-                size.width as u64 * size.height as u64
-            );
-        }
-    }
-    s.surface
-        .swap_buffers(&s.context)
-        .map_err(|e| e.to_string())?;
+        })?;
     if let Some(start) = s.resize_at.take() {
         if profile {
-            eprintln!("resize_frame_us={}", start.elapsed().as_micros())
+            eprintln!("resize_frame_us={}", start.elapsed().as_micros());
         }
     }
     Ok(())

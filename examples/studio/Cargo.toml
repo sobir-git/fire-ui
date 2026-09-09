@@ -7,6 +7,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+fire-ui-fonts.workspace = true
 fire-ui.workspace = true
 fire-ui-widgets.workspace = true
-fire-ui-native = { workspace = true, features = ["accessibility", "inspection", "clipboard", "bitmap-fonts"] }
+fire-ui-native = { workspace = true, features = ["accessibility", "inspection", "clipboard"] }
+
+fire-ui-gl = { workspace = true, features = ["bitmap-fonts"] }
+fire-ui-text.workspace = true

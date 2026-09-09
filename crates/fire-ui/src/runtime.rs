@@ -923,14 +923,23 @@ impl<W: Widget> Ui<W> {
             self.repaint()
         }
     }
-    pub fn layout(&mut self, text: &mut dyn TextEngine) {
-        // Clean input and paint passes do not traverse the ownership tree.
-        if self.tree.get(self.root).is_some_and(|n| {
+    /// Whether the next [`Self::layout`] call will update layout and semantics.
+    ///
+    /// Includes pending geometry changes and the text engine's current revision.
+    /// Hosts can use this to release snapshots before layout allocates replacement
+    /// geometry. The answer remains valid until the UI or text engine changes.
+    pub fn layout_pending(&self, text: &dyn TextEngine) -> bool {
+        !self.tree.get(self.root).is_some_and(|n| {
             !n.dirty
                 && !n.geometry_dirty
                 && n.cache
                     .is_some_and(|(_, revision, _)| revision == text.revision())
-        }) {
+        })
+    }
+
+    pub fn layout(&mut self, text: &mut dyn TextEngine) {
+        // Clean input and paint passes do not traverse the ownership tree.
+        if !self.layout_pending(text) {
             return;
         }
 
@@ -1443,6 +1452,11 @@ impl<W: Widget> Ui<W> {
         {
             return Err(SemanticError::Unsupported);
         }
+        if let SemanticAction::ScrollBy(delta) = &action {
+            if !delta.x.is_finite() || !delta.y.is_finite() {
+                return Err(SemanticError::InvalidValue);
+            }
+        }
         if let SemanticAction::SetSelection { anchor, caret } = &action {
             semantics.text.as_ref().ok_or(SemanticError::Unsupported)?;
             let value = semantics.value.as_deref().unwrap_or("");
@@ -1485,5 +1499,58 @@ impl<W: Widget> Drop for Ui<W> {
     fn drop(&mut self) {
         // Closing a host has the same cancellation and lifecycle guarantees as subtree removal.
         self.retire(self.root);
+    }
+}
+
+#[cfg(test)]
+mod layout_pending_tests {
+    use super::*;
+    use crate::{Paragraph, TestText, TextRequest};
+    use std::sync::Arc;
+
+    struct Empty;
+    impl Widget for Empty {
+        type Command = ();
+        type Output = ();
+    }
+    struct RevisionText(TextRevision);
+    impl TextEngine for RevisionText {
+        fn revision(&self) -> TextRevision {
+            self.0
+        }
+        fn layout(&mut self, request: TextRequest) -> Arc<Paragraph> {
+            let mut paragraph = TestText.layout(request);
+            Arc::make_mut(&mut paragraph).service_revision = self.0;
+            paragraph
+        }
+    }
+
+    #[test]
+    fn layout_pending_tracks_geometry_and_text_revision_without_publishing() {
+        let mut ui = Ui::new(
+            Element::leaf(Empty),
+            Size::new(300., 140.),
+            Limits::default(),
+        )
+        .unwrap();
+        ui.pump(100, |_| {}, |_| {});
+        let mut text = RevisionText(TextRevision::new());
+        assert!(ui.layout_pending(&text));
+        let before = ui.semantic_revision();
+        assert!(ui.layout_pending(&text));
+        assert_eq!(ui.semantic_revision(), before);
+        ui.layout(&mut text);
+        assert!(!ui.layout_pending(&text));
+        let clean = ui.semantic_revision();
+        ui.layout(&mut text);
+        assert_eq!(ui.semantic_revision(), clean);
+        ui.resize(Size::new(320., 140.));
+        assert!(ui.layout_pending(&text));
+        ui.layout(&mut text);
+        assert!(!ui.layout_pending(&text));
+        text.0 = TextRevision::new();
+        assert!(ui.layout_pending(&text));
+        ui.layout(&mut text);
+        assert!(!ui.layout_pending(&text));
     }
 }

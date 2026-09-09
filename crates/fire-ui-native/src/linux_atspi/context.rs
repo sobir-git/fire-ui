@@ -11,7 +11,7 @@ use atspi::proxy::bus::StatusProxy;
 
 use futures_util::{pin_mut as pin, select, StreamExt};
 use std::{
-    sync::{Arc, Mutex, OnceLock, RwLock},
+    sync::{Arc, OnceLock, RwLock},
     thread,
 };
 
@@ -69,12 +69,12 @@ struct AdapterEntry {
     id: usize,
     activation_handler: Box<dyn ActivationHandler>,
     deactivation_handler: Box<dyn DeactivationHandler>,
-    state: Arc<Mutex<AdapterState>>,
+    state: Arc<async_lock::Mutex<AdapterState>>,
     edits: EditDispatcher,
 }
 
-fn activate_adapter(entry: &mut AdapterEntry) {
-    let mut state = entry.state.lock().unwrap();
+async fn activate_adapter(entry: &mut AdapterEntry) {
+    let mut state = entry.state.lock().await;
     if let AdapterState::Inactive {
         is_window_focused,
         root_window_bounds,
@@ -103,8 +103,10 @@ fn activate_adapter(entry: &mut AdapterEntry) {
     }
 }
 
-fn deactivate_adapter(entry: &mut AdapterEntry) {
-    let mut state = entry.state.lock().unwrap();
+async fn deactivate_adapter(entry: &mut AdapterEntry) {
+    let mut state = entry.state.lock().await;
+    let mut text = entry.edits.text.write().await;
+    text.clear();
     match &*state {
         AdapterState::Inactive { .. } => (),
         AdapterState::Pending {
@@ -148,13 +150,13 @@ async fn bus_after_status_change(
     }
 }
 
-fn sync_adapters(adapters: &mut [AdapterEntry], atspi_bus: &Option<Bus>) {
+async fn sync_adapters(adapters: &mut [AdapterEntry], atspi_bus: &Option<Bus>) {
     let active = atspi_bus.is_some();
     for entry in adapters {
         if active {
-            activate_adapter(entry);
+            activate_adapter(entry).await;
         } else {
-            deactivate_adapter(entry);
+            deactivate_adapter(entry).await;
         }
     }
 }
@@ -189,7 +191,7 @@ async fn run_event_loop(
         select! {
             change = changes.next() => {
                 atspi_bus = bus_after_status_change(change, &session_bus, executor).await?;
-                sync_adapters(&mut adapters, &atspi_bus);
+                sync_adapters(&mut adapters, &atspi_bus).await;
 
             }
             message = messages.next() => {
@@ -223,7 +225,7 @@ async fn process_adapter_message(
             });
             if atspi_bus.is_some() {
                 let entry = adapters.last_mut().unwrap();
-                activate_adapter(entry);
+                activate_adapter(entry).await;
             }
         }
         Message::RemoveAdapter { id } => {

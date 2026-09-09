@@ -13,6 +13,16 @@ use zbus::fdo;
 #[derive(Debug)]
 pub(crate) enum Operation {
     Set(String),
+    Select {
+        anchor: i32,
+        caret: i32,
+        require_empty: bool,
+    },
+    ClearSelection,
+    Scroll {
+        x: f32,
+        y: f32,
+    },
     Insert {
         position: i32,
         text: String,
@@ -46,6 +56,15 @@ pub(crate) struct PendingEdit {
     outstanding: Arc<AtomicBool>,
 }
 
+impl PendingEdit {
+    /// Release the queue slot before waking the client for its next request.
+    pub(crate) fn complete(self, result: Result<(), String>) {
+        let reply = self.reply.clone();
+        drop(self);
+        let _ = reply.try_send(result);
+    }
+}
+
 impl Drop for PendingEdit {
     fn drop(&mut self) {
         self.outstanding.store(false, Ordering::Release);
@@ -58,6 +77,7 @@ pub(crate) type EditHandler = Arc<dyn Fn(PendingEdit) + Send + Sync>;
 pub(crate) struct EditDispatcher {
     handler: EditHandler,
     outstanding: Arc<AtomicBool>,
+    pub(super) text: Arc<async_lock::RwLock<super::text::TextSnapshots>>,
 }
 
 impl fmt::Debug for EditDispatcher {
@@ -70,6 +90,7 @@ impl EditDispatcher {
     pub(super) fn new(handler: EditHandler) -> Self {
         Self {
             handler,
+            text: Default::default(),
             outstanding: Arc::new(AtomicBool::new(false)),
         }
     }

@@ -324,17 +324,21 @@ impl Widget for Studio {
 }
 
 fn main() -> Result<(), String> {
+    let mut paths =
+        vec![fire_ui_text::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?];
+    paths.extend(fallback_fonts());
+    let fonts = fire_ui_fonts::Fonts::load(&paths)?;
     fire_ui_native::run_with(
         Studio::new(),
         fire_ui_native::WindowOptions {
             title: "Fire UI Studio".into(),
-            font: Some(
-                fire_ui_native::system_font().ok_or("Studio requires a font; set FIRE_UI_FONT")?,
-            ),
-            fallback_fonts: fallback_fonts(),
-            partial_repaint: true,
             size: Size::new(1180., 860.),
             ..fire_ui_native::WindowOptions::default()
+        },
+        fire_ui_text::Text::new(fonts.clone())?,
+        fire_ui_gl::OpenGl {
+            fonts,
+            partial_repaint: true,
         },
         |status, _| println!("{status}"),
     )

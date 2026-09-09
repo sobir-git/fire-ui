@@ -1,6 +1,6 @@
 use crate::{theme, Theme};
 use fire_ui::*;
-use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::Arc, time::Duration};
 use unicode_segmentation::UnicodeSegmentation;
 /// Storage adapters own text; editing and rendering share versioned paragraph snapshots.
 pub trait Document: 'static {
@@ -100,8 +100,16 @@ impl Data for EditorOutput {
 }
 struct Undo {
     start: usize,
-    removed: String,
-    inserted: String,
+    removed_len: usize,
+    text: Box<str>,
+}
+impl Undo {
+    fn removed(&self) -> &str {
+        &self.text[..self.removed_len]
+    }
+    fn inserted(&self) -> &str {
+        &self.text[self.removed_len..]
+    }
 }
 /// Geometry in paragraph coordinates, shared by editing and optional decoration layers.
 pub struct EditorView<'a> {
@@ -131,15 +139,17 @@ pub struct Editor<D: Document = StringDocument> {
     caret: Caret,
     anchor: Option<usize>,
     paragraph: Option<Arc<Paragraph>>,
+    // Shared by output consumers and layout; hidden editors retain no extra text owner.
+    snapshot: Option<(u64, Arc<str>)>,
+    visible: bool,
     theme: Theme,
     scroll: Point,
     wrap: bool,
     multiline: bool,
     placeholder: Arc<str>,
     placeholder_layout: Option<Arc<Paragraph>>,
-    undo: VecDeque<Undo>,
+    undo: Vec<Undo>,
     redo: Vec<Undo>,
-    history_bytes: usize,
     blink: Timer,
     caret_on: bool,
     caret_blink: bool,
@@ -188,15 +198,16 @@ impl<D: Document> Editor<D> {
             caret: Caret::at(0),
             anchor: None,
             paragraph: None,
+            snapshot: None,
+            visible: true,
             theme: Theme::default(),
             scroll: Point::default(),
             wrap: true,
             multiline: true,
             placeholder: Arc::from(""),
             placeholder_layout: None,
-            undo: VecDeque::new(),
+            undo: Vec::new(),
             redo: vec![],
-            history_bytes: 0,
             blink: Timer::new(),
             caret_on: true,
             caret_blink: true,
@@ -389,9 +400,8 @@ impl<D: Document> Editor<D> {
             .map_or(self.text().len(), |(i, s)| self.caret.byte + i + s.len())
     }
     fn replace(&mut self, range: Range<usize>, text: &str) {
-        let removed = self.text()[range.clone()].to_string();
         let inserted = text.replace('\r', "");
-        let inserted = if self.multiline {
+        let mut inserted = if self.multiline {
             inserted
         } else {
             inserted.replace('\n', " ")
@@ -401,29 +411,18 @@ impl<D: Document> Editor<D> {
             self.limit_reached = true;
             return;
         }
-        self.document.replace(range.clone(), &inserted);
-        self.caret = Caret::at(self.boundary(range.start + inserted.len()));
-        self.anchor = None;
-        self.history_bytes += removed.len() + inserted.len();
-        for e in self.redo.drain(..) {
-            self.history_bytes = self
-                .history_bytes
-                .saturating_sub(e.removed.len() + e.inserted.len())
-        }
-        self.undo.push_back(Undo {
+        let removed_len = range.len();
+        inserted.insert_str(0, &self.text()[range.clone()]);
+        let edit = Undo {
             start: range.start,
-            removed,
-            inserted,
-        });
-        while self.undo.len() > 256 || self.history_bytes > 2 * 1024 * 1024 {
-            if let Some(e) = self.undo.pop_front() {
-                self.history_bytes = self
-                    .history_bytes
-                    .saturating_sub(e.removed.len() + e.inserted.len())
-            } else {
-                break;
-            }
-        }
+            removed_len,
+            text: inserted.into_boxed_str(),
+        };
+        self.document.replace(range, edit.inserted());
+        self.caret = Caret::at(self.boundary(edit.start + edit.inserted().len()));
+        self.anchor = None;
+        self.redo.clear();
+        self.undo.push(edit);
     }
     fn insert(&mut self, text: &str) {
         self.replace(
@@ -471,14 +470,14 @@ impl<D: Document> Editor<D> {
         if redo {
             if let Some(e) = self.redo.pop() {
                 self.document
-                    .replace(e.start..e.start + e.removed.len(), &e.inserted);
-                self.caret = Caret::at(self.boundary(e.start + e.inserted.len()));
-                self.undo.push_back(e)
+                    .replace(e.start..e.start + e.removed().len(), e.inserted());
+                self.caret = Caret::at(self.boundary(e.start + e.inserted().len()));
+                self.undo.push(e)
             }
-        } else if let Some(e) = self.undo.pop_back() {
+        } else if let Some(e) = self.undo.pop() {
             self.document
-                .replace(e.start..e.start + e.inserted.len(), &e.removed);
-            self.caret = Caret::at(self.boundary(e.start + e.removed.len()));
+                .replace(e.start..e.start + e.inserted().len(), e.removed());
+            self.caret = Caret::at(self.boundary(e.start + e.removed().len()));
             self.redo.push(e)
         }
         self.anchor = None;
@@ -498,6 +497,18 @@ impl<D: Document> Editor<D> {
         }
         cx.repaint()
     }
+    fn text_snapshot(&mut self) -> Arc<str> {
+        let revision = self.document.revision();
+        if let Some((cached_revision, text)) = &self.snapshot {
+            if *cached_revision == revision {
+                return text.clone();
+            }
+        }
+        self.snapshot = None;
+        let text: Arc<str> = Arc::from(self.text());
+        self.snapshot = self.visible.then(|| (revision, text.clone()));
+        text
+    }
     fn changed(&mut self, cx: &mut Update<'_, Self>, before: u64) {
         if std::mem::take(&mut self.limit_reached) {
             let _ = cx.emit(EditorOutput::LimitReached);
@@ -509,7 +520,7 @@ impl<D: Document> Editor<D> {
         if self.document.revision() != before {
             let _ = cx.emit(EditorOutput::Changed {
                 revision: self.document.revision(),
-                text: Arc::from(self.text()),
+                text: self.text_snapshot(),
             });
             cx.relayout()
         }
@@ -591,7 +602,6 @@ impl<D: Document> Widget for Editor<D> {
                 self.anchor = None;
                 self.undo.clear();
                 self.redo.clear();
-                self.history_bytes = 0;
                 self.scroll = Point::default();
                 self.reveal_pending = true;
                 self.clear_preedit();
@@ -684,6 +694,9 @@ impl<D: Document> Widget for Editor<D> {
         true
     }
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if let Lifecycle::Visibility(visible) = event {
+            self.visible = visible;
+        }
         match event {
             Lifecycle::Focus(true) => {
                 let _ = cx.emit(EditorOutput::FocusChanged(true));
@@ -696,10 +709,19 @@ impl<D: Document> Widget for Editor<D> {
                 if event == Lifecycle::Focus(false) {
                     let _ = cx.emit(EditorOutput::FocusChanged(false));
                 }
+                if event == Lifecycle::Visibility(false) || event == Lifecycle::Unmount {
+                    self.paragraph = None;
+                    self.snapshot = None;
+                    self.composition_layout = None;
+                    cx.relayout();
+                }
                 self.drag = None;
                 self.clear_preedit();
                 cx.cancel_timer(self.blink);
                 cx.repaint()
+            }
+            Lifecycle::Visibility(true) => {
+                cx.relayout();
             }
             Lifecycle::CaptureLost(pointer) => {
                 if self.drag == Some(pointer) {
@@ -730,47 +752,76 @@ impl<D: Document> Widget for Editor<D> {
         };
         let inset = self.insets();
         let revision = self.document.revision();
+        let wrapping = self.wrap && self.multiline;
         let content_width = |strip: f32| {
-            (self.wrap && self.multiline)
+            wrapping
                 .then_some((c.max.width - 2. * inset.x - strip).max(0.))
                 .filter(|w| w.is_finite())
         };
         // A bar takes its own strip so text wraps beside it rather than under it.
-        // Whether one is needed depends on the wrapped height, so the text is laid
-        // out once at the full width to find out, then again beside the bar.
-        self.strip = 0.;
-        if self.multiline && c.max.height.is_finite() {
-            let probe = cx.paragraph(TextRequest {
-                text: Arc::from(self.text()),
+        // Only ambiguous overflow needs both widths; existing layouts can supply
+        // unchanged lines while the text service recalculates the edited ones.
+        let valid = self.paragraph.as_ref().is_some_and(|p| {
+            p.revision == revision
+                && p.style == style
+                && p.service_revision == cx.text_revision()
+                && p.width == content_width(self.strip)
+                && ((!self.multiline || !c.max.height.is_finite())
+                    || ((p.size.height + 2. * inset.y > c.max.height) == (self.strip > 0.)))
+        });
+        if !valid {
+            let previous = self.paragraph.take();
+            let text = self.text_snapshot();
+            // Start beside an existing scrollbar. If the hard line breaks alone
+            // overflow, widening cannot remove it and a second layout is wasteful.
+            let mut paragraph = cx.paragraph(TextRequest {
+                previous: previous.as_deref(),
+                text: text.clone(),
                 style,
-                width: content_width(0.),
+                width: content_width(self.strip),
                 revision,
             });
-            if probe.size.height + 2. * inset.y > c.max.height {
-                self.strip = crate::Scrollbar::width(&self.theme)
+            drop(previous);
+            let hard_lines = text.bytes().filter(|b| *b == b'\n').count() + 1;
+            let definitely_overflows =
+                hard_lines as f32 * paragraph.line_height + 2. * inset.y > c.max.height;
+            if self.strip > 0. && (!self.multiline || !definitely_overflows) {
+                self.strip = 0.;
+                paragraph = cx.paragraph(TextRequest {
+                    previous: Some(&paragraph),
+                    text: text.clone(),
+                    style,
+                    width: content_width(0.),
+                    revision,
+                });
             }
+            if self.strip == 0.
+                && self.multiline
+                && c.max.height.is_finite()
+                && paragraph.size.height + 2. * inset.y > c.max.height
+            {
+                self.strip = crate::Scrollbar::width(&self.theme);
+                // A narrower layout can rewrap every line. Release the wide
+                // geometry before allocating it, especially on initial load.
+                drop(paragraph);
+                paragraph = cx.paragraph(TextRequest {
+                    previous: None,
+                    text,
+                    style,
+                    width: content_width(self.strip),
+                    revision,
+                });
+            }
+            self.paragraph = Some(paragraph);
         }
         let width = content_width(self.strip);
-        let rebuild = self.paragraph.as_ref().is_none_or(|p| {
-            p.revision != revision
-                || p.style != style
-                || p.width != width
-                || p.service_revision != cx.text_revision()
-        });
-        if rebuild {
-            self.paragraph = Some(cx.paragraph(TextRequest {
-                text: Arc::from(self.text()),
-                style,
-                width,
-                revision,
-            }));
-        }
         if self
             .placeholder_layout
             .as_ref()
             .is_none_or(|p| p.style != style || p.service_revision != cx.text_revision())
         {
             self.placeholder_layout = Some(cx.paragraph(TextRequest {
+                previous: None,
                 text: self.placeholder.clone(),
                 style,
                 width,
@@ -789,6 +840,7 @@ impl<D: Document> Widget for Editor<D> {
             )
             .into();
             Some(cx.paragraph(TextRequest {
+                previous: None,
                 text: display,
                 style,
                 width,
@@ -1239,6 +1291,30 @@ impl<D: Document> Widget for Editor<D> {
         if action == SemanticAction::Focus {
             return cx.focus().map_err(|_| SemanticError::Unavailable);
         }
+        if let SemanticAction::ScrollBy(delta) = action {
+            let p = self.paragraph.as_ref().ok_or(SemanticError::Unavailable)?;
+            let bounds = cx.bounds();
+            let size = bounds.size();
+            let inset = self.insets();
+            let strip = if self.scrollbar(bounds).is_some() {
+                crate::Scrollbar::width(&self.theme)
+            } else {
+                0.
+            };
+            self.scroll.y = (self.scroll.y - delta.y)
+                .clamp(0., (p.size.height + 2. * inset.y - size.height).max(0.));
+            self.scroll.x = if self.wrap {
+                0.
+            } else {
+                (self.scroll.x - delta.x).clamp(
+                    0.,
+                    (p.size.width + 2. * inset.x + strip - size.width).max(0.),
+                )
+            };
+            self.report_state(cx);
+            cx.repaint();
+            return Ok(());
+        }
         let before = self.document.revision();
         let replacement = match action {
             SemanticAction::SetValue(text) => Some((0..self.text().len(), text)),
@@ -1294,6 +1370,7 @@ impl<D: Document> Widget for Editor<D> {
                 SemanticActionKind::ReplaceSelectedText,
                 SemanticActionKind::ReplaceText,
                 SemanticActionKind::SetSelection,
+                SemanticActionKind::ScrollBy,
             ],
             text: Some(TextSemantics {
                 anchor: self.anchor.unwrap_or(self.caret.byte),

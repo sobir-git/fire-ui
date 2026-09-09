@@ -10,9 +10,10 @@ use accesskit_atspi_common::{
 };
 
 use async_channel::Sender;
+use async_lock::Mutex;
 use atspi::InterfaceSet;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::linux_atspi::{
     context::{get_or_init_app_context, get_or_init_messages},
@@ -178,7 +179,7 @@ impl Adapter {
     /// Wayland, calling this method only makes sense under X11.
     pub fn set_root_window_bounds(&mut self, outer: Rect, inner: Rect) {
         let new_bounds = WindowBounds::new(outer, inner);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_blocking();
         match &mut *state {
             AdapterState::Inactive {
                 root_window_bounds, ..
@@ -194,39 +195,61 @@ impl Adapter {
         }
     }
 
-    /// If and only if the tree has been initialized, call the provided function
-    /// and apply the resulting update. Note: If the caller's implementation of
-    /// [`ActivationHandler::request_initial_tree`] initially returned `None`,
-    /// the [`TreeUpdate`] returned by the provided function must contain
-    /// a full tree.
-    pub fn update_if_active(&mut self, update_factory: impl FnOnce() -> TreeUpdate) {
-        let mut state = self.state.lock().unwrap();
+    /// Run the UI update even when accessibility is inactive. The factory gets
+    /// the activation state and returns a complete update only when needed.
+    ///
+    /// Before layout, release the old paragraph snapshots under the publication
+    /// lock. Active readers see either the previous or the replacement snapshot,
+    /// never the empty map. Releasing snapshots requires a replacement update.
+    ///
+    /// Lock order is adapter state, text snapshots, then the common tree. Native
+    /// UI calls block; accessibility tasks await these locks so another window's
+    /// queries can run while layout is in progress. Query closures must not await
+    /// after acquiring the snapshot read guard or dispatch work to the UI.
+    pub fn synchronize(
+        &mut self,
+        release_snapshots: bool,
+        update_factory: impl FnOnce(bool) -> Option<(TreeUpdate, super::text::TextSnapshots)>,
+    ) {
+        let mut state = self.state.lock_blocking();
+        if matches!(*state, AdapterState::Inactive { .. }) {
+            update_factory(false);
+            return;
+        }
+        let mut current_text = self.edits.text.write_blocking();
+        if release_snapshots {
+            current_text.clear();
+        }
+        let Some((update, text)) = update_factory(true) else {
+            assert!(!release_snapshots, "released snapshots must be replaced");
+            return;
+        };
+        *current_text = text;
         match &mut *state {
-            AdapterState::Inactive { .. } => (),
+            AdapterState::Inactive { .. } => unreachable!(),
             AdapterState::Pending {
                 is_window_focused,
                 root_window_bounds,
                 action_handler,
             } => {
-                let initial_state = update_factory();
-                let r#impl = AdapterImpl::with_wrapped_action_handler(
+                let adapter = AdapterImpl::with_wrapped_action_handler(
                     self.id,
                     get_or_init_app_context(),
                     Callback::new(self.edits.clone()),
-                    initial_state,
+                    update,
                     *is_window_focused,
                     *root_window_bounds,
                     Arc::clone(action_handler),
                 );
-                *state = AdapterState::Active(r#impl);
+                *state = AdapterState::Active(adapter);
             }
-            AdapterState::Active(r#impl) => r#impl.update(update_factory()),
+            AdapterState::Active(adapter) => adapter.update(update),
         }
     }
 
     /// Update the tree state based on whether the window is focused.
     pub fn update_window_focus_state(&mut self, is_focused: bool) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_blocking();
         match &mut *state {
             AdapterState::Inactive {
                 is_window_focused, ..
@@ -245,6 +268,7 @@ impl Adapter {
 
 impl Drop for Adapter {
     fn drop(&mut self) {
+        self.edits.text.write_blocking().clear();
         self.send_message(Message::RemoveAdapter { id: self.id });
     }
 }
@@ -281,4 +305,123 @@ pub(crate) enum Message {
         adapter_id: usize,
         node_id: FullNodeId,
     },
+}
+
+#[cfg(test)]
+mod transaction_review_tests {
+    use super::*;
+    use accesskit::{ActionRequest, Node, NodeId, Role, TreeId, TreeInfo};
+    use fire_ui::{Element, Limits, Size, TestText, Ui};
+    use fire_ui_widgets::Editor;
+    use std::sync::mpsc;
+
+    struct NoOp;
+    impl ActionHandler for NoOp {
+        fn do_action(&mut self, _: ActionRequest) {}
+    }
+    impl AdapterCallback for NoOp {
+        fn register_interfaces(&self, _: &AdapterImpl, _: FullNodeId, _: InterfaceSet) {}
+        fn unregister_interfaces(&self, _: &AdapterImpl, _: FullNodeId, _: InterfaceSet) {}
+        fn emit_event(&self, _: &AdapterImpl, _: Event) {}
+    }
+    fn tree() -> TreeUpdate {
+        TreeUpdate {
+            nodes: vec![(NodeId(1), Node::new(Role::Window))],
+            tree: Some(TreeInfo::new(NodeId(1))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        }
+    }
+    fn text(value: &str) -> super::super::text::TextSnapshots {
+        let mut ui = Ui::new(
+            Element::leaf(Editor::new(value)),
+            Size::new(300., 140.),
+            Limits::default(),
+        )
+        .unwrap();
+        ui.pump(100, |_| {}, |_| {});
+        ui.layout(&mut TestText);
+        super::super::text::snapshots(&ui.semantics(), 1.)
+    }
+    #[test]
+    fn inactive_synchronization_still_runs_the_ui_factory() {
+        let (messages, _receive) = async_channel::unbounded();
+        let mut adapter = Adapter {
+            messages,
+            edits: EditDispatcher::new(Arc::new(drop)),
+            id: next_adapter_id(),
+            state: Arc::new(Mutex::new(AdapterState::Inactive {
+                is_window_focused: false,
+                root_window_bounds: WindowBounds::default(),
+                action_handler: Arc::new(ActionHandlerWrapper::new(NoOp)),
+            })),
+        };
+        let mut calls = 0;
+        adapter.synchronize(true, |active| {
+            assert!(!active);
+            calls += 1;
+            None
+        });
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn transaction_drops_old_paragraph_and_blocks_readers_until_publication() {
+        let edits = EditDispatcher::new(Arc::new(drop));
+        *edits.text.write_blocking() = text("old paragraph");
+        let old = Arc::downgrade(
+            &edits
+                .text
+                .read_blocking()
+                .values()
+                .next()
+                .unwrap()
+                .paragraph,
+        );
+        let common = AdapterImpl::new(
+            &accesskit_atspi_common::AppContext::new(None),
+            NoOp,
+            tree(),
+            false,
+            WindowBounds::default(),
+            NoOp,
+        );
+        let (messages, _receive) = async_channel::unbounded();
+        let mut adapter = Adapter {
+            messages,
+            edits: edits.clone(),
+            id: next_adapter_id(),
+            state: Arc::new(Mutex::new(AdapterState::Active(common))),
+        };
+        let (start, started) = mpsc::channel();
+        let (attempt, attempted) = mpsc::channel();
+        let (result, received) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let reader_edits = edits.clone();
+            scope.spawn(move || {
+                started.recv().unwrap();
+                attempt.send(()).unwrap();
+                let store = reader_edits.text.read_blocking();
+                result
+                    .send(store.values().next().unwrap().paragraph.text.to_string())
+                    .unwrap();
+            });
+            adapter.synchronize(true, |active| {
+                assert!(active);
+                assert!(
+                    old.upgrade().is_none(),
+                    "old snapshot must be released before layout"
+                );
+                assert!(
+                    edits.text.try_read().is_none(),
+                    "publication lock must remain held"
+                );
+                start.send(()).unwrap();
+                attempted.recv().unwrap();
+                assert!(received.try_recv().is_err());
+                Some((tree(), text("new paragraph")))
+            });
+            assert_eq!(received.recv().unwrap(), "new paragraph");
+        });
+    }
 }

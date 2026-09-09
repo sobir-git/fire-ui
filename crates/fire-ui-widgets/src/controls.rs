@@ -62,6 +62,7 @@ impl Widget for Label {
                 || p.service_revision != cx.text_revision()
         }) {
             self.paragraph = Some(cx.paragraph(TextRequest {
+                previous: None,
                 text: self.text.clone(),
                 style,
                 width,

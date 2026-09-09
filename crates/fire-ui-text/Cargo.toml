@@ -1,0 +1,19 @@
+[package]
+name = "fire-ui-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Explicit font storage and Unicode paragraph shaping for Fire UI"
+readme = "README.md"
+[dependencies]
+fire-ui.workspace = true
+rustybuzz = "0.20"
+fire-ui-fonts.workspace = true
+unicode-segmentation = "1.12"
+unicode-bidi = "0.3"
+unicode-script = "0.5"
+
+[dev-dependencies]
+fire-ui-widgets.workspace = true

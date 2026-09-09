@@ -1,11 +1,19 @@
 use fire_ui::*;
-use fire_ui_native::NativeText;
+use fire_ui_fonts::Fonts;
+use fire_ui_text::Text;
+fn text() -> Result<Text, String> {
+    Ok(Text::new(Fonts::load(&[
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ])?)
+    .unwrap())
+}
 use std::sync::Arc;
 #[test]
 fn native_shaping_wraps_and_returns_caret_geometry_for_the_same_text() {
-    let mut text = NativeText::new().expect("Install a TrueType font or set FIRE_UI_FONT");
+    let mut text = text().expect("Install a TrueType font or set FIRE_UI_FONT");
     let source: Arc<str> = Arc::from("Café Привет e\u{301} office\nsecond line");
     let p = text.layout(TextRequest {
+        previous: None,
         text: source.clone(),
         style: TextStyle::default(),
         width: Some(90.),
@@ -16,7 +24,7 @@ fn native_shaping_wraps_and_returns_caret_geometry_for_the_same_text() {
     assert!(p.lines.len() > 2);
     for line in &p.lines {
         assert!(line.width.is_finite() && line.width > 0.);
-        for stop in &line.stops {
+        for stop in line.stops() {
             assert!(p.text.is_char_boundary(stop.caret.byte));
             let point = p.caret_point(stop.caret);
             assert!((point.x - stop.x).abs() < 0.1);
@@ -27,8 +35,9 @@ fn native_shaping_wraps_and_returns_caret_geometry_for_the_same_text() {
 }
 #[test]
 fn empty_native_paragraph_has_a_caret_and_finite_extent() {
-    let mut text = NativeText::new().unwrap();
+    let mut text = text().unwrap();
     let p = text.layout(TextRequest {
+        previous: None,
         text: Arc::from(""),
         style: TextStyle::default(),
         width: Some(0.),
@@ -42,8 +51,9 @@ fn empty_native_paragraph_has_a_caret_and_finite_extent() {
 
 #[test]
 fn wrapping_prefers_words_and_keeps_every_byte() {
-    let mut text = NativeText::new().unwrap();
+    let mut text = text().unwrap();
     let p = text.layout(TextRequest {
+        previous: None,
         text: Arc::from("Small ideas deserve a little room."),
         style: TextStyle::default(),
         width: Some(130.),
@@ -60,6 +70,7 @@ fn wrapping_prefers_words_and_keeps_every_byte() {
         .collect();
     assert_eq!(reconstructed, p.text.as_ref());
     let p = text.layout(TextRequest {
+        previous: None,
         text: Arc::from("supercalifragilistic"),
         style: TextStyle::default(),
         width: Some(12.),
@@ -71,9 +82,10 @@ fn wrapping_prefers_words_and_keeps_every_byte() {
 
 #[test]
 fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
-    let mut text = NativeText::new().unwrap();
+    let mut text = text().unwrap();
     let mut layout = |s: &str| {
         text.layout(TextRequest {
+            previous: None,
             text: Arc::from(s),
             style: TextStyle::default(),
             width: None,
@@ -86,11 +98,7 @@ fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
     assert_eq!(&*p.text, "a\tb\t");
     assert!((p.caret_point(Caret::at(2)).x - prefix - 4. * space).abs() < 0.1);
     assert_eq!(
-        p.lines[0]
-            .stops
-            .iter()
-            .map(|s| s.caret.byte)
-            .collect::<Vec<_>>(),
+        p.lines[0].stops().map(|s| s.caret.byte).collect::<Vec<_>>(),
         vec![0, 1, 2, 3, 4]
     );
     assert!((p.selection(1..2)[0].width - 4. * space).abs() < 0.1);
@@ -98,7 +106,7 @@ fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
 
 #[test]
 fn bidi_geometry_selection_and_visual_navigation_agree() {
-    let mut engine = NativeText::new().unwrap();
+    let mut engine = text().unwrap();
     for source in [
         "abc אבג def",
         "שלום world 123!",
@@ -111,6 +119,7 @@ fn bidi_geometry_selection_and_visual_navigation_agree() {
     ] {
         for width in [None, Some(65.)] {
             let p = engine.layout(TextRequest {
+                previous: None,
                 text: Arc::from(source),
                 style: TextStyle::default(),
                 width,
@@ -119,7 +128,7 @@ fn bidi_geometry_selection_and_visual_navigation_agree() {
             let reconstructed: String = p.lines.iter().map(|l| &p.text[l.range.clone()]).collect();
             assert_eq!(reconstructed, source);
             for line in &p.lines {
-                for stop in &line.stops {
+                for stop in line.stops() {
                     let point = p.caret_point(stop.caret);
                     assert!(
                         (point.x - stop.x).abs() < 0.1,
@@ -128,14 +137,14 @@ fn bidi_geometry_selection_and_visual_navigation_agree() {
                     assert_eq!(point.y, line.y);
                     assert!((p.caret_point(p.hit(point)).x - point.x).abs() < 0.1);
                 }
-                for cell in &line.cells {
-                    let rects = p.selection(cell.range.clone());
+                for (range, cell) in line.cells() {
+                    let rects = p.selection(range);
                     assert_eq!(rects.len(), 1);
-                    assert!((rects[0].width - cell.width).abs() < 0.1);
+                    assert!((rects[0].width - cell.width()).abs() < 0.1);
                 }
-                let mut caret = p.line_edge(line.stops[0].caret, false);
+                let mut caret = p.line_edge(line.stops().next().unwrap().caret, false);
                 let mut x = p.caret_point(caret).x;
-                for _ in 0..line.stops.len() {
+                for _ in 0..line.stops().count() {
                     let next = p.visual_move(caret, true);
                     let point = p.caret_point(next);
                     if point.y != line.y || next == caret {
@@ -149,6 +158,7 @@ fn bidi_geometry_selection_and_visual_navigation_agree() {
         }
     }
     let p = engine.layout(TextRequest {
+        previous: None,
         text: Arc::from("אבג"),
         style: TextStyle::default(),
         width: None,

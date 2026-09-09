@@ -4,8 +4,15 @@
 Requires Xvfb, xdotool, IBus (simple and table/cangjie5 engines), Orca and
 Pillow. Orca's real speech generation is checked in its debug log; audio output
 is deliberately disabled. No user desktop, settings or notes are touched.
+
+Studio: python3 tools/linux_input_probe.py --output artifacts/linux-input
+Notes: python3 tools/linux_input_probe.py --target notes --binary /path/to/fire-notes
+       --output /path/to/artifacts/linux-input
+Notes uses temporary files and its default multilingual font coverage. These native
+capability checks do not establish the desktop private-memory acceptance limit.
 """
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -36,6 +43,8 @@ def wait_for(check, description, seconds=10):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default="target/release/fire-ui-studio")
+    parser.add_argument("--target", choices=("studio", "notes"), default="studio",
+                        help="Choose native application selectors; Notes requires --binary")
     parser.add_argument("--output", default="artifacts/linux-input")
     args = parser.parse_args()
     if os.environ.get("_FIRE_UI_INPUT_PRIVATE_BUS") != "1":
@@ -45,9 +54,11 @@ def main():
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     results = {"binary": str(binary), "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+               "target": args.target,
                "backend": "Xvfb / real IBus XIM / real Orca AT-SPI, audio synthesis disabled", "passed": False, "checks": {}}
     processes = []
     logs = []
+    app = None
     with tempfile.TemporaryDirectory(prefix="fire-ui-input-") as directory:
         root = Path(directory)
         for name in ("home", "config", "cache", "data", "runtime", "orca"):
@@ -62,7 +73,18 @@ def main():
             env.pop(name, None)
 
         def run(*args):
-            return subprocess.check_output(list(map(str, args)), env=env, stderr=subprocess.PIPE, timeout=8).decode().strip()
+            try:
+                return subprocess.check_output(list(map(str, args)), env=env, stderr=subprocess.PIPE, timeout=8).decode().strip()
+            except subprocess.CalledProcessError as error:
+                with (output / "subprocess-errors.log").open("a") as log:
+                    log.write(repr(args) + "\n" + error.stderr.decode(errors="replace") + "\n")
+                raise
+
+        def engine(name):
+            def selected():
+                run("ibus", "engine", name)
+                return run("ibus", "engine") == name
+            wait_for(selected, "IBus engine " + name)
 
         def start(name, *args):
             log = open(output / (name + ".log"), "w")
@@ -72,6 +94,8 @@ def main():
             return process
 
         def snapshot():
+            if app is not None and app.poll() is not None:
+                raise RuntimeError(f"Native app exited with code {app.returncode}")
             return request(root / "ui.sock", {})
 
         def node(node_id):
@@ -105,10 +129,12 @@ def main():
                 visited.add((bus, path))
                 interfaces = remote(bus, path, "org.a11y.atspi.Accessible.GetInterfaces")
                 if "org.a11y.atspi.EditableText" in interfaces:
-                    if "'old'" in remote(bus, path, "org.a11y.atspi.Text.GetText", "0", "-1"):
+                    if ast.literal_eval(remote(bus, path, "org.a11y.atspi.Text.GetText", "0", "-1"))[0] == "old":
                         accepted = remote(bus, path, "org.a11y.atspi.EditableText.SetTextContents", value)
                         if "true" not in accepted:
                             raise RuntimeError("AT-SPI replacement rejected")
+                        wait_for(lambda: ast.literal_eval(remote(bus, path, "org.a11y.atspi.Text.GetText", "0", "-1"))[0] == value,
+                                 "native AT-SPI text round trip")
                         return True
                 children = remote(bus, path, "org.a11y.atspi.Accessible.GetChildren")
                 queue.extend(re.findall(r"\('([^']+)', (?:objectpath )?'([^']+)'\)", children))
@@ -127,7 +153,7 @@ def main():
             results["versions"] = {"ibus": run("ibus", "version"), "orca": run("orca", "--version")}
             start("ibus", "ibus-daemon", "--config=disable", "--emoji-extension=disable", "--cache=none")
             wait_for(lambda: run("ibus", "address"), "IBus bus")
-            wait_for(lambda: run("ibus", "engine", "xkb:us::eng") or True, "IBus engine")
+            engine("xkb:us::eng")
             # IBus daemon redirects child errors to /dev/null. Own the XIM process
             # explicitly so startup failures remain visible on minimal CI desktops.
             xim_binary = next((Path(path) for path in (
@@ -141,8 +167,16 @@ def main():
                     raise RuntimeError("IBus XIM exited: " + (output / "ibus-xim.log").read_text())
                 return "ibus" in run("xprop", "-root", "XIM_SERVERS")
             wait_for(xim_ready, "IBus XIM registration")
-            start("studio", binary)
-            window = wait_for(lambda: run("xdotool", "search", "--name", "Fire UI Studio"), "Studio window").splitlines()[0]
+            app_args = []
+            if args.target == "notes":
+                notes = root / "notes"
+                notes.mkdir()
+                (notes / "input-verification.md").write_text("Native input verification\n")
+                app_args = ["--data-dir", str(notes)]
+            results["app_args"] = app_args
+            app = start("studio" if args.target == "studio" else "notes", binary, *app_args)
+            title = "^Fire UI Studio$" if args.target == "studio" else "^Fire Notes$"
+            window = wait_for(lambda: run("xdotool", "search", "--all", "--pid", app.pid, "--name", title), "application window").splitlines()[0]
             run("xdotool", "windowfocus", window)
             # The studio publishes only the section that is showing, so a widget
             # exists once its own section is selected. Navigating uses the same
@@ -155,17 +189,40 @@ def main():
                 if not section.get("selected"):
                     action(section["id"], "activate")
                     wait_for(lambda: tab().get("selected"), f"{name} section selected")
-            select_section("Text")
+            if args.target == "studio":
+                select_section("Text")
             def ready_snapshot():
                 value = snapshot()
                 return value if any(n.get("text") for n in value.get("nodes", [])) else None
             initial = wait_for(ready_snapshot, "mounted editor semantics")
             (output / "initial.json").write_text(json.dumps(initial, indent=2))
-            editor = next(n for n in initial["nodes"] if n["text"] and n["text"]["multiline"])["id"]
-            other = next(n for n in initial["nodes"] if n["text"] and not n["text"]["multiline"])["id"]
+            editor = next(n for n in initial["nodes"] if n["text"] and n["text"]["multiline"]
+                          and (args.target == "studio" or n.get("key") == "note-body"))["id"]
+            other = next((n["id"] for n in initial["nodes"] if n["text"] and not n["text"]["multiline"]), None)
+            def focus_other():
+                if args.target == "studio":
+                    action(other, "focus")
+                    return other
+                # The real app creates its rename editor when requested, then removes
+                # it on focus loss. Never retain its ID across those transitions.
+                state = snapshot()
+                selected_tab = next(n for n in state["nodes"] if n["role"] == "Tab" and n.get("selected"))
+                geometry = dict(line.split("=", 1) for line in run("xdotool", "getwindowgeometry", "--shell", window).splitlines())
+                scale = int(geometry["WIDTH"]) / state["size"]["width"]
+                bounds = selected_tab["bounds"]
+                run("xdotool", "mousemove", "--sync", "--window", window,
+                    round((bounds["x"]+bounds["width"]/2)*scale), round((bounds["y"]+bounds["height"]/2)*scale))
+                # Middle-click is Notes' native rename action. An active input
+                # method may consume Ctrl+R instead of passing it to the app.
+                run("xdotool", "click", "2")
+                renamed = wait_for(lambda: next((n for n in snapshot()["nodes"]
+                                   if (n.get("key") or "").startswith("rename-note-") and n.get("text")), None),
+                                   "native note rename editor")
+                assert renamed["focused"], "Rename shortcut did not focus its editor"
+                return renamed["id"]
             action(editor, "set_value", value="")
             action(editor, "focus")
-            run("ibus", "engine", "table:cangjie5")
+            engine("table:cangjie5")
             time.sleep(.5)
             key("a")
             composition = wait_for(lambda: node(editor)["text"]["composition"], "Cangjie preedit")
@@ -203,16 +260,28 @@ def main():
             wait_for(lambda: not snapshot()["window_focused"], "native focus loss")
             run("xdotool", "windowfocus", window)
             wait_for(lambda: snapshot()["window_focused"], "native focus return")
+            (output / "ime-focus-return.json").write_text(json.dumps(snapshot(), indent=2, ensure_ascii=False))
+            focus_return = node(editor)
+            assert focus_return["value"] == "月", "Native focus change committed or lost document text"
+            cancelled_on_focus_loss = not focus_return["text"]["composition"]
+            if cancelled_on_focus_loss:
+                # Notes closes on an unhandled Escape. If focus loss already
+                # cancelled the IME, start a fresh preedit to test cancellation.
+                key("a")
+                wait_for(lambda: node(editor)["text"]["composition"], "new preedit after native focus return")
             key("Escape")
             wait_for(lambda: not node(editor)["text"]["composition"], "composition cancellation after native focus return")
+            assert node(editor)["value"] == "月", "Cancellation after focus return changed document text"
             focus_window.terminate()
             focus_window.wait(timeout=5)
-            results["checks"]["ibus_window_focus"] = "native focus loss/return preserves a cancellable IME session"
+            results["checks"]["ibus_window_focus"] = {"cancelled_on_focus_loss": cancelled_on_focus_loss,
+                "result": "Native focus loss/return preserves text and supports a cancellable IME session"}
             key("a")
             wait_for(lambda: node(editor)["text"]["composition"], "focus-change preedit")
-            action(other, "focus")
+            other = focus_other()
             wait_for(lambda: not node(editor)["text"]["composition"], "focus change clears old composition")
-            run("ibus", "engine", "xkb:us::eng")
+            assert node(editor)["value"] == "月", "Editor focus transfer changed document text"
+            engine("xkb:us::eng")
             run("xdotool", "type", "target")
             wait_for(lambda: "target" in node(other)["value"], "typing after IME focus transfer")
             results["checks"]["ibus_focus"] = "composition teardown and input to newly focused editor"
@@ -220,7 +289,7 @@ def main():
                 action(editor, "focus")
                 action(editor, "set_value", value="old")
                 action(editor, "set_selection", anchor=0, caret=3)
-                run("ibus", "engine", "table:cangjie5")
+                engine("table:cangjie5")
                 key("a")
                 wait_for(lambda: node(editor)["text"]["composition"], edit_action + " preedit")
                 if edit_action == "atspi_set_text_contents":
@@ -237,9 +306,17 @@ def main():
                 }
                 if after_edit["text"]["composition"] or after_commit["value"] != "replacement ":
                     raise RuntimeError("External " + edit_action + " leaked or retained stale native IME composition")
-                run("ibus", "engine", "xkb:us::eng")
+                engine("xkb:us::eng")
                 run("xdotool", "type", "x")
                 wait_for(lambda: node(editor)["value"] == "replacement x", "typing after " + edit_action)
+
+            unicode_value = "Native café e\u0301 שלום العربية 👩‍💻"
+            action(editor, "set_value", value="old")
+            wait_for(lambda: atspi_replace_contents(unicode_value), "native Unicode AT-SPI replacement")
+            wait_for(lambda: node(editor)["value"] == unicode_value, "Unicode text delivered without normalization")
+            key("ctrl+z")
+            wait_for(lambda: node(editor)["value"] == "old", "native undo of Unicode AT-SPI replacement")
+            results["checks"]["atspi_unicode"] = "Exact combining, RTL and emoji text round trip through native AT-SPI, followed by native undo"
 
             # Real Orca dispatches native AT-SPI events and generates utterances.
             # An empty factory list keeps synthesis/audio outside this probe.
@@ -262,7 +339,7 @@ def main():
                 results["checks"]["orca_" + name] = wait_for(matching_speech, "Orca " + name)
 
             action(editor, "set_value", value="Orca verification")
-            action(other, "focus")
+            other = focus_other()
             time.sleep(.5)
             spoken("editor_focus", lambda: action(editor, "focus"), ["entry Orca verification"])
             key("Home")
@@ -272,19 +349,43 @@ def main():
             spoken("deletion", lambda: key("BackSpace"), ["'z'"])
             spoken("selection", lambda: key("shift+Left"), ["selected"])
             # Buttons live on their own section, which republishes the whole tree.
-            select_section("Controls")
+            if args.target == "studio":
+                select_section("Controls")
+            button_label = "Primary" if args.target == "studio" else "New note"
             button = next(n["id"] for n in snapshot()["nodes"]
-                          if n["role"] == "Button" and n["label"] == "Primary")
-            spoken("button_focus", lambda: action(button, "focus"), ["Primary", "button"])
-            spoken("tab_navigation", lambda: key("Tab"), ["Secondary", "button"])
+                          if n["role"] == "Button" and n["label"] == button_label)
+            spoken("button_focus", lambda: action(button, "focus"), [button_label, "button"])
+            if args.target == "studio":
+                spoken("tab_navigation", lambda: key("Tab"), ["Secondary", "button"])
+            else:
+                spoken("tab_navigation", lambda: key("Tab"), ["button"])
             focused = next(n for n in snapshot()["nodes"] if n["focused"])
             assert focused["id"] != button and focused["role"] == "Button", "Tab did not move native keyboard focus"
-            key("Return")
-            wait_for(lambda: "Pressed Secondary" in (output / "studio.log").read_text(), "native activation while Orca runs")
-            results["checks"]["orca_button_activation"] = "Tab from Primary to Secondary and Enter presses it"
+            if args.target == "studio":
+                key("Return")
+                wait_for(lambda: "Pressed Secondary" in (output / "studio.log").read_text(), "native activation while Orca runs")
+                results["checks"]["orca_button_activation"] = "Tab from Primary to Secondary and Enter presses it"
+            else:
+                before_tabs = [n for n in snapshot()["nodes"] if n["role"] == "Tab"]
+                action(button, "focus")
+                key("Return")
+                wait_for(lambda: len([n for n in snapshot()["nodes"] if n["role"] == "Tab"]) == len(before_tabs)+1,
+                         "native New note activation while Orca runs")
+                body = next(n for n in snapshot()["nodes"] if n.get("key") == "note-body")
+                assert body["value"] == "", "New note did not open an empty editor"
+                results["checks"]["orca_button_activation"] = "Native Tab changed button focus; native Enter activated New note and created an empty tab"
             speech = [line for line in debug_log.read_text().splitlines() if "SPEECH OUTPUT:" in line]
             (output / "orca-speech.log").write_text("\n".join(speech) + "\n")
             results["passed"] = True
+        except Exception as error:
+            results["error"] = repr(error)
+            if app is not None: results["app_exit_code_at_failure"] = app.poll()
+            try:
+                (output / "failure-tree.json").write_text(json.dumps(snapshot(), indent=2, ensure_ascii=False))
+                ImageGrab.grab(xdisplay=env["DISPLAY"]).save(output / "failure.png")
+            except Exception as capture_error:
+                results["failure_capture_error"] = repr(capture_error)
+            raise
         finally:
             for process in reversed(processes):
                 if process.poll() is None:
@@ -296,6 +397,11 @@ def main():
                         process.wait(timeout=5)
             for log in logs:
                 log.close()
+            results["artifacts"] = {
+                name: {"path": name, "sha256": hashlib.sha256((output / name).read_bytes()).hexdigest()}
+                for name in ("ime-preedit.json", "ime-preedit.png", "orca-speech.log")
+                if (output / name).is_file()
+            }
             (output / "results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(results, indent=2, ensure_ascii=False))
     return 0

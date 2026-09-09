@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 · unreleased
+
+Ambient values, a second scale, and the widget cleanups the compact theme exposed.
+Public contracts changed; consumers update directly.
+
+- Separate text services and renderer resources from the native host. Add direct
+  X11/Cairo drawing and move OpenGL drawing into an optional crate.
+- Share explicit font storage between text and drawing, remove redundant text
+  geometry storage, and release obsolete accessibility snapshots before layout.
+- Preserve native text actions and unlimited editor history; add semantic scrolling
+  through the same public interface for built-in and custom widgets.
+- Measure native memory with exact-byte, zero-swap checks. Full Fire Notes memory
+  acceptance remains under investigation; no replacement has been released.
 
 - Add `Palette::slate_dark` and `Scale::compact`, and `Theme::compact` pairing
   them: a dense instrument panel against the roomy ember default. Palette and

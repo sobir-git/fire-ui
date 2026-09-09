@@ -1,0 +1,31 @@
+[package]
+name = "fire-ui-cairo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cairo drawing and optional X11 presentation for Fire UI"
+readme = "README.md"
+[features]
+default = []
+x11 = ["dep:fire-ui-native", "dep:x11", "dep:raw-window-handle", "cairo-rs/xlib"]
+
+[dependencies]
+fire-ui-fonts.workspace = true
+fire-ui.workspace = true
+fire-ui-native = { workspace = true, features = ["x11"], optional = true }
+cairo-rs = { version = "0.21", default-features = false, features = ["freetype"] }
+x11 = { version = "2.21", features = ["xlib"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[dev-dependencies]
+fire-ui-text.workspace = true
+fire-ui-widgets.workspace = true
+
+[[example]]
+name="minimal"
+required-features=["x11"]
+[[example]]
+name="hello"
+required-features=["x11"]

@@ -1692,3 +1692,38 @@ fn a_list_row_reads_the_theme_even_though_the_list_publishes_its_own_state_to_it
         "and every row follows a theme change, with none left on the old one"
     );
 }
+
+#[test]
+fn editor_preserves_history_beyond_256_edits_and_two_megabytes() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("")),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let id = ui
+        .semantics()
+        .into_iter()
+        .find(|n| n.semantics.role == Role::TextInput)
+        .unwrap()
+        .id;
+    // Replace each preceding value, retaining over 2 MiB of reversible content.
+    // Avoid paragraph layout here: this checks history ownership, not shaping.
+    for i in 0..300 {
+        let value = format!("{i}:{}", "x".repeat(4096));
+        ui.accessibility(id, SemanticAction::SetValue(value))
+            .unwrap();
+    }
+    for _ in 0..300 {
+        ui.send(Edit::Undo).unwrap();
+        ui.pump(4096, |_| {}, |_| {});
+    }
+    assert_eq!(ui.root().text(), "");
+    for _ in 0..300 {
+        ui.send(Edit::Redo).unwrap();
+        ui.pump(4096, |_| {}, |_| {});
+    }
+    assert_eq!(ui.root().text(), format!("299:{}", "x".repeat(4096)));
+}

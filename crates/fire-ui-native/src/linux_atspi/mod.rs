@@ -13,6 +13,7 @@ mod atspi;
 mod context;
 mod editing;
 mod executor;
+pub(crate) mod text;
 mod util;
 
 pub(crate) use adapter::Adapter;

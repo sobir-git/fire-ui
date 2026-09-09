@@ -7,14 +7,11 @@ mod inspection;
 mod linux_atspi;
 #[cfg(all(target_os = "linux", feature = "accessibility"))]
 mod linux_edit;
-mod painter;
 #[cfg(feature = "accessibility")]
 mod platform_accessibility;
-mod present;
-mod text;
+mod renderer;
 mod window;
-pub(crate) use painter::GlPainter;
-pub use text::{system_font, NativeText};
+pub use renderer::{Renderer, RendererFactory};
 pub use window::{run, run_with, WakeHandle, WindowOptions};
 
 /// Blocking system file chooser. Hosts may call this from their platform's dialog thread.
@@ -38,4 +35,9 @@ pub fn save_file(
         dialog = dialog.add_filter(label, extensions);
     }
     dialog.show_save_single_file().map_err(|e| e.to_string())
+}
+
+/// Native window types used by custom renderer factories.
+pub mod renderer_types {
+    pub use crate::renderer::{ActiveEventLoop, Window, WindowAttributes};
 }

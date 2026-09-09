@@ -1,5 +1,47 @@
 # Native measurements
 
+The 0.6 development host accepts a renderer and text engine explicitly. Cairo
+does not initialize OpenGL or retain a full-window client framebuffer. Fonts and
+platform services are selected independently. The current Fire Notes comparison
+uses the full editor, animation, clipboard history and session restoration.
+
+The original 3,000,000-byte private-dirty target remains a reported target. On
+September 9 the product requirement was revised: avoid waste in both memory and
+CPU, and reject memory savings that harm responsiveness or correctness. Normal
+allocator settings are the default; tuned allocator experiments are
+separate diagnostic evidence. No replacement has been installed or released.
+
+Heaptrack traces identified duplicate paragraph ownership and per-line/glyph
+allocations, as well as native XIM and font resources. Changes share immutable
+paragraph/source snapshots and store undo text compactly without dropping history.
+Heaptrack measures requested heap allocations; the native probes separately record
+private dirty/clean pages, RSS, PSS, swap and display-server costs.
+The profiler choice and custom allocator hooks follow the upstream
+[Heaptrack documentation](https://github.com/KDE/heaptrack) and
+[allocator API](https://github.com/KDE/heaptrack/blob/master/src/track/heaptrack_api.h).
+The [Massif manual](https://valgrind.org/docs/manual/ms-manual.html) explains why
+heap requests alone cannot establish resident memory.
+
+The final full-coverage Notes native gate passes with 3,493,888–3,510,272 private
+dirty bytes and 10,203,136–10,252,288 total private resident bytes. App and private
+Xvfb swap are zero. Ordinary app CPU is 2.06–2.11 seconds; Xvfb uses a separate
+2.22–2.29 seconds. The 3 MB target was not met. Native drawable p95 response is
+1.93 ms for idle pointer input, 3.14 ms during fire and 8.57 ms for resizing.
+[Consumer measurements and growth limits](../../fire-notes/docs/performance.md)
+include the exact binary and acceptance receipt.
+
+The larger editor test exposed redundant whole-document shaping. Callers can now
+borrow an existing paragraph through `TextRequest::previous`; unchanged logical
+lines are reused only when source and metrics match. No persistent text-service
+cache is created. The editor avoids a second scrollbar-width layout when hard
+line breaks already require scrolling, and releases superseded wide startup
+geometry before shaping narrower lines. Unicode/edit/width tests compare reused
+geometry against fresh layout; the complete 64 KiB native workload passes.
+
+The Studio results below are historical 0.4/0.5 measurements. They do not establish
+performance of the new Cairo editor. The independent Cairo minimal-consumer
+measurements are labeled separately.
+
 Measured on 2026-09-08 with release optimization, Xvfb and Mesa software rendering.
 [Raw results](benchmarks/native.json) include the final executable's SHA-256 and the
 earlier reference runs, including 0.4.0's under `v0_4_0_reference`. These are local process measurements, not hardware-GPU
@@ -17,7 +59,8 @@ socket. It leaves the user's desktop and accessibility preferences unchanged.
 
 ### History of the missed memory limit
 
-The native host does not meet Fire Notes' 3,000,000-byte private-memory budget.
+The released 0.5 native host did not meet Fire Notes' original
+3,000,000-byte private-dirty budget.
 This is a preexisting renderer constraint, not evidence of a new 0.5.0 renderer
 regression. The relevant history is:
 
@@ -53,38 +96,62 @@ rejects private dirty memory at or above 3,000,000 bytes or any swap at startup,
 after typing, during selected-text fire and after resizing. It writes evidence
 before returning failure. This is a sampled local acceptance check, not an
 already-integrated framework CI gate or a proof about all documents and frames.
-The current release fails it. A replacement native rendering path must pass this
-budget together with native interaction, IME, accessibility and animation checks
-before it can be accepted for this consumer.
+The 0.5 release failed it. The September 9 requirement revision makes CPU and
+responsiveness part of the memory tradeoff; native interaction, IME, accessibility
+and animation checks remain required.
 
-`tools/lean_probe.py` builds the same draw-only 640×480 window in two independent
-consumer workspaces. The minimal variant selects only `x11`; the other enables
-accessibility, inspection, clipboard, dialogs and bitmap fonts. Neither loads fonts
-or retains a framebuffer. [Raw results](benchmarks/lean.json) record compiler,
-features, dependency/lock hashes, binary hashes, memory and build conditions.
+`tools/lean_probe.py` builds the Cairo `minimal` example as two independent
+consumer workspaces, each with its own Cargo target directory. The minimal variant
+selects X11; extras also compiles accessibility, inspection, clipboard and dialogs.
+Both use `fire-ui-fonts` and `fire-ui-cairo` explicitly, load no fonts and retain no
+client framebuffer. The probe rejects GPU dependencies in either graph and rejects
+optional service/image, shaping and mmap dependencies in the minimal graph.
 
-| Measurement | Minimal | Extras compiled in |
-| --- | ---: | ---: |
-| Stripped executable | 2.66 MiB | 6.34 MiB |
-| Normal/build dependency packages | 64 | 170 |
-| Idle RSS | 106.7 MiB | 112.5 MiB |
-| Idle proportional memory (PSS) | 76.1 MiB | 80.9 MiB |
-| CPU ticks over two seconds | 0 | 0 |
+Run `python3 tools/lean_probe.py --output artifacts/lean-cairo`. Linux needs Xvfb,
+xdotool, dbus-run-session, dbus-update-activation-environment and Python Pillow,
+plus the development libraries needed to build Cairo and the X11 host. The probe
+creates a private X display and session bus. It verifies pixels at 640×480 and after
+resizing to 480×360. `--build-only` skips native checks; `--measure-only` reuses
+recorded binaries after checking their hashes.
 
-The minimal executable is 58.1% smaller. These process memory figures include Mesa's
-software renderer, which creates its own worker threads; they are not core-only
-allocation measurements. The core crate has no dependencies. The native renderer
-still compiles its text-shaping dependencies even when no font files are loaded.
-Services unused by this workload can incur further costs when activated.
-Both variants render the same pixels and resize to 480×360 without stale drawing.
-Recorded build times include concurrent compilation and differing cache states;
-they do not establish a build-speed improvement.
+The JSON records exact-byte private dirty memory using the Fire Notes probe's
+`Private_Dirty * 1024` accounting. The executable is fsynced before launch so
+unfinished linker writeback does not appear as dirty application allocations.
+Total private resident memory, private clean, anonymous pages, RSS, PSS, shared
+memory and swap remain separate fields. Per-mapping breakdowns expose file-backed
+and anonymous costs. Startup, idle and resized
+samples must have zero swap; failure returns nonzero after saving evidence.
+Dedicated Xvfb memory is recorded before, during and after the app so server
+resource costs remain visible. There is no compositor or GPU renderer in this test.
+
+This draw-only experiment is minimal-consumer evidence, not the Fire Notes memory
+acceptance workload. It does not test an editor, fonts, animation or active optional
+services, and it does not enforce the app's 3,000,000-byte acceptance threshold.
+Its three samples cannot establish a peak between samples. Zero idle CPU ticks
+only establishes quiet behavior during the recorded interval.
 
 [Cargo combines enabled features](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification).
-A shared workspace build with Studio would therefore invalidate this dependency
-comparison. CI checks the native features independently as well as the complete apps.
+A shared workspace build with Studio would invalidate this dependency comparison.
+The [current raw report](benchmarks/lean.json) records the independent Cairo run.
+The earlier OpenGL report remains in Git history.
 
-## CPU and memory
+| Cairo draw-only measurement | Minimal | Extras compiled in |
+| --- | ---: | ---: |
+| Maximum sampled private dirty bytes | 1,445,888 | 1,708,032 |
+| Idle private clean bytes | 1,794,048 | 4,657,152 |
+| Idle total private resident bytes | 3,239,936 | 6,365,184 |
+| Idle RSS bytes | 8,851,456 | 11,931,648 |
+| Idle PSS bytes | 3,548,160 | 6,676,480 |
+| Idle shared resident bytes | 5,611,520 | 5,566,464 |
+| Swap bytes | 0 | 0 |
+| CPU ticks over two seconds | 0 | 0 |
+
+Private dirty matched anonymous bytes in these samples. Dedicated Xvfb private
+dirty increased by 1,163,264 bytes for minimal and 1,142,784 bytes for extras;
+most of that increase remained resident after the app exited. The JSON includes
+those before/during/after values. These server allocations are additional costs.
+
+## Historical Studio CPU and memory
 
 One core is 100%; Mesa uses multiple threads. Samples last about two seconds.
 Zero CPU ticks establishes quiet idle behavior during those samples only. The
@@ -127,7 +194,7 @@ about 281,000 pixels of its roughly 1,000,000-pixel window. Fire Notes' decorati
 bounds allow small fire frames to invalidate fewer than 1,000 pixels. These are
 paint regions, not a claim that presentation copies only that region.
 
-## Responsiveness
+## Historical Studio responsiveness
 
 | Measurement | Pre-change median | Current median | Current p95 |
 | --- | ---: | ---: | ---: |
@@ -138,7 +205,7 @@ Resize uses 63 rendered samples in the current run. Pointer measurements use 20
 moves and include xdotool and screenshot overhead. Swap completion is not compositor
 presentation. The paddle follows the latest pointer position directly.
 
-## Verification and limits
+## Historical verification and limits
 
 The native probe passed section navigation, every button style, refusal of a disabled
 control, checkbox and switch state, slider movement by pointer, arrow keys and

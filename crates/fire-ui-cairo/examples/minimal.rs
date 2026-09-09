@@ -20,6 +20,7 @@ impl Widget for Canvas {
 }
 
 fn main() -> Result<(), String> {
+    let fonts = fire_ui_fonts::Fonts::default();
     run(
         Element::leaf(Canvas),
         WindowOptions {
@@ -28,5 +29,7 @@ fn main() -> Result<(), String> {
             background: Color::hex(0x181818),
             ..WindowOptions::default()
         },
+        fire_ui::TestText,
+        fire_ui_cairo::Cairo { fonts },
     )
 }

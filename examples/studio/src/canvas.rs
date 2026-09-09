@@ -81,6 +81,7 @@ impl Widget for Playground {
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         if self.title.is_none() {
             self.title = Some(cx.paragraph(TextRequest {
+                previous: None,
                 text: Arc::from("fire"),
                 style: TextStyle {
                     size: theme(cx).size(TextRole::Display) * 1.5,

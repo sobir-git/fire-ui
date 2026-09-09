@@ -78,7 +78,7 @@ as built-in controls.
 
 For behavioral tests, construct `Ui`, pump mount work, lay out with a text engine,
 inspect `ui.semantics()`, call `ui.accessibility(id, action)`, pump outputs and lay out
-again. `TestText` provides deterministic test metrics. Use `NativeText` for shaping,
+again. `TestText` provides deterministic test metrics. Use `fire_ui_text::Text` for shaping,
 Unicode selection and geometry tests. Semantic tests do not establish pixel accuracy,
 IME platform behavior or native performance.
 

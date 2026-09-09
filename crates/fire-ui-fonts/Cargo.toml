@@ -1,0 +1,14 @@
+[package]
+name = "fire-ui-fonts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Explicit immutable font bytes and collection face selection"
+readme = "README.md"
+[features]
+default = []
+mmap = ["dep:memmap2"]
+[dependencies]
+memmap2 = { version = "0.9", optional = true }

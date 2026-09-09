@@ -32,6 +32,10 @@ pub(crate) fn apply<W: Widget>(
     let operation = &pending.operation;
     let required = match operation {
         Operation::Set(_) => Some(SemanticActionKind::SetValue),
+        Operation::Select { .. } | Operation::ClearSelection => {
+            Some(SemanticActionKind::SetSelection)
+        }
+        Operation::Scroll { .. } => Some(SemanticActionKind::ScrollBy),
         Operation::Copy { .. } => None,
         _ => Some(SemanticActionKind::ReplaceText),
     };
@@ -46,6 +50,31 @@ pub(crate) fn apply<W: Widget>(
     };
     let action = match operation {
         Operation::Set(text) => SemanticAction::SetValue(text.clone()),
+        Operation::Scroll { x, y } => SemanticAction::ScrollBy(fire_ui::Point::new(*x, *y)),
+        Operation::Select {
+            anchor,
+            caret,
+            require_empty,
+        } => {
+            let text = s.text.as_ref().unwrap();
+            if *require_empty && text.anchor != text.caret.byte {
+                return Err("selection already exists".into());
+            }
+            SemanticAction::SetSelection {
+                anchor: byte_offset(value, *anchor)?,
+                caret: byte_offset(value, *caret)?,
+            }
+        }
+        Operation::ClearSelection => {
+            let text = s.text.as_ref().unwrap();
+            if text.anchor == text.caret.byte {
+                return Err("selection unavailable".into());
+            }
+            SemanticAction::SetSelection {
+                anchor: text.caret.byte,
+                caret: text.caret.byte,
+            }
+        }
         Operation::Insert {
             position,
             text,

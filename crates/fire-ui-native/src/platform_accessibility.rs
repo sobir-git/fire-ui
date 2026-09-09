@@ -76,8 +76,12 @@ mod linux {
             adapter.0.update_window_focus_state(window.has_focus());
             adapter
         }
-        pub(crate) fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
-            self.0.update_if_active(update);
+        pub(crate) fn synchronize(
+            &mut self,
+            release_snapshots: bool,
+            update: impl FnOnce(bool) -> Option<(TreeUpdate, crate::linux_atspi::text::TextSnapshots)>,
+        ) {
+            self.0.synchronize(release_snapshots, update);
         }
         fn bounds(&mut self, window: &Window) {
             let outer: (_, _) = window
