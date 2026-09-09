@@ -43,6 +43,6 @@ return `Error::Unsupported` before widgets mutate a cut selection.
 Use `fire-ui-widgets` for optional composition helpers and `fire-ui-native` for
 native desktop hosting. No app storage or app-specific theme lives in this crate.
 
-See the [architecture](https://github.com/sobir-git/fire-ui/blob/v0.5.0/docs/architecture.md)
-and [studio](https://github.com/sobir-git/fire-ui/tree/v0.5.0/examples/studio).
+See the [architecture](https://github.com/sobir-git/fire-ui/blob/v0.7.0/docs/architecture.md)
+and [studio](https://github.com/sobir-git/fire-ui/tree/v0.7.0/examples/studio).
 Experimental 0.x API; MIT licensed.

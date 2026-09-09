@@ -1,18 +1,26 @@
 # Changelog
 
-## 0.6.0 · unreleased
+## 0.7.0 · 2026-09-09
+
+Native rendering, text and platform services are independently composable.
+Consumers update directly to the new interfaces.
+
+- Add optional X11/Cairo and OpenGL renderers. The native host no longer forces
+  GPU initialization, font discovery or a shaping dependency.
+- Share explicit immutable font resources between text and rendering. Preserve
+  Unicode editing, native accessibility and uncapped undo history.
+- Reuse unchanged logical lines through caller-owned paragraph snapshots; avoid
+  redundant scrollbar layouts and release superseded geometry promptly.
+- Bound gradient drawing to its actual geometry to remove excessive paint work.
+- Add isolated virtual-native Notes verification for memory, CPU, response time,
+  editing, IME/accessibility, animation, restoration and document growth.
+- Report the original 3 MB target honestly as unmet; enforce the revised balanced
+  4 MB ordinary private-dirty ceiling, zero swap and native response checks.
+
+## 0.6.0 · 2026-09-08
 
 Ambient values, a second scale, and the widget cleanups the compact theme exposed.
 Public contracts changed; consumers update directly.
-
-- Separate text services and renderer resources from the native host. Add direct
-  X11/Cairo drawing and move OpenGL drawing into an optional crate.
-- Share explicit font storage between text and drawing, remove redundant text
-  geometry storage, and release obsolete accessibility snapshots before layout.
-- Preserve native text actions and unlimited editor history; add semantic scrolling
-  through the same public interface for built-in and custom widgets.
-- Measure native memory with exact-byte, zero-swap checks. Full Fire Notes memory
-  acceptance remains under investigation; no replacement has been released.
 
 - Add `Palette::slate_dark` and `Scale::compact`, and `Theme::compact` pairing
   them: a dense instrument panel against the roomy ember default. Palette and

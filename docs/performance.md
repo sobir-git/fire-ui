@@ -1,6 +1,6 @@
 # Native measurements
 
-The 0.6 development host accepts a renderer and text engine explicitly. Cairo
+The 0.7 host accepts a renderer and text engine explicitly. Cairo
 does not initialize OpenGL or retain a full-window client framebuffer. Fonts and
 platform services are selected independently. The current Fire Notes comparison
 uses the full editor, animation, clipboard history and session restoration.

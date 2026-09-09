@@ -5,7 +5,7 @@ higher-level composition. Use it for native desktop tools, animated text and
 interactive canvases. Widgets retain their state; explicit invalidation and frame
 requests let the event loop sleep when idle.
 
-**Version 0.6.0 in development · Rust 1.88+ · MIT · experimental**
+**Version 0.7.0 · Rust 1.88+ · MIT · experimental**
 
 | Crate | Responsibility |
 | --- | --- |
@@ -23,8 +23,8 @@ application state or prescribed visual theme is required.
 
 ## Start an app
 
-The 0.6 design is being developed in this checkout; it has not been released or
-published. Apps select a host, text engine and renderer independently. For a
+The v0.7.0 GitHub prerelease provides seven crate archives; these crates are not
+published to crates.io. Apps select a host, text engine and renderer independently. For a
 Linux/X11 app, use path dependencies on `fire-ui`, `fire-ui-widgets`,
 `fire-ui-native`, `fire-ui-fonts`, `fire-ui-text` and `fire-ui-cairo` with its `x11` feature.
 
