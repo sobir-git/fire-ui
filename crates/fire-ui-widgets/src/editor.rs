@@ -115,31 +115,9 @@ impl Undo {
 pub struct EditorView<'a> {
     pub paragraph: &'a Paragraph,
     pub caret: Caret,
-    pub caret_visible: bool,
-    pub composing: bool,
     pub selection: Option<Range<usize>>,
     pub viewport: Rect,
     pub focused: bool,
-}
-impl EditorView<'_> {
-    /// The visual cell beside the caret. Decorations can use this for block or
-    /// framed carets without reproducing bidirectional text and wrap geometry.
-    pub fn caret_cell(&self) -> Rect {
-        let point = self.paragraph.caret_point(self.caret);
-        let right = self.paragraph.visual_move(self.caret, true);
-        let right_point = self.paragraph.caret_point(right);
-        let left = self.paragraph.visual_move(self.caret, false);
-        let left_point = self.paragraph.caret_point(left);
-        let same_line_width = |other: Point| {
-            ((other.y - point.y).abs() < self.paragraph.line_height * 0.5)
-                .then_some((other.x - point.x).abs())
-                .filter(|width| *width > 0.5)
-        };
-        let width = same_line_width(right_point)
-            .or_else(|| same_line_width(left_point))
-            .unwrap_or(self.paragraph.line_height * 0.6);
-        Rect::new(point.x, point.y, width, self.paragraph.line_height)
-    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EditorLayer {
@@ -152,10 +130,6 @@ pub trait EditorDecoration: 'static {
     /// Bounds of all decoration pixels in paragraph coordinates. None invalidates the editor.
     fn damage(&self, _view: &EditorView<'_>) -> Option<Rect> {
         None
-    }
-    /// Return true when the decoration paints the caret itself.
-    fn paints_caret(&self) -> bool {
-        false
     }
     fn paint(&self, view: &EditorView<'_>, layer: EditorLayer, painter: &mut dyn Painter);
 }
@@ -341,8 +315,6 @@ impl<D: Document> Editor<D> {
         Some(EditorView {
             paragraph: self.paragraph.as_deref()?,
             caret: self.caret,
-            caret_visible: self.caret_on,
-            composing: !self.preedit.is_empty(),
             selection: self.selection(),
             viewport: Rect::new(self.scroll.x, self.scroll.y, bounds.width, bounds.height),
             focused,
@@ -765,21 +737,7 @@ impl<D: Document> Widget for Editor<D> {
     fn timer(&mut self, cx: &mut Update<'_, Self>, timer: Timer) {
         if timer == self.blink && cx.focused() && self.caret_blink {
             self.caret_on = !self.caret_on;
-            if self.decoration.as_ref().is_some_and(|d| d.paints_caret()) {
-                if let Some(view) = self.view(cx.bounds(), true) {
-                    let cell = view.caret_cell();
-                    let inset = self.insets();
-                    cx.repaint_rect(
-                        Rect::new(
-                            cell.x + inset.x - self.scroll.x,
-                            cell.y + inset.y - self.scroll.y,
-                            cell.width,
-                            cell.height,
-                        )
-                        .inset(-2.),
-                    );
-                }
-            } else if let Some(rect) = self.ime_cursor() {
+            if let Some(rect) = self.ime_cursor() {
                 cx.repaint_rect(rect.inset(-2.));
             }
             let _ = cx.after(self.blink, Duration::from_millis(530));
@@ -1265,10 +1223,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             if cx.focused {
                 let point = p.caret_point(self.caret);
-                if self.caret_on
-                    && self.preedit.is_empty()
-                    && !self.decoration.as_ref().is_some_and(|d| d.paints_caret())
-                {
+                if self.caret_on && self.preedit.is_empty() {
                     cx.painter.rect(
                         Rect::new(point.x, point.y, 1.5, p.line_height),
                         0.,
