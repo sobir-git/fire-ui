@@ -22,11 +22,11 @@ The profiler choice and custom allocator hooks follow the upstream
 The [Massif manual](https://valgrind.org/docs/manual/ms-manual.html) explains why
 heap requests alone cannot establish resident memory.
 
-The final full-coverage Notes native gate passes with 3,493,888–3,510,272 private
-dirty bytes and 10,203,136–10,252,288 total private resident bytes. App and private
-Xvfb swap are zero. Ordinary app CPU is 2.06–2.11 seconds; Xvfb uses a separate
-2.22–2.29 seconds. The 3 MB target was not met. Native drawable p95 response is
-1.93 ms for idle pointer input, 3.14 ms during fire and 8.57 ms for resizing.
+The final full-coverage Notes native gate passes with 3,506,176–3,522,560 private
+dirty bytes and 10,153,984–10,186,752 total private resident bytes. App and private
+Xvfb swap are zero. Ordinary app CPU is 4.20–4.35 seconds; Xvfb uses a separate
+4.56–4.82 seconds. The 3 MB target was not met. Native drawable p95 response is
+4.76 ms for idle pointer input, 7.29 ms during fire and 13.60 ms for resizing.
 [Consumer measurements and growth limits](../../fire-notes/docs/performance.md)
 include the exact binary and acceptance receipt.
 
