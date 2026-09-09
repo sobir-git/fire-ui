@@ -151,8 +151,16 @@ def main():
                 env["DISPLAY"] = ":" + wait_for(display_number, "Xvfb display")
             run("dbus-update-activation-environment", "DISPLAY", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "HOME", "GSETTINGS_BACKEND")
             results["versions"] = {"ibus": run("ibus", "version"), "orca": run("orca", "--version")}
-            start("ibus", "ibus-daemon", "--config=disable", "--emoji-extension=disable", "--cache=none")
+            start("ibus", "ibus-daemon", "--panel=disable", "--config=disable", "--emoji-extension=disable", "--cache=none")
             wait_for(lambda: run("ibus", "address"), "IBus bus")
+            # A private X server has no desktop shell to provide the candidate
+            # panel. Own the installed GTK panel and retain its startup errors.
+            panel_binary = next((Path(path) for path in (
+                "/usr/libexec/ibus-ui-gtk3", "/usr/lib/ibus/ibus-ui-gtk3", "/usr/lib64/ibus/ibus-ui-gtk3"
+            ) if Path(path).is_file()), None)
+            if panel_binary is None:
+                raise RuntimeError("Install the IBus GTK candidate panel (ibus-ui-gtk3)")
+            start("ibus-panel", panel_binary)
             engine("xkb:us::eng")
             # IBus daemon redirects child errors to /dev/null. Own the XIM process
             # explicitly so startup failures remain visible on minimal CI desktops.
