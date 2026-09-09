@@ -5,7 +5,7 @@ higher-level composition. Use it for native desktop tools, animated text and
 interactive canvases. Widgets retain their state; explicit invalidation and frame
 requests let the event loop sleep when idle.
 
-**Version 0.7.0 · Rust 1.88+ · MIT · experimental**
+**Version 0.8.0 · Rust 1.88+ · MIT · experimental**
 
 | Crate | Responsibility |
 | --- | --- |
@@ -14,8 +14,8 @@ requests let the event loop sleep when idle.
 | `fire-ui-native` | Desktop windows, input/IME routing and optional platform services. |
 | `fire-ui-fonts` | Shared immutable font bytes and explicit file-face selection; optional mapping. |
 | `fire-ui-text` | Unicode shaping and editing geometry. |
-| `fire-ui-cairo` | Cairo painting and an optional direct X11 presentation target. |
-| `fire-ui-gl` | Optional OpenGL painting and retained repainting. |
+| `fire-ui-cairo` | Cairo painting with direct or retained X11 presentation. |
+| `fire-ui-gl` | Optional OpenGL painting, retained repainting and rasterized glyph masks. |
 
 The layers are separate dependencies. You can use the core with your own host,
 write custom widgets, or compose the supplied controls. No Fire Notes checkout,
@@ -23,7 +23,7 @@ application state or prescribed visual theme is required.
 
 ## Start an app
 
-The v0.7.0 GitHub prerelease provides seven crate archives; these crates are not
+The v0.8.0 GitHub prerelease provides seven crate archives; these crates are not
 published to crates.io. Apps select a host, text engine and renderer independently. For a
 Linux/X11 app, use path dependencies on `fire-ui`, `fire-ui-widgets`,
 `fire-ui-native`, `fire-ui-fonts`, `fire-ui-text` and `fire-ui-cairo` with its `x11` feature.
@@ -39,7 +39,7 @@ fn main() -> Result<(), String> {
         Padding::new(Element::leaf(Label::new("Hello, Fire UI")), 24.0),
         WindowOptions::default(),
         fire_ui_text::Text::new(fonts.clone())?,
-        fire_ui_cairo::Cairo { fonts },
+        fire_ui_cairo::Cairo::direct(fonts),
     )
 }
 ```
@@ -62,7 +62,8 @@ anywhere in it.
 
 The native host defaults to X11 windows. Accessibility, agent inspection, clipboard
 and dialogs are independent host features. GPU drawing, font coverage and retained
-repainting are explicit app choices. OpenGL bitmap-font decoding is a renderer feature. See [native configuration](crates/fire-ui-native/README.md).
+repainting are explicit app choices. OpenGL bitmap-font decoding and rasterized
+`raster-text` are renderer features. See [native configuration](crates/fire-ui-native/README.md).
 
 ## Support and limits
 
@@ -91,8 +92,8 @@ screen-reader verification, and variable-height lists, remain future work.
 
 The [performance report](docs/performance.md) records native measurements and their
 limits. Low idle CPU, memory use, direct pointer response and fast resizing remain
-requirements. Cairo draws directly into the X11 window without a client framebuffer;
-OpenGL consumers can choose retained repainting on `fire_ui_gl::OpenGl`.
+requirements. Cairo consumers choose direct drawing without a client framebuffer or
+a retained client image; OpenGL consumers choose retained repainting separately.
 Display-server surfaces, glyph resources and GPU costs are measured separately from
 app memory. The full Fire Notes memory requirement has not yet passed reliably.
 

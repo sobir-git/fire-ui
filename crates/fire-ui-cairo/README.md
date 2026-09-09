@@ -1,8 +1,10 @@
 # Fire UI Cairo
 
 Cairo implementation of the public `fire_ui::Painter` interface. The optional
-`x11` feature adds the native `Cairo { fonts }` renderer. It draws directly into
-the X11 window, without a retained client framebuffer or an OpenGL context.
+`x11` feature adds native presentation without an OpenGL context. Choose
+`Cairo::direct(fonts)` for the lowest memory use, or `Cairo::retained(fonts)` to
+copy completed damage from a four-byte-per-pixel client image and prevent visible
+clear-then-draw updates.
 
 `CairoPainter::new(context, &faces)` also works with application-owned Cairo
 contexts, including image surfaces. `FontFaces::new(&fonts)` keeps the selected

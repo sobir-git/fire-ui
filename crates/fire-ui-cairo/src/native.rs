@@ -4,9 +4,26 @@ use fire_ui_fonts::Fonts;
 use fire_ui_native::renderer_types::{ActiveEventLoop, Window, WindowAttributes};
 use fire_ui_native::{Renderer, RendererFactory};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-/// Direct X11 drawing. It allocates no client framebuffer or retained window image.
+/// Cairo drawing with an explicit direct or retained X11 presentation mode.
 pub struct Cairo {
-    pub fonts: Fonts,
+    fonts: Fonts,
+    retained: bool,
+}
+impl Cairo {
+    /// Lowest-memory X11 presentation. Damage is painted directly into the window.
+    pub fn direct(fonts: Fonts) -> Self {
+        Self {
+            fonts,
+            retained: false,
+        }
+    }
+    /// Completed damage is copied from a four-byte-per-pixel client image.
+    pub fn retained(fonts: Fonts) -> Self {
+        Self {
+            fonts,
+            retained: true,
+        }
+    }
 }
 impl RendererFactory for Cairo {
     fn create(
@@ -45,10 +62,26 @@ impl RendererFactory for Cairo {
         }
         .map_err(|e| e.to_string())?;
         let window = std::sync::Arc::new(window);
+        let font_options = cairo::Context::new(&surface)
+            .and_then(|context| context.font_options())
+            .map_err(|e| e.to_string())?;
+        let backing = self
+            .retained
+            .then(|| {
+                cairo::ImageSurface::create(
+                    cairo::Format::ARgb32,
+                    size.width as i32,
+                    size.height as i32,
+                )
+            })
+            .transpose()
+            .map_err(|e| e.to_string())?;
         Ok((
             window.clone(),
             Box::new(Target {
                 surface,
+                backing,
+                font_options,
                 fonts: FontFaces::new(&self.fonts)?,
                 size: (size.width, size.height),
                 _window: window,
@@ -58,6 +91,8 @@ impl RendererFactory for Cairo {
 }
 struct Target {
     surface: cairo::Surface,
+    backing: Option<cairo::ImageSurface>,
+    font_options: cairo::FontOptions,
     fonts: FontFaces,
     size: (u32, u32),
     _window: std::sync::Arc<Window>,
@@ -84,8 +119,17 @@ impl Renderer for Target {
                 )
             }
             self.size = (size.width, size.height);
+            if self.backing.is_some() {
+                self.backing = Some(
+                    cairo::ImageSurface::create(
+                        cairo::Format::ARgb32,
+                        size.width as i32,
+                        size.height as i32,
+                    )
+                    .map_err(|e| e.to_string())?,
+                );
+            }
         }
-        let c = cairo::Context::new(&self.surface).map_err(|e| e.to_string())?;
         let scale = window.scale_factor();
         let region = if resized {
             None
@@ -107,6 +151,13 @@ impl Renderer for Target {
                 )
             })
         };
+        let c = if let Some(backing) = &self.backing {
+            cairo::Context::new(backing)
+        } else {
+            cairo::Context::new(&self.surface)
+        }
+        .map_err(|e| e.to_string())?;
+        c.set_font_options(&self.font_options);
         if let Some(r) = region {
             c.rectangle(
                 r.x as f64 * scale,
@@ -122,11 +173,33 @@ impl Renderer for Target {
             background.2 as f64,
             background.3 as f64,
         );
+        c.set_operator(cairo::Operator::Source);
         c.paint().map_err(|e| e.to_string())?;
+        c.set_operator(cairo::Operator::Over);
         c.scale(scale, scale);
         let mut painter = CairoPainter::new(c, &self.fonts);
         paint(&mut painter, region);
         painter.status()?;
+
+        if let Some(backing) = &self.backing {
+            // The visible X11 window receives one completed image operation. Painting
+            // widgets into it directly exposes the cleared damage before later drawing.
+            let present = cairo::Context::new(&self.surface).map_err(|e| e.to_string())?;
+            if let Some(r) = region {
+                present.rectangle(
+                    r.x as f64 * scale,
+                    r.y as f64 * scale,
+                    r.width as f64 * scale,
+                    r.height as f64 * scale,
+                );
+                present.clip();
+            }
+            present.set_operator(cairo::Operator::Source);
+            present
+                .set_source_surface(backing, 0., 0.)
+                .and_then(|_| present.paint())
+                .map_err(|e| e.to_string())?;
+        }
         self.surface.flush();
         unsafe {
             x11::xlib::XFlush(cairo::ffi::cairo_xlib_surface_get_display(

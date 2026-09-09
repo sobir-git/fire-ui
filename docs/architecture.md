@@ -234,10 +234,11 @@ positioned glyphs and editing geometry from explicitly selected font resources.
 Both renderers and custom widgets consume that same paragraph contract.
 
 Local repaint requests accumulate window-coordinate damage. Layout changes
-invalidate the full window. The Cairo X11 renderer draws directly into the window
-without a client framebuffer. OpenGL can explicitly retain a framebuffer and
-copy it to the swap surface. Custom backend painting reports whether the selected
-renderer handled it. No render thread is required.
+invalidate the full window. Cairo X11 lets an app choose direct drawing with no
+client framebuffer or a retained image that copies completed damage to the window.
+OpenGL can retain a framebuffer and copy it to the swap surface. Custom backend
+painting reports whether the selected renderer handled it. No render thread is
+required.
 
 ## Verification and remaining work
 

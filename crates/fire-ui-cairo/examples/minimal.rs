@@ -30,6 +30,6 @@ fn main() -> Result<(), String> {
             ..WindowOptions::default()
         },
         fire_ui::TestText,
-        fire_ui_cairo::Cairo { fonts },
+        fire_ui_cairo::Cairo::direct(fonts),
     )
 }

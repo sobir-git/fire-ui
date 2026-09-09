@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 · 2026-09-09
+
+Text rendering and completed-frame presentation are explicit renderer choices.
+
+- Add opt-in cached glyph masks for ordinary solid OpenGL text through FemtoVG's
+  Swash renderer while preserving its outline fallbacks and the outline-only build.
+- Let Cairo apps choose direct zero-buffer drawing or a retained client image that
+  prevents visible clear-then-draw updates.
+
 ## 0.7.0 · 2026-09-09
 
 Native rendering, text and platform services are independently composable.

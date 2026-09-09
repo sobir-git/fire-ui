@@ -12,5 +12,5 @@ fire-ui.workspace = true
 fire-ui-widgets.workspace = true
 fire-ui-native = { workspace = true, features = ["accessibility", "inspection", "clipboard"] }
 
-fire-ui-gl = { workspace = true, features = ["bitmap-fonts"] }
+fire-ui-gl = { workspace = true, features = ["bitmap-fonts", "raster-text"] }
 fire-ui-text.workspace = true

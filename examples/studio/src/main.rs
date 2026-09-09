@@ -86,7 +86,7 @@ impl Body {
     fn new() -> Element<Self> {
         Element::build(|c| Self {
             wordmark: c.add(text("Fire UI", TextRole::Title)),
-            version: c.add(muted("Studio · 0.7.0", TextRole::Micro)),
+            version: c.add(muted("Studio · 0.8.0", TextRole::Micro)),
             nav: c.connect(Tabs::vertical(SECTIONS), |v| Message::Navigate(*v)),
             rule: c.add(Element::leaf(Divider)),
             status: c.add(muted("Ready", TextRole::Small)),

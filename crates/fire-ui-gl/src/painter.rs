@@ -1,9 +1,13 @@
 use femtovg::{renderer::OpenGl, Canvas};
 use fire_ui::*;
+#[cfg(not(feature = "raster-text"))]
 use fire_ui_fonts::Fonts;
 pub(crate) struct GlPainter<'a> {
     pub(crate) canvas: &'a mut Canvas<OpenGl>,
+    #[cfg(not(feature = "raster-text"))]
     pub(crate) fonts: &'a Fonts,
+    #[cfg(feature = "raster-text")]
+    pub(crate) font_ids: &'a [femtovg::FontId],
     clip: Rect,
     clips: Vec<Rect>,
     images: Vec<femtovg::ImageId>,
@@ -13,10 +17,18 @@ impl<'a> GlPainter<'a> {
     pub(crate) fn status(&self) -> Result<(), String> {
         self.error.clone().map_or(Ok(()), Err)
     }
-    pub(crate) fn new(canvas: &'a mut Canvas<OpenGl>, fonts: &'a Fonts, viewport: Rect) -> Self {
+    pub(crate) fn new(
+        canvas: &'a mut Canvas<OpenGl>,
+        #[cfg(not(feature = "raster-text"))] fonts: &'a Fonts,
+        #[cfg(feature = "raster-text")] font_ids: &'a [femtovg::FontId],
+        viewport: Rect,
+    ) -> Self {
         Self {
             canvas,
+            #[cfg(not(feature = "raster-text"))]
             fonts,
+            #[cfg(feature = "raster-text")]
+            font_ids,
             clip: viewport,
             clips: vec![],
             images: vec![],
@@ -132,79 +144,110 @@ impl Painter for GlPainter<'_> {
         let first = p.lines.partition_point(|line| line.y + p.line_height < top);
         for line in p.lines[first..].iter().take_while(|line| line.y < bottom) {
             for run in &line.runs {
-                let Some(face) = self.fonts.get(run.font as usize).and_then(|font| {
-                    ttf_parser::Face::parse(font.bytes.as_ref(), font.face_index).ok()
-                }) else {
-                    self.error =
-                        Some("Paragraph references a font that this painter does not own".into());
-                    return;
-                };
-                let scale = p.style.size / face.units_per_em() as f32;
-                for glyph in run.glyphs.iter() {
-                    if glyph.index >= face.number_of_glyphs() as u32 {
+                #[cfg(feature = "raster-text")]
+                {
+                    let Some(font) = self.font_ids.get(run.font as usize).copied() else {
+                        self.error = Some(
+                            "Paragraph references a font that this painter does not own".into(),
+                        );
+                        return;
+                    };
+                    if run.glyphs.iter().any(|glyph| glyph.index > u16::MAX as u32) {
                         self.error = Some("Paragraph references an invalid glyph".into());
                         return;
                     }
-                    let mut outline = Outline {
-                        path: femtovg::Path::new(),
-                        scale,
+                    let y = (origin.y + line.y + p.baseline).round();
+                    let glyphs = run.glyphs.iter().map(|glyph| femtovg::PositionedGlyph {
                         x: origin.x + run.x + glyph.offset.x,
-                        y: (origin.y + line.y + p.baseline).round() + glyph.offset.y,
-                    };
-                    if face
-                        .outline_glyph(ttf_parser::GlyphId(glyph.index as u16), &mut outline)
-                        .is_some()
-                    {
-                        self.canvas.fill_path(&outline.path, &paint);
-                        continue;
-                    }
-                    #[cfg(not(feature = "bitmap-fonts"))]
-                    if face
-                        .glyph_raster_image(
-                            ttf_parser::GlyphId(glyph.index as u16),
-                            p.style.size.ceil() as u16,
-                        )
-                        .is_some()
-                    {
-                        self.error =
-                            Some("Bitmap glyph requires the bitmap-fonts renderer feature".into());
+                        y: y + glyph.offset.y,
+                        glyph_id: glyph.index as u16,
+                    });
+                    let mut paint = paint.clone();
+                    paint.set_font_size(p.style.size);
+                    if let Err(error) = self.canvas.fill_glyph_run(font, &[], glyphs, &paint) {
+                        self.error = Some(error.to_string());
                         return;
                     }
-                    #[cfg(feature = "bitmap-fonts")]
-                    if let Some(bitmap) = face.glyph_raster_image(
-                        ttf_parser::GlyphId(glyph.index as u16),
-                        p.style.size.ceil() as u16,
-                    ) {
-                        if bitmap.format != ttf_parser::RasterImageFormat::PNG {
-                            self.error = Some("Unsupported bitmap glyph encoding".into());
+                    continue;
+                }
+                #[cfg(not(feature = "raster-text"))]
+                {
+                    let Some(face) = self.fonts.get(run.font as usize).and_then(|font| {
+                        ttf_parser::Face::parse(font.bytes.as_ref(), font.face_index).ok()
+                    }) else {
+                        self.error = Some(
+                            "Paragraph references a font that this painter does not own".into(),
+                        );
+                        return;
+                    };
+                    let scale = p.style.size / face.units_per_em() as f32;
+                    for glyph in run.glyphs.iter() {
+                        if glyph.index >= face.number_of_glyphs() as u32 {
+                            self.error = Some("Paragraph references an invalid glyph".into());
                             return;
                         }
+                        let mut outline = Outline {
+                            path: femtovg::Path::new(),
+                            scale,
+                            x: origin.x + run.x + glyph.offset.x,
+                            y: (origin.y + line.y + p.baseline).round() + glyph.offset.y,
+                        };
+                        if face
+                            .outline_glyph(ttf_parser::GlyphId(glyph.index as u16), &mut outline)
+                            .is_some()
                         {
-                            if bitmap.pixels_per_em == 0 {
-                                self.error = Some("Bitmap glyph has zero pixels per em".into());
+                            self.canvas.fill_path(&outline.path, &paint);
+                            continue;
+                        }
+                        #[cfg(not(feature = "bitmap-fonts"))]
+                        if face
+                            .glyph_raster_image(
+                                ttf_parser::GlyphId(glyph.index as u16),
+                                p.style.size.ceil() as u16,
+                            )
+                            .is_some()
+                        {
+                            self.error = Some(
+                                "Bitmap glyph requires the bitmap-fonts renderer feature".into(),
+                            );
+                            return;
+                        }
+                        #[cfg(feature = "bitmap-fonts")]
+                        if let Some(bitmap) = face.glyph_raster_image(
+                            ttf_parser::GlyphId(glyph.index as u16),
+                            p.style.size.ceil() as u16,
+                        ) {
+                            if bitmap.format != ttf_parser::RasterImageFormat::PNG {
+                                self.error = Some("Unsupported bitmap glyph encoding".into());
                                 return;
                             }
-                            match self
-                                .canvas
-                                .load_image_mem(bitmap.data, femtovg::ImageFlags::empty())
                             {
-                                Ok(image) => {
-                                    let scale = p.style.size / bitmap.pixels_per_em as f32;
-                                    let x = outline.x + bitmap.x as f32 * scale;
-                                    let y = outline.y - bitmap.y as f32 * scale;
-                                    let w = bitmap.width as f32 * scale;
-                                    let h = bitmap.height as f32 * scale;
-                                    let mut path = femtovg::Path::new();
-                                    path.rect(x, y, w, h);
-                                    self.canvas.fill_path(
-                                        &path,
-                                        &femtovg::Paint::image(image, x, y, w, h, 0., 1.),
-                                    );
-                                    self.images.push(image);
-                                }
-                                Err(error) => {
-                                    self.error = Some(error.to_string());
+                                if bitmap.pixels_per_em == 0 {
+                                    self.error = Some("Bitmap glyph has zero pixels per em".into());
                                     return;
+                                }
+                                match self
+                                    .canvas
+                                    .load_image_mem(bitmap.data, femtovg::ImageFlags::empty())
+                                {
+                                    Ok(image) => {
+                                        let scale = p.style.size / bitmap.pixels_per_em as f32;
+                                        let x = outline.x + bitmap.x as f32 * scale;
+                                        let y = outline.y - bitmap.y as f32 * scale;
+                                        let w = bitmap.width as f32 * scale;
+                                        let h = bitmap.height as f32 * scale;
+                                        let mut path = femtovg::Path::new();
+                                        path.rect(x, y, w, h);
+                                        self.canvas.fill_path(
+                                            &path,
+                                            &femtovg::Paint::image(image, x, y, w, h, 0., 1.),
+                                        );
+                                        self.images.push(image);
+                                    }
+                                    Err(error) => {
+                                        self.error = Some(error.to_string());
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -218,12 +261,14 @@ impl Painter for GlPainter<'_> {
     }
 }
 
+#[cfg(not(feature = "raster-text"))]
 struct Outline {
     path: femtovg::Path,
     scale: f32,
     x: f32,
     y: f32,
 }
+#[cfg(not(feature = "raster-text"))]
 impl ttf_parser::OutlineBuilder for Outline {
     fn move_to(&mut self, x: f32, y: f32) {
         self.path

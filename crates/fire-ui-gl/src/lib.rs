@@ -73,6 +73,23 @@ impl RendererFactory for OpenGl {
             surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
         let renderer = unsafe { Gl::new_from_function_cstr(|name| display.get_proc_address(name)) }
             .map_err(|e| e.to_string())?;
+        #[cfg(feature = "raster-text")]
+        let (canvas, font_ids) = {
+            let text = femtovg::TextContext::default();
+            let font_ids = self
+                .fonts
+                .iter()
+                .map(|font| {
+                    text.add_shared_font_with_index(font.bytes.clone(), font.face_index)
+                        .map_err(|error| error.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            (
+                Canvas::new_with_text_context(renderer, text).map_err(|e| e.to_string())?,
+                font_ids,
+            )
+        };
+        #[cfg(not(feature = "raster-text"))]
         let canvas = Canvas::new(renderer).map_err(|e| e.to_string())?;
         let presenter = if self.partial_repaint {
             unsafe { crate::present::Presenter::new(|name| display.get_proc_address(name)) }
@@ -87,7 +104,10 @@ impl RendererFactory for OpenGl {
                 canvas,
                 backing: None,
                 presenter,
+                #[cfg(not(feature = "raster-text"))]
                 fonts: self.fonts,
+                #[cfg(feature = "raster-text")]
+                font_ids,
                 surface,
                 context,
                 partial_repaint: self.partial_repaint,
@@ -100,7 +120,10 @@ struct Target {
     canvas: Canvas<Gl>,
     backing: Option<femtovg::ImageId>,
     presenter: Option<present::Presenter>,
+    #[cfg(not(feature = "raster-text"))]
     fonts: Fonts,
+    #[cfg(feature = "raster-text")]
+    font_ids: Vec<femtovg::FontId>,
     surface: Surface<WindowSurface>,
     context: PossiblyCurrentContext,
     partial_repaint: bool,
@@ -191,7 +214,10 @@ impl Renderer for Target {
                 {
                     let mut painter = GlPainter::new(
                         &mut s.canvas,
+                        #[cfg(not(feature = "raster-text"))]
                         &s.fonts,
+                        #[cfg(feature = "raster-text")]
+                        &s.font_ids,
                         Rect::new(0., 0., size.width as f32, size.height as f32),
                     );
                     paint(&mut painter, Some(region));
@@ -253,7 +279,10 @@ impl Renderer for Target {
             {
                 let mut painter = GlPainter::new(
                     &mut s.canvas,
+                    #[cfg(not(feature = "raster-text"))]
                     &s.fonts,
+                    #[cfg(feature = "raster-text")]
+                    &s.font_ids,
                     Rect::new(0., 0., size.width as f32, size.height as f32),
                 );
                 paint(&mut painter, None);
