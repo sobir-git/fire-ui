@@ -2,8 +2,9 @@
 """Compare the same draw-only app with minimal and optional native dependencies.
 
 Each variant is an independent consumer workspace and has its own Cargo target
-directory: studio features cannot contaminate the minimal measurement. Re-running
-uses those caches and records that fact. Runtime samples require Linux, Xvfb,
+directory: studio features cannot contaminate the minimal measurement. Scratch
+workspaces and targets are removed; only explicit evidence binaries and logs remain.
+Runtime samples require Linux, Xvfb,
 xdotool and dbus-run-session; Pillow enables screenshots. No user display is used.
 """
 import argparse
@@ -17,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from probe_lifetime import install_signal_cleanup, run_owned
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +44,12 @@ def stop(process):
 
 
 def build(variant, directory, host):
-    project = directory / "consumer"
+    with tempfile.TemporaryDirectory(prefix="fire-ui-lean-build-") as temporary:
+        return build_in(variant, directory, host, Path(temporary))
+
+
+def build_in(variant, directory, host, temporary):
+    project = temporary / "consumer"
     (project / "src").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "crates/fire-ui-cairo/examples/minimal.rs", project / "src/main.rs")
     # JSON string escaping is also valid for these TOML basic strings.
@@ -55,12 +63,12 @@ def build(variant, directory, host):
         f'fire-ui-cairo = {{ path = {json.dumps(str(ROOT / "crates/fire-ui-cairo"))}, features = ["x11"] }}\n'
         '[profile.release]\nopt-level = 3\nlto = "thin"\ncodegen-units = 1\nstrip = true\n'
     )
-    target = directory / "target"
+    target = temporary / "target"
     had_cache = target.exists()
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
     started = time.monotonic()
     with (directory / "build.log").open("w") as log:
-        result = subprocess.run(["cargo", "build", "--release", "--target", host],
+        result = run_owned(["cargo", "build", "--release", "--target", host],
                                 cwd=project, env=env, stdout=log, stderr=log)
     elapsed = time.monotonic() - started
     if result.returncode:
@@ -79,13 +87,22 @@ def build(variant, directory, host):
         if unwanted:
             raise RuntimeError(f"Optional dependencies leaked into minimal: {unwanted}")
     binary = target / host / "release/fire-ui-lean-probe"
+    # These are explicit evidence outputs, also used by --measure-only.
+    evidence_binary = directory / "fire-ui-lean-probe"
+    shutil.copy2(binary, evidence_binary)
+    evidence_source = directory / "consumer/src"
+    evidence_source.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(project / "src/main.rs", evidence_source / "main.rs")
+    shutil.copy2(project / "Cargo.lock", directory / "consumer/Cargo.lock")
+    shutil.copy2(project / "Cargo.toml", directory / "consumer/Cargo.toml")
+    binary = evidence_binary
     return binary, {
         "features": FEATURES[variant], "binary": str(binary),
         "binary_bytes": binary.stat().st_size,
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "dependency_packages": len(packages) - 1, "dependency_kind": "normal and build, host target",
         "build_seconds": round(elapsed, 3), "target_directory_existed": had_cache,
-        "build_cache": "variant-specific target; Cargo source/download cache shared",
+        "build_cache": "temporary variant-specific target, deleted after build; Cargo downloads shared",
         "target_bytes": sum(path.stat().st_size for path in target.rglob("*") if path.is_file()),
     }
 
@@ -253,7 +270,7 @@ def main():
         parser.error("--seconds must be positive")
     if not args.build_only and os.environ.get("_FIRE_UI_LEAN_PRIVATE_BUS") != "1":
         env = {**os.environ, "_FIRE_UI_LEAN_PRIVATE_BUS": "1"}
-        raise SystemExit(subprocess.run(["dbus-run-session", "--", sys.executable, *sys.argv], env=env).returncode)
+        raise SystemExit(run_owned(["dbus-run-session", "--", sys.executable, *sys.argv], env=env).returncode)
     directory = Path(args.output).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     rustc = output(["rustc", "-vV"])
@@ -290,4 +307,5 @@ def main():
 
 
 if __name__ == "__main__":
+    install_signal_cleanup()
     main()

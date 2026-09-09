@@ -17,8 +17,15 @@ On Unix, opt in with a socket in a private directory. The host never opens a lis
 by default. Use temporary application data when testing editing or deletion.
 
 ```sh
-inspection_dir=$(mktemp -d)
-FIRE_UI_INSPECT="$inspection_dir/ui.sock" cargo run --release -p fire-ui-studio
+(
+    inspection_dir=
+    trap '[ -z "$inspection_dir" ] || rm -rf -- "$inspection_dir"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    inspection_dir=$(mktemp -d) || exit 1
+    FIRE_UI_INSPECT="$inspection_dir/ui.sock" cargo run --release -p fire-ui-studio
+)
 ```
 
 In another terminal, use the actual socket path printed by your shell or obtained

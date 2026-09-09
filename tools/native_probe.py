@@ -15,6 +15,8 @@ import sys
 import tempfile
 import time
 
+from probe_lifetime import install_signal_cleanup, run_owned
+
 from PIL import ImageGrab
 from fire_ui_inspect import request as inspect_request
 
@@ -28,7 +30,7 @@ def main():
     args = parser.parse_args()
     if args.accessibility and os.environ.get("_FIRE_UI_PROBE_PRIVATE_BUS") != "1":
         private_env = {**os.environ, "_FIRE_UI_PROBE_PRIVATE_BUS": "1", "GSETTINGS_BACKEND": "memory"}
-        raise SystemExit(subprocess.run(["dbus-run-session", "--", sys.executable, *sys.argv], env=private_env).returncode)
+        raise SystemExit(run_owned(["dbus-run-session", "--", sys.executable, *sys.argv], env=private_env).returncode)
     if args.seconds <= 0:
         parser.error("--seconds must be positive")
     binary = Path(args.binary).resolve()
@@ -605,4 +607,5 @@ sys.stdin.read()
 
 
 if __name__ == "__main__":
+    install_signal_cleanup()
     main()

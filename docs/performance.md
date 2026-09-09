@@ -242,3 +242,39 @@ Windows/macOS native interaction, hardware-GPU performance and physical-display
 latency remain unverified. Linux evidence covers the installed IBus/XIM and Orca
 versions above, not every engine or assistive device. Variable-height lists and
 large-document incremental layout remain future work. Wayland is deferred.
+
+## Local build storage
+
+September 9, 2026, Linux x86_64, Cargo/rustc 1.93.0. A clean
+`cargo build --locked -p fire-ui-studio` in a temporary target took 72.644 seconds;
+a second identical build took 0.381 seconds. Both retained exactly 854,487,040
+allocated file bytes, about 815 MiB, with zero incremental bytes. Counts use Unix
+allocated blocks and count hardlinked files once; directory blocks are excluded.
+The measurement ran alongside a separate minimal-consumer build, so timings are
+not an uncontended compiler benchmark. The temporary target was removed afterward.
+
+Largest generated files by logical size were the studio executable, 71,455,568
+bytes, `x11rb-protocol` archive, 34,314,872 bytes, `zbus` archive, 21,905,834 bytes,
+and `syn` archive, 19,990,824 bytes. Cargo hardlinks the studio into `debug/deps`;
+that is not a second disk allocation. `addr2line` resolved the development studio's
+`main` to `examples/studio/src/main.rs:326`.
+
+Dev and test retain line tables and optimization level 1, with incremental output
+disabled. The reported earlier 6.9 GB incremental cache across 338 directories
+justifies disabling it; the old target had already been removed before this run.
+The measured dependency archives do not justify package-specific stripping and
+losing their trace information. Release settings are unchanged.
+
+An independent `lean_probe.py --build-only --variant minimal` release consumer
+also passed: 1,651,824 executable bytes and 193,449,643
+logical target bytes before automatic removal. Its manifest supplies its own
+release profile; these numbers are separate from the studio development build.
+Evidence is in local `artifacts/build-storage`, including build logs, JSON and the
+minimal binary. The probe retains these explicit evidence outputs, not its cache.
+
+A live Cargo test confirmed shared targets serialize on the artifact lock,
+separate targets build concurrently, and cleanup refuses a held Cargo lock.
+The [development commands](../README.md#development) enforce a preflight budget
+and preserve worktree-local targets. This is a between-build guard, not a filesystem
+quota. Raw Cargo/editor builds, package verification targets, retained evidence,
+and interrupted processes killed with SIGKILL still require storage attention.

@@ -98,6 +98,40 @@ app memory. The full Fire Notes memory requirement has not yet passed reliably.
 
 ## Development
 
+Local dev/test profiles keep file/line backtraces and disable incremental caches.
+Use the Unix storage guard for local builds, including additional worktrees:
+
+```sh
+python3 tools/build_storage.py cargo build --locked -p fire-ui-studio
+python3 tools/build_storage.py cargo test --workspace --locked
+python3 tools/build_storage.py check
+python3 tools/build_storage.py clean
+# A registered sibling worktree can be cleaned explicitly:
+python3 tools/build_storage.py --worktree /path/to/fire-ui-worktree clean
+python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
+The guard checks every registered worktree before and after Cargo: at most 4 GiB
+per target and at least 8 GiB free per filesystem. It refuses further builds when
+these limits are reached; it never deletes caches automatically. Separate targets
+let worktrees compile concurrently; sharing one makes Cargo wait for its build lock.
+Cleanup removes native `target/debug` and `target/release` contents while preserving
+Cargo lock files, and refuses active builds, symlinked targets and tracked files.
+It leaves source, `artifacts`, packaged crates, docs and cross-compilation targets
+alone. Those last three can still consume space and require deliberate removal.
+Run cleanup after finishing a worktree experiment. Direct Cargo commands and editor
+builds bypass the size guard; one build can exceed the preflight budget. Environment
+profile overrides can also re-enable incremental output.
+
+Probes own scratch directories with Python `TemporaryDirectory` and handle INT,
+TERM and HUP before removing them. Lean probe targets and consumer workspaces are
+deleted on completion; `--output` retains evidence binaries, inputs, logs and images
+for `--measure-only`. SIGKILL and power loss cannot execute cleanup. New experiments
+must use the same lifetime helper, or shell EXIT/signal traps as in
+[inspection instructions](docs/inspection.md), and keep Cargo targets inside scratch.
+
+The full framework checks are:
+
 ```sh
 cargo fmt --all --check
 cargo test --workspace --locked

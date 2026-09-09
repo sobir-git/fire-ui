@@ -27,5 +27,14 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+# Line tables retain file/line backtraces without full type/variable debug data.
+# Incremental caches previously retained 6.9 GB across 338 build directories.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
+incremental = false
+
+[profile.test]
+opt-level = 1
+debug = "line-tables-only"
+incremental = false
