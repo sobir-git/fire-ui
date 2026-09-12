@@ -985,11 +985,14 @@ fn create<W: Widget>(
     {
         return Err("Passive overlays require X11/XWayland on Linux".into());
     }
-    window.set_visible(true);
-    if options.overlay || options.click_through.is_some() {
+    if options.click_through.unwrap_or(options.overlay) {
         window
-            .set_cursor_hittest(!options.click_through.unwrap_or(options.overlay))
+            .set_cursor_hittest(false)
             .map_err(|e| e.to_string())?;
+    }
+    window.set_visible(true);
+    if options.overlay && options.click_through == Some(false) {
+        window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
     }
     let mut ui = Ui::new(root, options.size, options.limits)
         .map_err(|e| format!("UI admission failed: {e:?}"))?;
