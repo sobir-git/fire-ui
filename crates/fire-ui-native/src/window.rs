@@ -22,6 +22,12 @@ pub struct WindowOptions {
     pub decorations: bool,
     /// Passive, click-through window above normal windows. On Linux this requires X11/XWayland.
     pub overlay: bool,
+    /// Request a native window whose pixels preserve alpha transparency.
+    /// Support depends on the platform compositor and renderer surface.
+    pub transparent: bool,
+    /// Override pointer pass-through. `None` preserves the historical behavior:
+    /// overlays are click-through and ordinary windows are interactive.
+    pub click_through: Option<bool>,
     pub min_size: Size,
     pub position: Option<(i32, i32)>,
     pub size: Size,
@@ -34,6 +40,8 @@ impl Default for WindowOptions {
             title: "Fire UI".into(),
             decorations: true,
             overlay: false,
+            transparent: false,
+            click_through: None,
             min_size: Size::new(420., 360.),
             position: None,
             size: Size::new(1100., 780.),
@@ -932,6 +940,7 @@ fn create<W: Widget>(
 ) -> Result<State<W>, String> {
     let attrs = Window::default_attributes()
         .with_visible(false)
+        .with_transparent(options.transparent)
         .with_decorations(options.decorations && !options.overlay)
         .with_active(!options.overlay)
         .with_window_level(if options.overlay {
@@ -963,13 +972,15 @@ fn create<W: Widget>(
     #[cfg(feature = "accessibility")]
     let accessibility =
         crate::platform_accessibility::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
-    if options.overlay {
-        if matches!(
+    if options.overlay
+        && matches!(
             window.window_handle().map_err(|e| e.to_string())?.as_raw(),
             raw_window_handle::RawWindowHandle::Wayland(_)
-        ) {
-            return Err("Passive overlays require X11/XWayland on Linux".into());
-        }
+        )
+    {
+        return Err("Passive overlays require X11/XWayland on Linux".into());
+    }
+    if options.click_through.unwrap_or(options.overlay) {
         window
             .set_cursor_hittest(false)
             .map_err(|e| e.to_string())?;
@@ -1028,6 +1039,18 @@ fn resize_edge(p: Point, size: Size) -> Option<ResizeEdge> {
         (_, _, true, _) => Some(ResizeEdge::North),
         (_, _, _, true) => Some(ResizeEdge::South),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WindowOptions;
+
+    #[test]
+    fn window_capability_defaults_preserve_existing_behavior() {
+        let options = WindowOptions::default();
+        assert!(!options.transparent);
+        assert_eq!(options.click_through, None);
     }
 }
 
