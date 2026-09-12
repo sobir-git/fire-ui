@@ -958,7 +958,7 @@ fn create<W: Widget>(
     let attrs = if options.overlay {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
         attrs
-            .with_override_redirect(true)
+            .with_override_redirect(options.click_through != Some(false))
             .with_x11_window_type(vec![WindowType::Notification])
     } else {
         attrs
