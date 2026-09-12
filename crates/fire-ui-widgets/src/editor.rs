@@ -99,17 +99,113 @@ impl Data for EditorOutput {
     }
 }
 struct Undo {
+    /// Edits in application order; each start addresses the document state
+    /// its edit applied to, so undo replays in reverse and redo forward.
+    edits: UndoEdits,
+    /// Ordinary typing/deletion derives its collapsed selections from the edit.
+    /// Preserve explicit selections only when the operation needs them.
+    selection: Option<Box<UndoSelection>>,
+}
+enum UndoEdits {
+    Single(UndoEdit),
+    Multiple(Box<[UndoEdit]>),
+}
+impl UndoEdits {
+    fn as_slice(&self) -> &[UndoEdit] {
+        match self {
+            Self::Single(edit) => std::slice::from_ref(edit),
+            Self::Multiple(edits) => edits,
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq)]
+struct UndoSelection {
+    /// Selection after the change applied, restored by redo.
+    caret: Caret,
+    anchor: Option<usize>,
+    /// Selection before the change, restored by undo.
+    before_caret: Caret,
+    before_anchor: Option<usize>,
+}
+impl Undo {
+    fn selection(&self) -> UndoSelection {
+        self.selection.as_deref().copied().unwrap_or_else(|| {
+            let edit = &self.edits.as_slice()[0];
+            UndoSelection {
+                before_caret: Caret::at(edit.start + edit.removed_len),
+                before_anchor: None,
+                caret: Caret::at(edit.start + edit.inserted().len()),
+                anchor: None,
+            }
+        })
+    }
+    fn set_selection(&mut self, selection: UndoSelection) {
+        self.selection = None;
+        if selection != self.selection() {
+            self.selection = Some(Box::new(selection));
+        }
+    }
+}
+struct UndoEdit {
     start: usize,
     removed_len: usize,
     text: Box<str>,
 }
-impl Undo {
+
+#[cfg(test)]
+mod history_cost_tests {
+    use super::*;
+
+    #[test]
+    fn plain_typing_retains_inline_edits_without_selection_allocations() {
+        let mut editor = Editor::new("");
+        for _ in 0..1_000 {
+            editor.insert("x");
+        }
+        assert_eq!(editor.undo.len(), 1_000);
+        assert!(editor
+            .undo
+            .iter()
+            .all(|e| matches!(e.edits, UndoEdits::Single(_)) && e.selection.is_none()));
+        assert!(std::mem::size_of::<Undo>() <= 48);
+        eprintln!(
+            "Plain editor: {} bytes fixed history metadata/edit, no per-edit metadata allocation",
+            std::mem::size_of::<Undo>()
+        );
+        for _ in 0..1_000 {
+            editor.history(false);
+        }
+        assert_eq!(editor.text(), "");
+        assert_eq!(editor.caret.byte, 0);
+        for _ in 0..1_000 {
+            editor.history(true);
+        }
+        assert_eq!(editor.text().len(), 1_000);
+        assert_eq!(editor.caret.byte, 1_000);
+    }
+}
+impl UndoEdit {
     fn removed(&self) -> &str {
         &self.text[..self.removed_len]
     }
     fn inserted(&self) -> &str {
         &self.text[self.removed_len..]
     }
+}
+/// Map a byte offset through edits given in range order: offsets before an
+/// edit shift by its delta, offsets inside an edit collapse to its start.
+fn map_byte(byte: usize, edits: &[TextEdit]) -> usize {
+    let mut shift: isize = 0;
+    for edit in edits {
+        if byte >= edit.range.end {
+            shift += edit.text.len() as isize - edit.range.len() as isize;
+        } else if byte > edit.range.start {
+            return (edit.range.start as isize + shift).max(0) as usize;
+        } else {
+            break;
+        }
+    }
+    (byte as isize + shift).max(0) as usize
 }
 /// Geometry in paragraph coordinates, shared by editing and optional decoration layers.
 pub struct EditorView<'a> {
@@ -124,14 +220,161 @@ pub enum EditorLayer {
     BehindText,
     AboveText,
 }
-/// Optional consumer-owned effects. Returning true schedules another visible frame.
-pub trait EditorDecoration: 'static {
-    fn frame(&mut self, view: &EditorView<'_>, time: FrameTime, edited: bool) -> bool;
-    /// Bounds of all decoration pixels in paragraph coordinates. None invalidates the editor.
+/// One replacement within a [`Transaction`]. Ranges address the document as
+/// the extension saw it, before any edit of the same transaction applies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TextEdit {
+    range: Range<usize>,
+    text: String,
+}
+/// A validated document change an extension applies through the editor's
+/// normal path: size limits, history, selection and change notifications.
+///
+/// Edits are applied in range order, later offsets adjusted by earlier ones,
+/// and the whole transaction either applies or is rejected atomically. One
+/// transaction is one undo step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transaction {
+    edits: Vec<TextEdit>,
+    selection: Selection,
+    scroll: ScrollPolicy,
+}
+/// Where the caret and selection go after a [`Transaction`] applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Selection {
+    /// Map the current caret and selection through the edits.
+    #[default]
+    Map,
+    /// Collapse to a byte offset in the resulting text, clearing the selection.
+    At(usize),
+}
+/// Whether a [`Transaction`] may scroll the caret into view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ScrollPolicy {
+    /// Keep the viewport exactly where it is.
+    #[default]
+    Stay,
+    /// Reveal the resulting caret, like a user edit.
+    Reveal,
+}
+impl Transaction {
+    /// Replace one source range. The caret and selection map through the edit,
+    /// the change is one undo step, and the viewport stays put.
+    pub fn replace(range: Range<usize>, text: impl Into<String>) -> Self {
+        Self {
+            edits: vec![TextEdit {
+                range,
+                text: text.into(),
+            }],
+            selection: Selection::Map,
+            scroll: ScrollPolicy::Stay,
+        }
+    }
+    /// Add another replacement. Ranges address the same pre-transaction
+    /// document and must not overlap.
+    pub fn edit(mut self, range: Range<usize>, text: impl Into<String>) -> Self {
+        self.edits.push(TextEdit {
+            range,
+            text: text.into(),
+        });
+        self
+    }
+    /// Collapse to a byte offset in the resulting text, clearing the selection.
+    pub fn caret(mut self, at: usize) -> Self {
+        self.selection = Selection::At(at);
+        self
+    }
+    /// Reveal the resulting caret, like a user edit.
+    pub fn reveal(mut self) -> Self {
+        self.scroll = ScrollPolicy::Reveal;
+        self
+    }
+}
+/// An interactive region an extension contributes, in paragraph coordinates.
+/// The editor claims presses inside it, shows the pointer cursor, and offers
+/// activation on release inside, keyboard shortcuts and assistive technology.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Target {
+    /// Extension-chosen identity, passed back to [`EditorExtension::activate`]
+    /// and published as the semantic child's `key`.
+    pub id: u64,
+    pub bounds: Rect,
+}
+/// A press on a target. Release activates it; moving beyond the click
+/// threshold converts it to ordinary text selection from the press location.
+#[derive(Clone, Copy, Debug)]
+struct Armed {
+    extension: usize,
+    target: u64,
+    bounds: Rect,
+    inside: bool,
+    pointer: u32,
+    origin: Point,
+}
+/// Whether a presented range currently shows its source text: the caret or
+/// the selection intersects it, so editing there must see real characters.
+/// Extensions apply the same rule when painting over a presented range.
+pub fn revealed(range: Range<usize>, caret: Caret, selection: Option<Range<usize>>) -> bool {
+    let editing = caret.byte > range.start && caret.byte < range.end;
+    let selecting = selection.is_some_and(|s| s.start < range.end && s.end > range.start);
+    editing || selecting
+}
+/// A composable editor capability. Extensions form a stack: the first added
+/// paints first, behind later ones, while input consults the stack from the
+/// top down, so the topmost extension claiming a pointer position owns it.
+///
+/// An extension may contribute any combination of presented source ranges,
+/// interactive targets, visual effects and semantics. Structure is derived
+/// in [`sync`](EditorExtension::sync), after layout and before any
+/// interaction or paint; [`frame`](EditorExtension::frame) only animates.
+pub trait EditorExtension: 'static {
+    /// Re-derive structure from the current text and layout.
+    fn sync(&mut self, _view: &EditorView<'_>) {}
+    /// Source ranges to present as extension visuals instead of text glyphs.
+    /// Suppressed ranges keep their laid-out space; the editor reveals the
+    /// raw characters while the caret or selection intersects a range.
+    fn presentation(&self, _view: &EditorView<'_>, _present: &mut dyn FnMut(Range<usize>)) {}
+    /// Interactive regions for the current sync, in paragraph coordinates.
+    fn targets(&self, _view: &EditorView<'_>) -> Vec<Target> {
+        Vec::new()
+    }
+    /// Activate a target previously offered by
+    /// [`targets`](EditorExtension::targets): a pointer release inside it or
+    /// an assistive-technology activation. A returned transaction applies
+    /// through the editor's normal path; the interaction is consumed either way.
+    fn activate(&mut self, _view: &EditorView<'_>, _target: u64) -> Option<Transaction> {
+        None
+    }
+    /// A key press before the editor's own handling. A returned transaction
+    /// replaces the default behavior for that key. Only plain keys reach
+    /// extensions, never composition.
+    fn key(
+        &mut self,
+        _view: &EditorView<'_>,
+        _key: Key,
+        _modifiers: Modifiers,
+    ) -> Option<Transaction> {
+        None
+    }
+    /// Animate. `inserted` reports committed text insertion through the
+    /// editor's input path since the last frame, excluding line breaks,
+    /// extension transactions and undo/redo. Returning true schedules another frame.
+    fn frame(&mut self, _view: &EditorView<'_>, _time: FrameTime, _inserted: bool) -> bool {
+        false
+    }
+    /// Bounds of all extension pixels in paragraph coordinates, so the editor
+    /// can invalidate exactly what the extension paints. None means the
+    /// extension paints nothing in this state.
     fn damage(&self, _view: &EditorView<'_>) -> Option<Rect> {
         None
     }
-    fn paint(&self, view: &EditorView<'_>, layer: EditorLayer, painter: &mut dyn Painter);
+    /// Paint visual effects for a layer.
+    fn paint(&self, _view: &EditorView<'_>, _layer: EditorLayer, _painter: &mut dyn Painter) {}
+    /// Semantics for a published target, for assistive technology. The `key`
+    /// should identify the target; it routes activation back here.
+    fn semantics(&self, _view: &EditorView<'_>, _target: u64) -> Option<Semantics> {
+        None
+    }
 }
 /// A retained editor. Edits are public commands, while pointer/key input uses the same operations.
 pub struct Editor<D: Document = StringDocument> {
@@ -168,14 +411,23 @@ pub struct Editor<D: Document = StringDocument> {
     modifiers: Modifiers,
     chrome: bool,
     padding: Option<Point>,
-    decoration: Option<Box<dyn EditorDecoration>>,
-    edited: bool,
+    extensions: Vec<Box<dyn EditorExtension>>,
+    /// Source ranges currently presented as extension visuals, collected at
+    /// the last sync. Text glyphs inside them are suppressed unless revealed.
+    presented: Vec<Range<usize>>,
+    /// A target the pointer pressed but has not yet activated.
+    armed: Option<Armed>,
+    /// Whether the editor holds keyboard focus, for extension sync.
+    focused: bool,
+    inserted: bool,
     reveal_pending: bool,
     restore_pending: bool,
     scrollbar_drag: Option<(u32, f32)>,
     /// Viewport width and scrollbar strip from the last layout, for cursor shape.
     width: f32,
     strip: f32,
+    /// Viewport height from the last layout, for cursor shape over decorations.
+    height: f32,
     /// Whether the pointer is resting on the scrollbar.
     bar_hover: bool,
 }
@@ -226,13 +478,17 @@ impl<D: Document> Editor<D> {
             modifiers: Modifiers::default(),
             chrome: true,
             padding: None,
-            decoration: None,
-            edited: false,
+            extensions: Vec::new(),
+            presented: Vec::new(),
+            armed: None,
+            focused: false,
+            inserted: false,
             reveal_pending: true,
             restore_pending: false,
             scrollbar_drag: None,
             width: 0.,
             strip: 0.,
+            height: 0.,
             bar_hover: false,
         }
     }
@@ -303,8 +559,10 @@ impl<D: Document> Editor<D> {
         self.padding = Some(Point::new(horizontal, vertical));
         self
     }
-    pub fn decoration(mut self, decoration: impl EditorDecoration) -> Self {
-        self.decoration = Some(Box::new(decoration));
+    /// Append an extension to the editor's stack. The first extension added
+    /// paints first, behind later ones; input consults the stack from the top.
+    pub fn extension(mut self, extension: impl EditorExtension) -> Self {
+        self.extensions.push(Box::new(extension));
         self
     }
     fn insets(&self) -> Point {
@@ -319,6 +577,84 @@ impl<D: Document> Editor<D> {
             viewport: Rect::new(self.scroll.x, self.scroll.y, bounds.width, bounds.height),
             focused,
         })
+    }
+    /// A widget-local pointer position in paragraph coordinates.
+    fn paragraph_point(&self, position: Point) -> Point {
+        Point::new(
+            position.x - self.insets().x + self.scroll.x,
+            position.y - self.insets().y + self.scroll.y,
+        )
+    }
+    /// Claim a press for a target at this widget-local position, arming it for
+    /// activation on release inside. Shift presses fall through to selection.
+    fn arm_target(&mut self, position: Point, pointer: u32, focused: bool) -> bool {
+        // Compositions own the text: no target arming while one is active.
+        if self.modifiers.shift || !self.preedit.is_empty() {
+            return false;
+        }
+        let Some(paragraph) = self.paragraph.clone() else {
+            return false;
+        };
+        let view = EditorView {
+            paragraph: &paragraph,
+            caret: self.caret,
+            selection: self.selection(),
+            viewport: Rect::new(self.scroll.x, self.scroll.y, self.width, self.height),
+            focused,
+        };
+        let at = self.paragraph_point(position);
+        for (index, extension) in self.extensions.iter().enumerate().rev() {
+            if let Some(target) = extension
+                .targets(&view)
+                .into_iter()
+                .find(|t| t.bounds.contains(at))
+            {
+                self.armed = Some(Armed {
+                    extension: index,
+                    target: target.id,
+                    bounds: target.bounds,
+                    inside: true,
+                    pointer,
+                    origin: position,
+                });
+                return true;
+            }
+        }
+        false
+    }
+    /// Track an armed target as the pointer moves. Leaving the bounds disarms
+    /// the pending activation; sliding back in re-arms it, like any press-and-
+    /// hold button. Release outside (or capture loss) cancels for good.
+    fn arm_move(&mut self, position: Point, pointer: u32) {
+        if self.armed.as_ref().is_none_or(|a| a.pointer != pointer) {
+            return;
+        }
+        let point = self.paragraph_point(position);
+        if let Some(armed) = &mut self.armed {
+            armed.inside = armed.bounds.contains(point);
+        }
+    }
+    /// Release an armed target: activate inside, cancel outside. Either way
+    /// the press is consumed and the target disarmed.
+    fn arm_release(&mut self, pointer: u32, focused: bool) -> Option<Transaction> {
+        let armed = self.armed.take()?;
+        if armed.pointer != pointer {
+            return None;
+        }
+        if !armed.inside {
+            return None;
+        }
+        let paragraph = self.paragraph.clone()?;
+        let view = EditorView {
+            paragraph: &paragraph,
+            caret: self.caret,
+            selection: self.selection(),
+            viewport: Rect::new(self.scroll.x, self.scroll.y, self.width, self.height),
+            focused,
+        };
+        self.extensions
+            .get_mut(armed.extension)?
+            .activate(&view, armed.target)
     }
     pub fn placeholder(mut self, text: impl Into<Arc<str>>) -> Self {
         self.placeholder = text.into();
@@ -399,36 +735,121 @@ impl<D: Document> Editor<D> {
             .next()
             .map_or(self.text().len(), |(i, s)| self.caret.byte + i + s.len())
     }
+    /// Apply a transaction through the editor's normal path. All edits apply
+    /// or none do; the change is one undo step. Returns false when the
+    /// transaction is rejected: out-of-bounds or overlapping ranges, or the
+    /// size limit.
+    fn apply(&mut self, transaction: Transaction) -> bool {
+        let mut edits = transaction.edits;
+        if edits.is_empty() {
+            return false;
+        }
+        let before_caret = self.caret;
+        let before_anchor = self.anchor;
+        // Extension transactions meet the same text policy as typed input.
+        for edit in &mut edits {
+            if edit.text.contains('\r') || (!self.multiline && edit.text.contains('\n')) {
+                let mut text = edit.text.replace('\r', "");
+                if !self.multiline {
+                    text = text.replace('\n', " ");
+                }
+                edit.text = text;
+            }
+        }
+        edits.sort_by_key(|e| e.range.start);
+        let text = self.text();
+        for edit in &edits {
+            if edit.range.start > edit.range.end
+                || edit.range.end > text.len()
+                || !text.is_char_boundary(edit.range.start)
+                || !text.is_char_boundary(edit.range.end)
+            {
+                debug_assert!(false, "transaction range out of bounds or split");
+                return false;
+            }
+        }
+        if let Some(overlap) = edits.windows(2).find(|w| w[0].range.end > w[1].range.start) {
+            debug_assert!(false, "transaction edits overlap");
+            let _ = overlap;
+            return false;
+        }
+        let removed_total: usize = edits.iter().map(|e| e.range.len()).sum();
+        let added_total: usize = edits.iter().map(|e| e.text.len()).sum();
+        let next_len = text.len() - removed_total + added_total;
+        if next_len > self.max_bytes && next_len > text.len() {
+            self.limit_reached = true;
+            return false;
+        }
+        let mut delta: isize = 0;
+        let mut record_edit = |edit: &TextEdit| {
+            let start = (edit.range.start as isize + delta).max(0) as usize;
+            let end = start + edit.range.len();
+            let removed = &self.text()[start..end];
+            let removed_len = removed.len();
+            let mut record = String::with_capacity(removed_len + edit.text.len());
+            record.push_str(removed);
+            record.push_str(&edit.text);
+            let undo = UndoEdit {
+                start,
+                removed_len,
+                text: record.into_boxed_str(),
+            };
+            self.document.replace(start..end, &edit.text);
+            delta += edit.text.len() as isize - edit.range.len() as isize;
+            undo
+        };
+        let undo = if edits.len() == 1 {
+            UndoEdits::Single(record_edit(&edits[0]))
+        } else {
+            UndoEdits::Multiple(edits.iter().map(record_edit).collect())
+        };
+        match transaction.selection {
+            Selection::Map => {
+                self.caret = Caret {
+                    byte: self.boundary(map_byte(self.caret.byte, &edits)),
+                    affinity: self.caret.affinity,
+                };
+                self.anchor = self.anchor.map(|a| self.boundary(map_byte(a, &edits)));
+            }
+            Selection::At(at) => {
+                self.caret = Caret::at(self.boundary(at));
+                self.anchor = None;
+            }
+        }
+        self.redo.clear();
+        let mut record = Undo {
+            edits: undo,
+            selection: None,
+        };
+        record.set_selection(UndoSelection {
+            caret: self.caret,
+            anchor: self.anchor,
+            before_caret,
+            before_anchor,
+        });
+        self.undo.push(record);
+        true
+    }
+    /// The editor's own single-edit path for user input: the caret collapses
+    /// to the end of the inserted text, like any typed change.
     fn replace(&mut self, range: Range<usize>, text: &str) {
         let inserted = text.replace('\r', "");
-        let mut inserted = if self.multiline {
+        let inserted = if self.multiline {
             inserted
         } else {
             inserted.replace('\n', " ")
         };
-        let next_len = self.text().len() - range.len() + inserted.len();
-        if next_len > self.max_bytes && next_len > self.text().len() {
-            self.limit_reached = true;
-            return;
-        }
-        let removed_len = range.len();
-        inserted.insert_str(0, &self.text()[range.clone()]);
-        let edit = Undo {
-            start: range.start,
-            removed_len,
-            text: inserted.into_boxed_str(),
-        };
-        self.document.replace(range, edit.inserted());
-        self.caret = Caret::at(self.boundary(edit.start + edit.inserted().len()));
-        self.anchor = None;
-        self.redo.clear();
-        self.undo.push(edit);
+        let collapse = range.start + inserted.len();
+        self.apply(Transaction::replace(range, inserted).caret(collapse));
     }
     fn insert(&mut self, text: &str) {
+        let before = self.document.revision();
         self.replace(
             self.selection().unwrap_or(self.caret.byte..self.caret.byte),
             text,
-        )
+        );
+        self.inserted |=
+            self.document.revision() != before && text.chars().any(|ch| ch != '\n' && ch != '\r');
     }
     fn move_lines(&mut self, down: bool) {
         let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
@@ -465,22 +886,45 @@ impl<D: Document> Editor<D> {
         };
         self.caret = Caret::at((destination + caret).min(self.text().len()));
         self.anchor = anchor.map(|a| (destination + a).min(self.text().len()));
+        // The move adjustment above happens after the edit was recorded; keep
+        // the record's post-change selection in step so redo restores it.
+        if let Some(e) = self.undo.last_mut() {
+            e.set_selection(UndoSelection {
+                caret: self.caret,
+                anchor: self.anchor,
+                ..e.selection()
+            });
+        }
     }
     fn history(&mut self, redo: bool) {
         if redo {
             if let Some(e) = self.redo.pop() {
-                self.document
-                    .replace(e.start..e.start + e.removed().len(), e.inserted());
-                self.caret = Caret::at(self.boundary(e.start + e.inserted().len()));
+                for edit in e.edits.as_slice() {
+                    self.document.replace(
+                        edit.start..edit.start + edit.removed().len(),
+                        edit.inserted(),
+                    );
+                }
+                let selection = e.selection();
+                self.caret = selection.caret;
+                self.anchor = selection.anchor;
                 self.undo.push(e)
             }
         } else if let Some(e) = self.undo.pop() {
-            self.document
-                .replace(e.start..e.start + e.inserted().len(), e.removed());
-            self.caret = Caret::at(self.boundary(e.start + e.removed().len()));
+            for edit in e.edits.as_slice().iter().rev() {
+                self.document.replace(
+                    edit.start..edit.start + edit.inserted().len(),
+                    edit.removed(),
+                );
+            }
+            // Undo returns the selection to the state before the change, so
+            // toggling a checkbox or deleting a selection never drags the
+            // caret into the edit.
+            let selection = e.selection();
+            self.caret = selection.before_caret;
+            self.anchor = selection.before_anchor;
             self.redo.push(e)
         }
-        self.anchor = None;
     }
     fn clear_preedit(&mut self) {
         self.preedit.clear();
@@ -509,12 +953,11 @@ impl<D: Document> Editor<D> {
         self.snapshot = self.visible.then(|| (revision, text.clone()));
         text
     }
-    fn changed(&mut self, cx: &mut Update<'_, Self>, before: u64) {
+    fn changed(&mut self, cx: &mut Update<'_, Self>, before: u64, reveal: bool) {
         if std::mem::take(&mut self.limit_reached) {
             let _ = cx.emit(EditorOutput::LimitReached);
         }
-        if self.decoration.is_some() {
-            self.edited |= self.document.revision() != before;
+        if !self.extensions.is_empty() {
             cx.request_frame();
         }
         if self.document.revision() != before {
@@ -524,7 +967,11 @@ impl<D: Document> Editor<D> {
             });
             cx.relayout()
         }
-        self.reveal_pending = true;
+        // Extensions decide their own scroll policy: a toggle that keeps the
+        // viewport put must not drag the caret into view on the next layout.
+        if reveal {
+            self.reveal_pending = true;
+        }
         self.state_pending = true;
         cx.request_frame();
         self.report_state(cx);
@@ -571,6 +1018,76 @@ impl<D: Document> Editor<D> {
             }
             self.scroll.y = self.scroll.y.clamp(0., (p.size.height - height).max(0.));
         }
+    }
+    /// Paint the paragraph, leaving out glyphs inside presented ranges unless
+    /// the caret or selection reveals them. Each visible stretch of a line is
+    /// painted under its own clip, so suppressed glyphs never reach pixels.
+    fn paint_text(&self, p: &Paragraph, cx: &mut Paint<'_>, brush: Brush) {
+        let top = self.scroll.y - self.insets().y;
+        let bottom = top + cx.bounds.height;
+        let first = p.lines.partition_point(|l| l.y + p.line_height < top);
+        let end = p.lines.partition_point(|l| l.y <= bottom);
+        if first >= end {
+            return;
+        }
+        let visible = p.lines[first].range.start..p.lines[end - 1].range.end;
+        let mut hidden: Vec<Vec<Range<f32>>> = vec![Vec::new(); end - first];
+        for range in &self.presented {
+            if range.end <= visible.start || range.start >= visible.end {
+                continue;
+            }
+            if revealed(range.clone(), self.caret, self.selection()) {
+                continue;
+            }
+            for fragment in
+                p.range_fragments(range.start.max(visible.start)..range.end.min(visible.end))
+            {
+                let line = p.lines.partition_point(|l| l.y < fragment.y);
+                if line >= first && line < end {
+                    hidden[line - first].push(fragment.x);
+                }
+            }
+        }
+        if hidden.iter().all(|h| h.is_empty()) {
+            cx.painter.paragraph(p, Point::default(), brush);
+            return;
+        }
+        for (line, spans) in hidden.iter().enumerate() {
+            let line = line + first;
+            let mut spans = spans.clone();
+            spans.sort_by(|a, b| a.start.total_cmp(&b.start));
+            let mut edge = 0.;
+            for span in spans {
+                if span.start > edge {
+                    self.paint_text_span(p, cx, brush, line, edge..span.start);
+                }
+                edge = edge.max(span.end);
+            }
+            let width = p.lines[line].width;
+            if edge < width {
+                self.paint_text_span(p, cx, brush, line, edge..width);
+            }
+        }
+    }
+    /// Paint one visible stretch of a line: the whole paragraph under a clip
+    /// that keeps only this x-range of this row.
+    fn paint_text_span(
+        &self,
+        p: &Paragraph,
+        cx: &mut Paint<'_>,
+        brush: Brush,
+        line: usize,
+        x: Range<f32>,
+    ) {
+        cx.painter.save();
+        cx.painter.clip(Rect::new(
+            x.start,
+            p.lines[line].y,
+            (x.end - x.start).max(0.),
+            p.line_height,
+        ));
+        cx.painter.paragraph(p, Point::default(), brush);
+        cx.painter.restore();
     }
 }
 impl<D: Document> Widget for Editor<D> {
@@ -625,7 +1142,7 @@ impl<D: Document> Widget for Editor<D> {
             }
         }
         self.reveal(cx.bounds().size());
-        self.changed(cx, before)
+        self.changed(cx, before, true)
     }
     fn frame(&mut self, cx: &mut Update<'_, Self>, time: FrameTime) {
         if std::mem::take(&mut self.state_pending) {
@@ -655,38 +1172,59 @@ impl<D: Document> Widget for Editor<D> {
             }
         }
 
-        if let Some(mut decoration) = self.decoration.take() {
-            let edited = std::mem::take(&mut self.edited);
-            if let Some(view) = self.view(cx.bounds(), cx.focused()) {
-                let before = decoration.damage(&view);
-                if decoration.frame(&view, time, edited) {
+        let mut extensions = std::mem::take(&mut self.extensions);
+        let inserted = std::mem::take(&mut self.inserted);
+        if let Some(view) = self.view(cx.bounds(), cx.focused()) {
+            let mut damage: Option<Rect> = None;
+            for extension in extensions.iter_mut() {
+                let before = extension.damage(&view);
+                if extension.frame(&view, time, inserted) {
                     cx.request_frame();
                 }
-                if let (Some(before), Some(after)) = (before, decoration.damage(&view)) {
-                    let damage = if before.width <= 0. || before.height <= 0. {
-                        after
-                    } else if after.width <= 0. || after.height <= 0. {
-                        before
-                    } else {
-                        before.union(after)
-                    };
-                    cx.repaint_rect(Rect::new(
-                        damage.x + self.insets().x - self.scroll.x,
-                        damage.y + self.insets().y - self.scroll.y,
-                        damage.width,
-                        damage.height,
-                    ));
-                } else {
-                    cx.repaint();
+                let after = extension.damage(&view);
+                // Pixels the extension owned before and after this frame both
+                // need invalidation; None simply means it paints nothing in
+                // that state.
+                let region = match (before, after) {
+                    (Some(a), Some(b)) => Some(a.union(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                }
+                .filter(|r| r.width > 0. && r.height > 0.);
+                if let Some(region) = region {
+                    damage = Some(damage.map_or(region, |d| d.union(region)));
                 }
             }
-            self.decoration = Some(decoration);
+            if let Some(damage) = damage {
+                cx.repaint_rect(Rect::new(
+                    damage.x + self.insets().x - self.scroll.x,
+                    damage.y + self.insets().y - self.scroll.y,
+                    damage.width,
+                    damage.height,
+                ));
+            }
         }
+        self.extensions = extensions;
     }
     fn cursor(&self, position: Point) -> Option<CursorIcon> {
         // Over its own scrollbar the editor is a scrolling surface, not a text field.
         if position.x >= self.width - self.strip {
             return Some(CursorIcon::Arrow);
+        }
+        if let Some(view) = self.view(
+            Rect::new(self.scroll.x, self.scroll.y, self.width, self.height),
+            false,
+        ) {
+            let at = self.paragraph_point(position);
+            for extension in self.extensions.iter().rev() {
+                if extension
+                    .targets(&view)
+                    .iter()
+                    .any(|t| t.bounds.contains(at))
+                {
+                    return Some(CursorIcon::Pointer);
+                }
+            }
         }
         Some(CursorIcon::Text)
     }
@@ -699,14 +1237,16 @@ impl<D: Document> Widget for Editor<D> {
         }
         match event {
             Lifecycle::Focus(true) => {
+                self.focused = true;
                 let _ = cx.emit(EditorOutput::FocusChanged(true));
                 self.reset_blink(cx);
-                if self.decoration.is_some() {
+                if !self.extensions.is_empty() {
                     cx.request_frame();
                 }
             }
             Lifecycle::Focus(false) | Lifecycle::Visibility(false) | Lifecycle::Unmount => {
                 if event == Lifecycle::Focus(false) {
+                    self.focused = false;
                     let _ = cx.emit(EditorOutput::FocusChanged(false));
                 }
                 if event == Lifecycle::Visibility(false) || event == Lifecycle::Unmount {
@@ -729,6 +1269,11 @@ impl<D: Document> Widget for Editor<D> {
                 }
                 if self.scrollbar_drag.is_some_and(|(p, _)| p == pointer) {
                     self.scrollbar_drag = None;
+                }
+                // Losing capture cancels a pending target activation: without
+                // the release event the target would stay armed forever.
+                if self.armed.is_some_and(|a| a.pointer == pointer) {
+                    self.armed = None;
                 }
             }
             _ => {}
@@ -861,6 +1406,7 @@ impl<D: Document> Widget for Editor<D> {
             },
         );
         let size = c.constrain(desired);
+        self.height = size.height;
         let baseline = (p.baseline + inset.y).min(size.height);
         let max_y = (p.size.height + 2. * inset.y - size.height).max(0.);
         self.scroll.y = self.scroll.y.min(max_y);
@@ -869,6 +1415,21 @@ impl<D: Document> Widget for Editor<D> {
         }
         self.reveal_pending = false;
         self.restore_pending = false;
+        let mut extensions = std::mem::take(&mut self.extensions);
+        match self.view(Rect::from_size(size), self.focused) {
+            Some(view) => {
+                for extension in extensions.iter_mut() {
+                    extension.sync(&view);
+                }
+                let mut presented = Vec::new();
+                for extension in extensions.iter() {
+                    extension.presentation(&view, &mut |range| presented.push(range));
+                }
+                self.presented = presented;
+            }
+            None => self.presented = Vec::new(),
+        }
+        self.extensions = extensions;
         Metrics {
             size,
             baseline: Some(baseline),
@@ -909,6 +1470,38 @@ impl<D: Document> Widget for Editor<D> {
                 cx.stop();
                 return;
             }
+            // Armed-target tracking comes before hover handling: a press on a
+            // target leaves `drag` none, and the move must still update it.
+            Input::Pointer { pointer, position }
+                if self.armed.as_ref().is_some_and(|a| a.pointer == *pointer) =>
+            {
+                let origin = self.armed.as_ref().unwrap().origin;
+                if (position.x - origin.x).hypot(position.y - origin.y) > 4. {
+                    self.armed = None;
+                    self.anchor = Some(self.hit(origin).byte);
+                    self.drag = Some(*pointer);
+                    self.drag_position = *position;
+                    self.caret = self.hit(*position);
+                    self.reveal(cx.bounds().size());
+                    self.changed(cx, before, true);
+                    cx.stop();
+                    return;
+                }
+                self.arm_move(*position, *pointer);
+                cx.stop();
+                return;
+            }
+            // Dragging with the button held extends the selection; the reveal
+            // keeps the view following the dragging caret. The frame loop
+            // auto-scrolls from `drag_position` near the viewport edges.
+            Input::Pointer { pointer, position } if self.drag == Some(*pointer) => {
+                self.drag_position = *position;
+                self.caret = self.hit(*position);
+                self.reveal(cx.bounds().size());
+                self.changed(cx, before, true);
+                cx.stop();
+                return;
+            }
             Input::Pointer { position, .. } if self.drag.is_none() => {
                 let hovered = self
                     .scrollbar(cx.bounds())
@@ -943,6 +1536,14 @@ impl<D: Document> Widget for Editor<D> {
                 down: true,
                 position,
             } => {
+                // A target that claims the press arms for activation on release
+                // inside; the press is consumed either way.
+                if self.arm_target(*position, *pointer, cx.focused()) {
+                    let _ = cx.focus();
+                    let _ = cx.capture(*pointer);
+                    cx.stop();
+                    return;
+                }
                 let previous = self.caret.byte;
                 self.caret = self.hit(*position);
                 if self.modifiers.shift {
@@ -985,10 +1586,26 @@ impl<D: Document> Widget for Editor<D> {
                 let _ = cx.focus();
                 let _ = cx.capture(*pointer);
             }
-            Input::Pointer { pointer, position } if self.drag == Some(*pointer) => {
-                self.drag_position = *position;
-                self.caret = self.hit(*position);
-                self.reveal(cx.bounds().size());
+            Input::Button {
+                pointer,
+                button: 1,
+                down: false,
+                ..
+            } if self.armed.as_ref().is_some_and(|a| a.pointer == *pointer) => {
+                let focused = cx.focused();
+                let transaction = self.arm_release(*pointer, focused);
+                let _ = cx.release(*pointer);
+                if let Some(transaction) = transaction {
+                    let scroll = transaction.scroll;
+                    if self.apply(transaction) {
+                        if scroll == ScrollPolicy::Reveal {
+                            self.reveal(cx.bounds().size());
+                        }
+                        self.changed(cx, before, scroll == ScrollPolicy::Reveal);
+                    }
+                }
+                cx.stop();
+                return;
             }
             Input::Button {
                 pointer,
@@ -1030,6 +1647,47 @@ impl<D: Document> Widget for Editor<D> {
                 modifiers: m,
                 ..
             } => {
+                // Compositions confirm text; extensions only see plain key presses.
+                if self.preedit.is_empty() {
+                    if let Some(paragraph) = self.paragraph.clone() {
+                        let view = EditorView {
+                            paragraph: &paragraph,
+                            caret: self.caret,
+                            selection: self.selection(),
+                            viewport: Rect::new(
+                                self.scroll.x,
+                                self.scroll.y,
+                                cx.bounds().width,
+                                cx.bounds().height,
+                            ),
+                            focused: cx.focused(),
+                        };
+                        let mut extensions = std::mem::take(&mut self.extensions);
+                        let claimed = extensions
+                            .iter_mut()
+                            .rev()
+                            .find_map(|e| e.key(&view, *key, *m));
+                        self.extensions = extensions;
+                        if let Some(transaction) = claimed {
+                            let scroll = transaction.scroll;
+                            if self.apply(transaction) {
+                                if scroll == ScrollPolicy::Reveal {
+                                    self.reveal(cx.bounds().size());
+                                }
+                                self.changed(cx, before, scroll == ScrollPolicy::Reveal);
+                                cx.stop();
+                                return;
+                            }
+                            // A claimed key stays consumed even when its atomic
+                            // transaction is rejected by the document policy.
+                            if std::mem::take(&mut self.limit_reached) {
+                                let _ = cx.emit(EditorOutput::LimitReached);
+                            }
+                            cx.stop();
+                            return;
+                        }
+                    }
+                }
                 let ctrl = m.command();
                 match key {
                     Key::Character('a') if ctrl => {
@@ -1153,7 +1811,7 @@ impl<D: Document> Widget for Editor<D> {
             _ => return,
         }
         self.reveal(cx.bounds().size());
-        self.changed(cx, before);
+        self.changed(cx, before, true);
         cx.stop();
     }
     fn paint(&self, cx: &mut Paint<'_>) {
@@ -1186,10 +1844,10 @@ impl<D: Document> Widget for Editor<D> {
             inset.y - self.scroll.y,
         ));
         if let Some(p) = &self.paragraph {
-            if let (Some(decoration), Some(view)) =
-                (&self.decoration, self.view(cx.bounds, cx.focused))
-            {
-                decoration.paint(&view, EditorLayer::BehindText, cx.painter);
+            for extension in self.extensions.iter() {
+                if let Some(view) = self.view(cx.bounds, cx.focused) {
+                    extension.paint(&view, EditorLayer::BehindText, cx.painter);
+                }
             }
             if let Some(selection) = self.selection().filter(|_| self.preedit.is_empty()) {
                 for rect in p.selection_in(
@@ -1213,13 +1871,12 @@ impl<D: Document> Widget for Editor<D> {
                         .paragraph(placeholder, Point::default(), t.color.muted.into())
                 }
             } else {
-                cx.painter
-                    .paragraph(p, Point::default(), t.color.foreground.into())
+                self.paint_text(p, cx, Brush::Solid(t.color.foreground))
             }
-            if let (Some(decoration), Some(view)) =
-                (&self.decoration, self.view(cx.bounds, cx.focused))
-            {
-                decoration.paint(&view, EditorLayer::AboveText, cx.painter);
+            for extension in self.extensions.iter() {
+                if let Some(view) = self.view(cx.bounds, cx.focused) {
+                    extension.paint(&view, EditorLayer::AboveText, cx.painter);
+                }
             }
             if cx.focused {
                 let point = p.caret_point(self.caret);
@@ -1315,6 +1972,50 @@ impl<D: Document> Widget for Editor<D> {
             cx.repaint();
             return Ok(());
         }
+        if let SemanticAction::ActivateChild { key } = &action {
+            // A published child was activated: route it to the owning
+            // extension's target and apply the resulting transaction through
+            // the same finalization as pointer and keyboard activation.
+            if !self.preedit.is_empty() {
+                return Err(SemanticError::Unavailable);
+            }
+            let Some((index, target)) = key.split_once(':') else {
+                return Err(SemanticError::Unsupported);
+            };
+            let Ok(index) = index.parse::<usize>() else {
+                return Err(SemanticError::Unsupported);
+            };
+            let Ok(target) = target.parse::<u64>() else {
+                return Err(SemanticError::Unsupported);
+            };
+            let transaction = {
+                let paragraph = self.paragraph.as_ref().ok_or(SemanticError::Unavailable)?;
+                let view = EditorView {
+                    paragraph,
+                    caret: self.caret,
+                    selection: self.selection(),
+                    viewport: Rect::new(self.scroll.x, self.scroll.y, self.width, self.height),
+                    focused: self.focused,
+                };
+                self.extensions
+                    .get_mut(index)
+                    .ok_or(SemanticError::Unavailable)?
+                    .activate(&view, target)
+            };
+            let Some(transaction) = transaction else {
+                return Ok(());
+            };
+            let scroll = transaction.scroll;
+            let before = self.document.revision();
+            if self.apply(transaction) {
+                if scroll == ScrollPolicy::Reveal {
+                    self.reveal(cx.bounds().size());
+                }
+                self.changed(cx, before, scroll == ScrollPolicy::Reveal);
+                return Ok(());
+            }
+            return Err(SemanticError::Unavailable);
+        }
         let before = self.document.revision();
         let replacement = match action {
             SemanticAction::SetValue(text) => Some((0..self.text().len(), text)),
@@ -1354,11 +2055,11 @@ impl<D: Document> Widget for Editor<D> {
         }
         self.clear_preedit();
         self.reveal(cx.bounds().size());
-        self.changed(cx, before);
+        self.changed(cx, before, true);
         Ok(())
     }
     fn semantics(&self) -> Semantics {
-        Semantics {
+        let mut semantics = Semantics {
             role: Role::TextInput,
             label: self
                 .label
@@ -1388,6 +2089,28 @@ impl<D: Document> Widget for Editor<D> {
             }),
             value: Some(self.text().into()),
             ..Semantics::default()
+        };
+        if let Some(view) = self.view(Rect::new(0., 0., self.width, self.height), self.focused) {
+            // Paragraph coordinates become widget-local at the inset origin
+            // minus the scroll offset.
+            let inset = self.insets();
+            let origin = Point::new(inset.x - self.scroll.x, inset.y - self.scroll.y);
+            for (index, extension) in self.extensions.iter().enumerate() {
+                for target in extension.targets(&view) {
+                    if let Some(mut child) = extension.semantics(&view, target.id) {
+                        // The key namespaces the target by extension, so two
+                        // extensions picking the same id never hijack each
+                        // other's activation.
+                        child.key = Some(format!("{index}:{}", target.id));
+                        child.bounds = child
+                            .bounds
+                            .or(Some(target.bounds))
+                            .map(|b| Rect::new(b.x + origin.x, b.y + origin.y, b.width, b.height));
+                        semantics.children.push(child);
+                    }
+                }
+            }
         }
+        semantics
     }
 }

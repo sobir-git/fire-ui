@@ -929,6 +929,76 @@ fn click<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
     }
 }
 
+/// Press at `from`, drag through `to`, release there.
+fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: Point) {
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: from,
+        },
+        text,
+    );
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: to,
+        },
+        text,
+    );
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: false,
+            position: to,
+        },
+        text,
+    );
+}
+
+#[test]
+fn dragging_the_pointer_selects_text() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("alpha beta gamma")),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    drag(
+        &mut ui,
+        &mut text,
+        Point::new(20., 20.),
+        Point::new(70., 20.),
+    );
+    settle(&mut ui, &mut text);
+    let selection = ui
+        .root()
+        .selection()
+        .expect("a drag must leave a selection");
+    assert!(
+        selection.end - selection.start >= 3,
+        "the drag covered several cells, got {selection:?}"
+    );
+    // The selection is live: typing replaces it.
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "Z".into(),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text().len(),
+        "alpha beta gamma".len() - (selection.end - selection.start) + 1,
+        "typing replaced exactly the dragged selection"
+    );
+}
+
 #[test]
 fn tabs_report_the_tab_that_was_clicked() {
     let mut ui = Ui::new(
@@ -1066,12 +1136,16 @@ struct Recorder {
     rects: Vec<(Rect, Brush)>,
     /// Every stroked rectangle and its colour.
     strokes: Vec<(Rect, Color)>,
+    /// Every clip rectangle, in paint order.
+    clips: Vec<Rect>,
 }
 impl Painter for Recorder {
     fn save(&mut self) {}
     fn restore(&mut self) {}
     fn transform(&mut self, _: Transform) {}
-    fn clip(&mut self, _: Rect) {}
+    fn clip(&mut self, rect: Rect) {
+        self.clips.push(rect)
+    }
     fn rect(&mut self, rect: Rect, _: f32, brush: Brush) {
         self.rects.push((rect, brush))
     }
@@ -1726,4 +1800,651 @@ fn editor_preserves_history_beyond_256_edits_and_two_megabytes() {
         ui.pump(4096, |_| {}, |_| {});
     }
     assert_eq!(ui.root().text(), format!("299:{}", "x".repeat(4096)));
+}
+
+/// A target over `region` whose activation replaces byte 0 with `edit`, plus
+/// an optional presented range and a semantic checkbox child. Distinct edits
+/// per stub let composition tests prove which extension owned a press.
+struct Stub {
+    region: Rect,
+    edit: char,
+    id: Option<u64>,
+    present: Option<std::ops::Range<usize>>,
+    activations: std::cell::Cell<u32>,
+    paints: std::cell::Cell<u32>,
+}
+impl Stub {
+    fn at(region: Rect, edit: char) -> Self {
+        Self {
+            region,
+            edit,
+            id: None,
+            present: None,
+            activations: std::cell::Cell::new(0),
+            paints: std::cell::Cell::new(0),
+        }
+    }
+    /// Override the target id, proving two extensions can pick the same one.
+    fn with_id(mut self, id: u64) -> Self {
+        self.id = Some(id);
+        self
+    }
+    fn presenting(mut self, range: std::ops::Range<usize>) -> Self {
+        self.present = Some(range);
+        self
+    }
+}
+impl EditorExtension for Stub {
+    fn targets(&self, _: &EditorView<'_>) -> Vec<Target> {
+        vec![Target {
+            id: self.id.unwrap_or(self.edit as u64),
+            bounds: self.region,
+        }]
+    }
+    fn activate(&mut self, _: &EditorView<'_>, target: u64) -> Option<Transaction> {
+        assert_eq!(target, self.id.unwrap_or(self.edit as u64));
+        self.activations.set(self.activations.get() + 1);
+        Some(Transaction::replace(0..1, self.edit.to_string()))
+    }
+    fn key(&mut self, _: &EditorView<'_>, key: Key, _: Modifiers) -> Option<Transaction> {
+        (key == Key::Enter).then(|| Transaction::replace(0..0, "!"))
+    }
+    fn presentation(&self, _: &EditorView<'_>, present: &mut dyn FnMut(std::ops::Range<usize>)) {
+        if let Some(range) = &self.present {
+            present(range.clone());
+        }
+    }
+    fn paint(&self, _: &EditorView<'_>, _: EditorLayer, _: &mut dyn Painter) {
+        self.paints.set(self.paints.get() + 1);
+    }
+    fn semantics(&self, _: &EditorView<'_>, target: u64) -> Option<Semantics> {
+        Some(Semantics {
+            role: Role::CheckBox,
+            label: format!("stub {target}"),
+            checked: Some(false),
+            actions: vec![SemanticActionKind::Activate],
+            ..Semantics::default()
+        })
+    }
+}
+
+#[test]
+fn extension_activation_and_history_do_not_report_text_insertion() {
+    struct Observe(Rc<std::cell::Cell<usize>>);
+    impl EditorExtension for Observe {
+        fn frame(&mut self, _: &EditorView<'_>, _: FrameTime, inserted: bool) -> bool {
+            if inserted {
+                self.0.set(self.0.get() + 1);
+            }
+            false
+        }
+    }
+    let inserted = Rc::new(std::cell::Cell::new(0));
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("abc")
+                .extension(Observe(inserted.clone()))
+                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
+        ),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    click(&mut ui, &mut text, Point::new(150., 15.));
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "typed".into(),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    ui.frame(std::time::Duration::ZERO, 100);
+    assert_eq!(inserted.get(), 1, "typing reports insertion");
+    click(&mut ui, &mut text, Point::new(20., 15.));
+    settle(&mut ui, &mut text);
+    ui.frame(std::time::Duration::ZERO, 100);
+    assert_eq!(ui.root().text(), "Xbctyped");
+    assert_eq!(inserted.get(), 1, "pointer activation is not typing");
+    key(&mut ui, &mut text, Key::Enter);
+    settle(&mut ui, &mut text);
+    ui.frame(std::time::Duration::ZERO, 100);
+    assert_eq!(inserted.get(), 1, "extension shortcuts are not typing");
+    let child = ui
+        .semantics()
+        .into_iter()
+        .find(|n| n.semantics.role == Role::CheckBox)
+        .unwrap()
+        .id;
+    ui.accessibility(child, SemanticAction::Activate).unwrap();
+    settle(&mut ui, &mut text);
+    ui.frame(std::time::Duration::ZERO, 100);
+    assert_eq!(inserted.get(), 1, "accessible activation is not typing");
+    for edit in [Edit::Undo, Edit::Redo] {
+        ui.send(edit).unwrap();
+        settle(&mut ui, &mut text);
+        ui.frame(std::time::Duration::ZERO, 100);
+        assert_eq!(inserted.get(), 1, "history does not create typing effects");
+    }
+}
+
+#[test]
+fn extension_target_edits_on_release_and_maps_the_selection() {
+    // The stub claims the paragraph region 0..30 x 0..20; the default theme
+    // insets the paragraph by 12, so widget (20, 15) is paragraph (8, 3).
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    // A selection across the target must survive the toggle: the caret maps
+    // through the edit instead of collapsing into the replaced range.
+    ui.send(Edit::Select {
+        anchor: 1,
+        caret: 3,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    click(&mut ui, &mut text, Point::new(20., 15.));
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "Xbc",
+        "the claimed press applied the edit on release"
+    );
+    assert_eq!(
+        ui.root().selection(),
+        Some(1..3),
+        "the selection mapped through the edit instead of collapsing"
+    );
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "abc",
+        "and it is undoable like a user edit"
+    );
+    click(&mut ui, &mut text, Point::new(250., 100.));
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "abc",
+        "outside the claim the caret moves instead"
+    );
+    assert_eq!(ui.root().caret().byte, 3);
+}
+
+#[test]
+fn selection_drag_requests_paint_before_release() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("buy milk").caret_blink(false)),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(100., 15.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    ui.paint(&mut Recorder::default());
+    assert!(!ui.next_work().paint);
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(12., 15.),
+        },
+        &mut text,
+    );
+    assert_eq!(ui.root().selection(), Some(0..8));
+    assert!(
+        ui.next_work().paint,
+        "selection must invalidate pixels before button release"
+    );
+}
+
+#[test]
+fn extension_drag_selects_instead_of_activating() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    // Press inside, then drag out: this becomes a selection, not activation.
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(20., 15.),
+        },
+        &mut text,
+    );
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(200., 100.),
+        },
+        &mut text,
+    );
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: false,
+            position: Point::new(200., 100.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "abc", "release outside cancels");
+    assert_eq!(
+        ui.root().caret().byte,
+        3,
+        "the drag moved the caret to the end"
+    );
+    assert_eq!(ui.root().selection(), Some(1..3));
+    // Press and release inside: activation.
+    click(&mut ui, &mut text, Point::new(20., 15.));
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "Xbc", "release inside activates");
+}
+
+#[test]
+fn extension_shift_press_selects_instead_of_activating() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    // Modifiers route to the focused widget, so focus the editor with a
+    // neutral click before pressing shift.
+    click(&mut ui, &mut text, Point::new(250., 100.));
+    settle(&mut ui, &mut text);
+    ui.dispatch(
+        Input::Modifiers(Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        }),
+        &mut text,
+    );
+    click(&mut ui, &mut text, Point::new(20., 15.));
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "abc", "shift press never activates");
+    assert_eq!(
+        ui.root().selection(),
+        Some(1..3),
+        "shift press extends the selection like over plain text"
+    );
+}
+
+#[test]
+fn extension_key_replaces_the_editor_default_for_that_key() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X'))),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    key(&mut ui, &mut text, Key::Enter);
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "!abc", "Enter was intercepted");
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "abc");
+    let end = ui.root().text().len();
+    ui.send(Edit::Select {
+        anchor: end,
+        caret: end,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    key(&mut ui, &mut text, Key::Backspace);
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "ab",
+        "other keys keep their default behavior"
+    );
+}
+
+#[test]
+fn extensions_compose_and_the_topmost_target_wins() {
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("abc")
+                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A'))
+                .extension(Stub::at(Rect::new(0., 0., 300., 200.), 'B')),
+        ),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    click(&mut ui, &mut text, Point::new(20., 15.));
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "Bbc",
+        "the topmost extension's target owns the overlapping press"
+    );
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "abc");
+}
+
+#[test]
+fn extension_transactions_apply_together_or_not_at_all() {
+    struct Multi;
+    impl EditorExtension for Multi {
+        fn key(&mut self, _: &EditorView<'_>, key: Key, _: Modifiers) -> Option<Transaction> {
+            (key == Key::Enter).then(|| Transaction::replace(0..1, "AB").edit(3..4, "CD").caret(2))
+        }
+    }
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abcd").extension(Multi)),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    key(&mut ui, &mut text, Key::Enter);
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "ABbcCD", "both edits applied in one step");
+    assert_eq!(
+        ui.root().caret().byte,
+        2,
+        "Selection::At collapsed the caret"
+    );
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "abcd",
+        "one undo reverts the whole transaction"
+    );
+    ui.send(Edit::Redo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "ABbcCD", "and one redo reapplies it");
+}
+
+#[test]
+fn extension_presentation_suppresses_glyphs_until_the_caret_reveals_them() {
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("- [ ] buy milk")
+                .extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X').presenting(0..6)),
+        ),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    // TestText advances each char by size*0.6 = 9, so the six hidden bytes
+    // ("- [ ] ") span x 0..54. The visible complement starts there.
+    let hidden_edge = 15. * 0.6 * 6.;
+    let clips = |ui: &mut Ui<Editor>| {
+        let mut painter = Recorder::default();
+        ui.paint(&mut painter);
+        painter.clips
+    };
+    let suppressed = clips(&mut ui);
+    // Runtime region clip, editor bounds clip, chrome inset clip, and one
+    // visible-span clip in paragraph coordinates.
+    assert_eq!(
+        suppressed.len(),
+        4,
+        "one visible-span clip beyond the surface clips"
+    );
+    assert!(
+        (suppressed[3].x - hidden_edge).abs() < 0.5,
+        "the visible span starts where the presented range ends"
+    );
+    // The caret entering the range reveals the raw characters for editing.
+    ui.send(Edit::Select {
+        anchor: 2,
+        caret: 2,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        clips(&mut ui).len(),
+        3,
+        "the caret inside the range reveals it: the paragraph paints whole"
+    );
+    // A selection overlapping the range reveals it too. One that merely
+    // touches its end (6..9) shares no hidden byte and must not reveal.
+    ui.send(Edit::Select {
+        anchor: 4,
+        caret: 9,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        clips(&mut ui).len(),
+        3,
+        "the selection overlapping the range reveals it"
+    );
+    ui.send(Edit::Select {
+        anchor: 9,
+        caret: 9,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        clips(&mut ui).len(),
+        4,
+        "away from the range the glyphs hide again"
+    );
+}
+
+#[test]
+fn extension_semantics_publish_children_and_route_activation() {
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("- [ ] buy milk").extension(Stub::at(Rect::new(0., 0., 20., 16.), '7')),
+        ),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let editor_id = ui
+        .semantics()
+        .iter()
+        .find(|n| n.semantics.role == Role::TextInput)
+        .unwrap()
+        .id;
+    let children: Vec<_> = ui
+        .semantics()
+        .into_iter()
+        .filter(|n| n.parent == Some(editor_id))
+        .collect();
+    assert_eq!(children.len(), 1, "the target published one semantic child");
+    assert_eq!(children[0].semantics.role, Role::CheckBox);
+    // The key namespaces the target by extension index: "0:55" is extension
+    // zero's target 55 (the char '7' as u64).
+    assert_eq!(children[0].semantics.key.as_deref(), Some("0:55"));
+    assert_eq!(children[0].semantics.checked, Some(false));
+    ui.accessibility(children[0].id, SemanticAction::Activate)
+        .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "7 [ ] buy milk",
+        "child activation routed back to the owning extension"
+    );
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "- [ ] buy milk");
+}
+
+#[test]
+fn semantic_children_route_to_their_own_extension_when_ids_collide() {
+    // Both stubs pick target id 7 with different edits; each child must
+    // activate its own extension, never the first extension holding the id.
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("abc")
+                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A').with_id(7))
+                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'B').with_id(7)),
+        ),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let editor_id = ui
+        .semantics()
+        .iter()
+        .find(|n| n.semantics.role == Role::TextInput)
+        .unwrap()
+        .id;
+    let mut children: Vec<_> = ui
+        .semantics()
+        .into_iter()
+        .filter(|n| n.parent == Some(editor_id))
+        .collect();
+    children.sort_by_key(|n| n.semantics.key.clone().unwrap_or_default());
+    assert_eq!(children.len(), 2, "both extensions published a child");
+    assert_eq!(children[0].semantics.key.as_deref(), Some("0:7"));
+    assert_eq!(children[1].semantics.key.as_deref(), Some("1:7"));
+    // Activating the upper extension's child applies 'B', not 'A'.
+    ui.accessibility(children[1].id, SemanticAction::Activate)
+        .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "Bbc",
+        "the upper extension owned its child"
+    );
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    // And the lower extension's child applies 'A'.
+    ui.accessibility(children[0].id, SemanticAction::Activate)
+        .unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(
+        ui.root().text(),
+        "Abc",
+        "the lower extension owned its child"
+    );
+}
+
+#[test]
+fn undo_restores_the_pre_edit_selection() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc")),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    ui.send(Edit::Select {
+        anchor: 1,
+        caret: 3,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    ui.dispatch(
+        Input::Key {
+            key: Key::Backspace,
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "a", "the selection was deleted");
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.root().text(), "abc", "undo restored the text");
+    assert_eq!(
+        ui.root().selection(),
+        Some(1..3),
+        "undo restored the deleted selection instead of parking the caret in the edit"
+    );
+}
+
+#[test]
+fn an_armed_release_notifies_exactly_once() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let mut outputs = vec![];
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(20., 15.),
+        },
+        &mut text,
+    );
+    // Armed pointer movement must not reveal, notify, or schedule edits.
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(22., 16.),
+        },
+        &mut text,
+    );
+    for _ in 0..4 {
+        ui.frame(std::time::Duration::ZERO, 100);
+        ui.pump(1000, |o| outputs.push(o), |_| {});
+        ui.layout(&mut text);
+    }
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: false,
+            position: Point::new(22., 16.),
+        },
+        &mut text,
+    );
+    for _ in 0..4 {
+        ui.frame(std::time::Duration::ZERO, 100);
+        ui.pump(1000, |o| outputs.push(o), |_| {});
+        ui.layout(&mut text);
+    }
+    assert_eq!(ui.root().text(), "Xbc", "the release activated the target");
+    let changed = outputs
+        .iter()
+        .filter(|o| matches!(o, EditorOutput::Changed { .. }))
+        .count();
+    assert_eq!(changed, 1, "one activation, one change notification");
 }

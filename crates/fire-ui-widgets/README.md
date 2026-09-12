@@ -41,9 +41,9 @@ let content = Padding::new(button, Insets::all(16.0));
 ```
 
 Connect a control's output to an owner command with `children.connect`, or adopt a
-decorator's content with `children.bubble`. `EditorDecoration` lets consumers
-animate typed or selected text without replacing the editor. Virtual lists mount
-only their visible rows.
+decorator's content with `children.bubble`. `EditorExtension` lets consumers
+present source ranges as interactive visuals — checkboxes, highlights, animated
+text — without replacing the editor. Virtual lists mount only their visible rows.
 
 See the [quick start](https://github.com/sobir-git/fire-ui#start-an-app)
 and [studio](https://github.com/sobir-git/fire-ui/tree/v0.8.0/examples/studio).

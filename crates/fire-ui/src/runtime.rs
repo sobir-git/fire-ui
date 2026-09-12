@@ -6,6 +6,7 @@ use crate::{
     *,
 };
 use std::any::{Any, TypeId};
+use std::hash::{Hash, Hasher};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     marker::PhantomData,
@@ -1395,21 +1396,41 @@ impl<W: Widget> Ui<W> {
     pub fn semantics(&self) -> Vec<SemanticNode> {
         let mut ids: Vec<_> = self.tree.ids().collect();
         ids.sort();
-        ids.into_iter()
-            .filter(|id| self.eligible(*id))
-            .filter_map(|id| {
-                let n = self.tree.get(id)?;
-                Some(SemanticNode {
-                    id: id.0,
-                    parent: n.parent.map(|p| p.0),
-                    bounds: n.geometry.bounds.intersect(n.geometry.clip),
+        let mut nodes = vec![];
+        for id in ids.into_iter().filter(|id| self.eligible(*id)) {
+            let Some(n) = self.tree.get(id) else { continue };
+            let Some(widget) = n.widget.as_ref() else {
+                continue;
+            };
+            let semantics = widget.semantics();
+            nodes.push(SemanticNode {
+                id: id.0,
+                parent: n.parent.map(|p| p.0),
+                bounds: n.geometry.bounds.intersect(n.geometry.clip),
+                transform: n.geometry.transform,
+                focused: self.focus == Some(id),
+                focusable: widget.focusable(),
+                semantics: semantics.clone(),
+            });
+            for child in &semantics.children {
+                let Some(key) = child.key.as_deref() else {
+                    continue;
+                };
+                let bounds = child.bounds.map_or(n.geometry.bounds, |bounds| {
+                    n.geometry.transform.rect(bounds)
+                });
+                nodes.push(SemanticNode {
+                    id: published_id(id.0, key),
+                    parent: Some(id.0),
+                    bounds: bounds.intersect(n.geometry.clip),
                     transform: n.geometry.transform,
-                    focused: self.focus == Some(id),
-                    focusable: n.widget.as_ref()?.focusable(),
-                    semantics: n.widget.as_ref()?.semantics(),
-                })
-            })
-            .collect()
+                    focused: false,
+                    focusable: false,
+                    semantics: child.clone(),
+                });
+            }
+        }
+        nodes
     }
     /// Resolve the pointer shape through the hovered widget and its ancestors.
     pub fn cursor(&self, position: Point) -> CursorIcon {
@@ -1437,6 +1458,21 @@ impl<W: Widget> Ui<W> {
     }
     /// Dispatch only actions supported by a visible, enabled widget in the active modal scope.
     pub fn accessibility(&mut self, id: u64, action: SemanticAction) -> Result<(), SemanticError> {
+        if id & (1 << 63) != 0 {
+            let target = self
+                .tree
+                .ids()
+                .filter(|parent| self.eligible(*parent))
+                .find_map(|parent| {
+                    let widget = self.tree.get(parent)?.widget.as_ref()?;
+                    widget.semantics().children.into_iter().find_map(|child| {
+                        let key = child.key?;
+                        (published_id(parent.0, &key) == id).then_some((parent, key))
+                    })
+                });
+            let (parent, key) = target.ok_or(SemanticError::Unavailable)?;
+            return self.activate_published_child(parent, &key, action);
+        }
         let id = Id(id);
         if !self.eligible(id) {
             return Err(SemanticError::Unavailable);
@@ -1493,6 +1529,57 @@ impl<W: Widget> Ui<W> {
         }
         result
     }
+    /// Activate a child node a widget published through [`Semantics::children`].
+    /// Only activation is routable; a child is a leaf the widget renders and
+    /// interprets.
+    fn activate_published_child(
+        &mut self,
+        parent: Id,
+        key: &str,
+        action: SemanticAction,
+    ) -> Result<(), SemanticError> {
+        if !self.eligible(parent) {
+            return Err(SemanticError::Unavailable);
+        }
+        let node = self.tree.get(parent).ok_or(SemanticError::Unavailable)?;
+        let Some(widget) = node.widget.as_ref() else {
+            return Err(SemanticError::Unavailable);
+        };
+        let semantics = widget.semantics();
+        if semantics.disabled {
+            return Err(SemanticError::Unavailable);
+        }
+        let Some(child) = semantics
+            .children
+            .iter()
+            .find(|child| child.key.as_deref() == Some(key))
+        else {
+            return Err(SemanticError::Unavailable);
+        };
+        if child.disabled {
+            return Err(SemanticError::Unavailable);
+        }
+        if !child.actions.contains(&SemanticActionKind::Activate) {
+            return Err(SemanticError::Unsupported);
+        }
+        let SemanticAction::Activate = action else {
+            return Err(SemanticError::Unsupported);
+        };
+        let key = child.key.clone().ok_or(SemanticError::Unsupported)?;
+        let mut result = Err(SemanticError::Unavailable);
+        self.invoke(parent, false, false, |w, cx| {
+            result = w.accessibility(cx, SemanticAction::ActivateChild { key })
+        });
+        result
+    }
+}
+/// Identity follows the owning widget and child key, not the current order
+/// of visible children. Resolving an action checks the currently published keys.
+fn published_id(parent: u64, key: &str) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    parent.hash(&mut hash);
+    key.hash(&mut hash);
+    hash.finish() | (1 << 63)
 }
 
 impl<W: Widget> Drop for Ui<W> {

@@ -120,6 +120,16 @@ pub struct Semantics {
     pub range: Option<Range>,
     pub actions: Vec<SemanticActionKind>,
     pub text: Option<TextSemantics>,
+    /// Widget-local bounds for this node when it differs from the widget's
+    /// own bounds, as with children a widget publishes below.
+    pub bounds: Option<Rect>,
+    /// Internal structure a widget publishes below itself, such as interactive
+    /// regions inside a canvas-like widget. Actions on a child route back to
+    /// the widget as [`SemanticAction::ActivateChild`], keyed by the child's
+    /// `key`.
+    /// Each child must have a unique, stable key within its owner. Unkeyed
+    /// children are not published as independently actionable nodes.
+    pub children: Vec<Semantics>,
 }
 impl Default for Semantics {
     fn default() -> Self {
@@ -134,6 +144,8 @@ impl Default for Semantics {
             range: None,
             actions: vec![],
             text: None,
+            bounds: None,
+            children: vec![],
         }
     }
 }
@@ -177,12 +189,18 @@ pub enum SemanticAction {
         anchor: usize,
         caret: usize,
     },
+    /// Activate a child node this widget published, identified by the child's
+    /// `key`. The runtime translates activation of a published child into
+    /// this action on the widget itself.
+    ActivateChild {
+        key: String,
+    },
 }
 impl SemanticAction {
     pub fn kind(&self) -> SemanticActionKind {
         match self {
             Self::Focus => SemanticActionKind::Focus,
-            Self::Activate => SemanticActionKind::Activate,
+            Self::Activate | Self::ActivateChild { .. } => SemanticActionKind::Activate,
             Self::SetValue(_) => SemanticActionKind::SetValue,
             Self::ReplaceSelectedText(_) => SemanticActionKind::ReplaceSelectedText,
             Self::ReplaceText { .. } => SemanticActionKind::ReplaceText,

@@ -150,6 +150,17 @@ impl TextLine {
             }))
     }
 }
+/// The visual geometry of a source range: one fragment per row it occupies.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangeFragment {
+    /// The part of the source range that falls on this row.
+    pub range: Range<usize>,
+    /// Row-local x extent of the covered cells, ordered left to right.
+    /// Cells partially covered by the range contribute their full extent.
+    pub x: Range<f32>,
+    /// Row top in paragraph coordinates.
+    pub y: f32,
+}
 #[derive(Clone, Debug)]
 pub struct Paragraph {
     pub text: Arc<str>,
@@ -280,6 +291,48 @@ impl Paragraph {
                     }
                 }
                 rects
+            })
+            .collect()
+    }
+    /// Visual geometry of a source range, one fragment per row it occupies.
+    /// An empty range yields a zero-width fragment at its caret position.
+    pub fn range_fragments(&self, range: Range<usize>) -> Vec<RangeFragment> {
+        if range.is_empty() {
+            if range.start > self.text.len() || self.lines.is_empty() {
+                return Vec::new();
+            }
+            let point = self.caret_point(Caret::at(range.start));
+            return vec![RangeFragment {
+                range,
+                x: point.x..point.x,
+                y: point.y,
+            }];
+        }
+        self.lines
+            .iter()
+            .skip(self.lines.partition_point(|l| l.range.end <= range.start))
+            .take_while(|l| l.range.start < range.end)
+            .filter_map(|l| {
+                let mut left = f32::MAX;
+                let mut right = f32::MIN;
+                for (_, cell) in l
+                    .cells()
+                    .skip(l.cells.partition_point(|c| c.end <= range.start))
+                    .take_while(|(cells, _)| cells.start < range.end)
+                {
+                    left = left.min(cell.x);
+                    right = right.max(cell.x + cell.width());
+                }
+                if left > right {
+                    // No glyphs of this line fall inside the range (a bare
+                    // line break): there is nothing to present on this row.
+                    return None;
+                }
+                Some(RangeFragment {
+                    range: range.start.max(l.range.start)..range.end.min(l.range.end),
+                    x: left..right,
+                    y: l.y,
+                })
             })
             .collect()
     }
