@@ -985,9 +985,9 @@ fn create<W: Widget>(
     {
         return Err("Passive overlays require X11/XWayland on Linux".into());
     }
-    if options.click_through.unwrap_or(options.overlay) {
+    if options.overlay || options.click_through.is_some() {
         window
-            .set_cursor_hittest(false)
+            .set_cursor_hittest(!options.click_through.unwrap_or(options.overlay))
             .map_err(|e| e.to_string())?;
     }
     window.set_visible(true);
