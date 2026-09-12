@@ -957,9 +957,14 @@ fn create<W: Widget>(
     #[cfg(all(target_os = "linux", feature = "x11"))]
     let attrs = if options.overlay {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+        let interactive = options.click_through == Some(false);
         attrs
-            .with_override_redirect(options.click_through != Some(false))
-            .with_x11_window_type(vec![WindowType::Notification])
+            .with_override_redirect(!interactive)
+            .with_x11_window_type(vec![if interactive {
+                WindowType::Utility
+            } else {
+                WindowType::Notification
+            }])
     } else {
         attrs
     };
