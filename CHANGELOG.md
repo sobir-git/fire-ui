@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Deliver synthetic key releases on focus loss, read keyboard paste off the UI
-  thread, and size scale changes from the subsequent resize event.
+- Deliver synthetic key releases on focus loss and read keyboard paste off the UI
+  thread. Recompute logical size on scale changes even if no resize event follows.
 - Require a matching pointer press before Checkbox, Switch, or Tab activates on
   release; dim disabled toggle captions. Dividers now choose their orientation
   explicitly, including inside scrolling columns.

@@ -750,18 +750,23 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             WindowEvent::Resized(size) => {
                 if let Some(s) = &mut self.state {
                     if size.width > 0 && size.height > 0 {
-                        let scale = s.window.scale_factor() as f32;
-                        s.ui.resize(Size::new(
-                            size.width as f32 / scale,
-                            size.height as f32 / scale,
-                        ));
+                        s.ui.resize(logical_size(size, s.window.scale_factor()));
                         s.resize_at = Some(Instant::now());
                         s.window.request_redraw()
                     }
                 }
             }
-            // Resized carries the new physical size after winit applies the scale.
-            WindowEvent::ScaleFactorChanged { .. } => {}
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let Some(s) = &mut self.state {
+                    // X11 can omit Resized when the physical size stays the same.
+                    // Resized will replace this provisional size if the OS changes it.
+                    let size = s.window.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        s.ui.resize(logical_size(size, scale_factor));
+                        s.window.request_redraw();
+                    }
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let scale = self
                     .state
@@ -935,6 +940,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
 fn accept_key_event(is_synthetic: bool, state: ElementState) -> bool {
     !is_synthetic || state == ElementState::Released
 }
+fn logical_size(size: winit::dpi::PhysicalSize<u32>, scale: f64) -> Size {
+    Size::new(
+        size.width as f32 / scale as f32,
+        size.height as f32 / scale as f32,
+    )
+}
 fn key(key: &OsKey) -> Option<Key> {
     Some(match key {
         OsKey::Named(named) => match named {
@@ -1100,5 +1111,12 @@ mod tests {
         assert!(!accept_key_event(true, ElementState::Pressed));
         assert!(accept_key_event(false, ElementState::Released));
         assert!(accept_key_event(false, ElementState::Pressed));
+    }
+
+    #[test]
+    fn scale_change_updates_logical_size_even_without_a_physical_resize() {
+        let physical = winit::dpi::PhysicalSize::new(800, 600);
+        assert_eq!(logical_size(physical, 1.), Size::new(800., 600.));
+        assert_eq!(logical_size(physical, 2.), Size::new(400., 300.));
     }
 }
