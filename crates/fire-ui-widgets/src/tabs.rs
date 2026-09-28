@@ -7,6 +7,7 @@ pub struct Tab {
     caption: Child<Label>,
     text: String,
     selected: bool,
+    pressed: Option<u32>,
 }
 impl Tab {
     fn new(text: impl Into<String>) -> Element<Self> {
@@ -17,6 +18,7 @@ impl Tab {
             )),
             text,
             selected: false,
+            pressed: None,
         })
     }
     /// Publishes the caption colour the current selection calls for.
@@ -49,6 +51,7 @@ impl Widget for Tab {
         match event {
             Lifecycle::Mount | Lifecycle::Inherited => self.publish(cx),
             Lifecycle::Hover(_) => cx.repaint(),
+            Lifecycle::CaptureLost(_) | Lifecycle::Visibility(false) => self.pressed = None,
             _ => {}
         }
     }
@@ -59,17 +62,31 @@ impl Widget for Tab {
         if phase == Phase::Preview {
             return;
         }
-        if let Input::Button {
-            button: 1,
-            down: false,
-            position,
-            ..
-        } = input
-        {
-            if cx.bounds().contains(*position) {
-                let _ = cx.emit(());
-                cx.stop()
+        match input {
+            Input::Button {
+                pointer,
+                button: 1,
+                down: true,
+                position,
+            } if cx.bounds().contains(*position) => {
+                self.pressed = Some(*pointer);
+                let _ = cx.capture(*pointer);
+                cx.stop();
             }
+            Input::Button {
+                pointer,
+                button: 1,
+                down: false,
+                position,
+            } if self.pressed == Some(*pointer) => {
+                self.pressed = None;
+                let _ = cx.release(*pointer);
+                if cx.bounds().contains(*position) {
+                    let _ = cx.emit(());
+                }
+                cx.stop();
+            }
+            _ => {}
         }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {

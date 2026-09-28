@@ -1106,6 +1106,106 @@ fn tabs_report_the_tab_that_was_clicked() {
     assert_eq!(chosen, vec![2], "clicking the third tab selects it");
 }
 
+#[test]
+fn release_without_a_press_does_not_activate_toggles_or_tabs() {
+    let mut checkbox = Ui::new(
+        Checkbox::new("Check"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut checkbox, &mut TestText);
+    checkbox.dispatch(
+        Input::Button {
+            pointer: 1,
+            button: 1,
+            down: false,
+            position: Point::new(20., 20.),
+        },
+        &mut TestText,
+    );
+    let mut checkbox_outputs = vec![];
+    checkbox.pump(100, |o| checkbox_outputs.push(o), |_| {});
+    assert!(!checkbox.root().checked());
+    assert!(checkbox_outputs.is_empty());
+
+    let mut switch = Ui::new(
+        Switch::new("Switch"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut switch, &mut TestText);
+    switch.dispatch(
+        Input::Button {
+            pointer: 1,
+            button: 1,
+            down: false,
+            position: Point::new(20., 20.),
+        },
+        &mut TestText,
+    );
+    let mut switch_outputs = vec![];
+    switch.pump(100, |o| switch_outputs.push(o), |_| {});
+    assert!(!switch.root().checked());
+    assert!(switch_outputs.is_empty());
+
+    let mut tabs = Ui::new(
+        Tabs::new(["One", "Two"]),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut tabs, &mut TestText);
+    let second = tabs
+        .semantics()
+        .into_iter()
+        .find(|n| n.semantics.role == Role::Tab && n.semantics.label == "Two")
+        .unwrap();
+    tabs.dispatch(
+        Input::Button {
+            pointer: 1,
+            button: 1,
+            down: false,
+            position: center(second.bounds),
+        },
+        &mut TestText,
+    );
+    let mut tab_outputs = vec![];
+    tabs.pump(100, |o| tab_outputs.push(o), |_| {});
+    assert_eq!(tabs.root().selected(), 0);
+    assert!(tab_outputs.is_empty());
+}
+
+#[test]
+fn toggles_activate_once_after_a_matching_press_and_release() {
+    let mut checkbox = Ui::new(
+        Checkbox::new("Check"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut checkbox, &mut TestText);
+    click(&mut checkbox, &mut TestText, Point::new(20., 20.));
+    let mut outputs = vec![];
+    checkbox.pump(100, |o| outputs.push(o), |_| {});
+    assert_eq!(outputs, vec![true]);
+    assert!(checkbox.root().checked());
+
+    let mut switch = Ui::new(
+        Switch::new("Switch"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut switch, &mut TestText);
+    click(&mut switch, &mut TestText, Point::new(20., 20.));
+    let mut outputs = vec![];
+    switch.pump(100, |o| outputs.push(o), |_| {});
+    assert_eq!(outputs, vec![true]);
+    assert!(switch.root().checked());
+}
+
 fn point<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
     ui.dispatch(
         Input::Pointer {
@@ -1304,6 +1404,89 @@ impl Painter for Recorder {
             self.fills.push(c)
         }
     }
+}
+
+#[test]
+fn disabled_toggles_dim_their_captions() {
+    let mut checkbox = Ui::new(
+        Checkbox::new("Check"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    checkbox.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut checkbox, &mut TestText);
+    checkbox.send(ToggleCommand::Disabled(true)).unwrap();
+    settle(&mut checkbox, &mut TestText);
+    let mut paint = Recorder::default();
+    checkbox.paint(&mut paint);
+    assert_eq!(paint.fills, vec![Theme::dark().color.faint]);
+
+    let mut switch = Ui::new(
+        Switch::new("Switch"),
+        Size::new(200., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    switch.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut switch, &mut TestText);
+    switch.send(ToggleCommand::Disabled(true)).unwrap();
+    settle(&mut switch, &mut TestText);
+    let mut paint = Recorder::default();
+    switch.paint(&mut paint);
+    assert_eq!(paint.fills, vec![Theme::dark().color.faint]);
+}
+
+struct DividerProbe {
+    divider: Child<Divider>,
+    available: Size,
+    measured: Size,
+}
+impl DividerProbe {
+    fn new(available: Size) -> Element<Self> {
+        Element::build(|c| Self {
+            divider: c.add(Element::leaf(Divider)),
+            available,
+            measured: Size::ZERO,
+        })
+    }
+}
+impl Widget for DividerProbe {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, _: Constraints) -> Metrics {
+        let m = cx.measure(self.divider, Constraints::loose(self.available));
+        self.measured = m.size;
+        cx.place(self.divider, Point::default());
+        m
+    }
+}
+
+#[test]
+fn divider_uses_the_longer_available_axis() {
+    let mut vertical = Ui::new(
+        DividerProbe::new(Size::new(20., 100.)),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut vertical, &mut TestText);
+    assert_eq!(
+        vertical.root().measured,
+        Size::new(Theme::default().scale.border, 100.)
+    );
+
+    let mut horizontal = Ui::new(
+        DividerProbe::new(Size::new(100., 20.)),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut horizontal, &mut TestText);
+    assert_eq!(
+        horizontal.root().measured,
+        Size::new(100., Theme::default().scale.border)
+    );
 }
 
 #[test]

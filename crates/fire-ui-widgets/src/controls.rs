@@ -426,14 +426,26 @@ impl Widget for Divider {
     type Output = Infallible;
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         let border = theme(cx).scale.border;
-        Metrics::new(c.constrain(Size::new(
-            if c.max.width.is_finite() {
-                c.max.width
-            } else {
-                border
-            },
-            border,
-        )))
+        let vertical = c.max.height > c.max.width;
+        Metrics::new(c.constrain(if vertical {
+            Size::new(
+                border,
+                if c.max.height.is_finite() {
+                    c.max.height
+                } else {
+                    border
+                },
+            )
+        } else {
+            Size::new(
+                if c.max.width.is_finite() {
+                    c.max.width
+                } else {
+                    border
+                },
+                border,
+            )
+        }))
     }
     fn paint(&self, cx: &mut Paint<'_>) {
         cx.painter

@@ -1,5 +1,6 @@
-use crate::{theme, Appearance, Label, TextRole};
+use crate::{theme, Appearance, Label, TextRole, Theme};
 use fire_ui::*;
+use std::rc::Rc;
 
 /// Commands shared by the two-state controls.
 #[derive(Clone, Debug)]
@@ -25,6 +26,8 @@ struct Toggle {
     text: String,
     checked: bool,
     disabled: bool,
+    pressed: Option<u32>,
+    published: Option<Theme>,
 }
 impl Toggle {
     fn new(children: &mut Children<impl Widget>, text: impl Into<String>) -> Self {
@@ -36,6 +39,25 @@ impl Toggle {
             text,
             checked: false,
             disabled: false,
+            pressed: None,
+            published: None,
+        }
+    }
+    fn publish<W: Widget>(&mut self, cx: &mut Update<'_, W>) {
+        let mut derived = cx.environment::<Theme>().copied().unwrap_or_default();
+        if self.disabled {
+            derived.color.foreground = derived.color.faint;
+        }
+        if self.published != Some(derived)
+            && cx
+                .set_environment(
+                    self.caption,
+                    Rc::new(derived),
+                    self.published.is_none_or(|old| old.scale != derived.scale),
+                )
+                .is_ok()
+        {
+            self.published = Some(derived);
         }
     }
     /// Returns the new state when it changed, so the owner can emit it.
@@ -47,7 +69,15 @@ impl Toggle {
                 }
                 self.checked = value
             }
-            ToggleCommand::Disabled(value) => self.disabled = value,
+            ToggleCommand::Disabled(value) => {
+                self.disabled = value;
+                if value {
+                    if let Some(pointer) = self.pressed.take() {
+                        let _ = cx.release(pointer);
+                    }
+                }
+                self.publish(cx);
+            }
             ToggleCommand::Label(text) => {
                 let _ = cx.send(self.caption, text.clone());
                 self.text = text;
@@ -57,17 +87,34 @@ impl Toggle {
         true
     }
     /// Whether this input activates the control.
-    fn activates(&self, cx: &Update<'_, impl Widget>, phase: Phase, input: &Input) -> bool {
+    fn activates(&mut self, cx: &mut Update<'_, impl Widget>, phase: Phase, input: &Input) -> bool {
         if phase == Phase::Preview || self.disabled {
             return false;
         }
         match input {
             Input::Button {
+                pointer,
+                button: 1,
+                down: true,
+                position,
+            } if cx.bounds().contains(*position) => {
+                self.pressed = Some(*pointer);
+                let _ = cx.focus();
+                let _ = cx.capture(*pointer);
+                cx.stop();
+                false
+            }
+            Input::Button {
+                pointer,
                 button: 1,
                 down: false,
                 position,
-                ..
-            } => cx.bounds().contains(*position),
+            } if self.pressed == Some(*pointer) => {
+                self.pressed = None;
+                let _ = cx.release(*pointer);
+                cx.stop();
+                cx.bounds().contains(*position)
+            }
             Input::Key {
                 key: Key::Character(' ') | Key::Enter,
                 down: true,
@@ -153,25 +200,17 @@ impl Widget for Checkbox {
         })
     }
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
-        if matches!(event, Lifecycle::Hover(_) | Lifecycle::Focus(_)) {
-            cx.repaint()
+        match event {
+            Lifecycle::Mount | Lifecycle::Inherited => self.0.publish(cx),
+            Lifecycle::CaptureLost(_) | Lifecycle::Focus(false) | Lifecycle::Visibility(false) => {
+                self.0.pressed = None;
+                cx.repaint();
+            }
+            Lifecycle::Hover(_) | Lifecycle::Focus(true) => cx.repaint(),
+            _ => {}
         }
     }
     fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
-        if matches!(
-            input,
-            Input::Button {
-                button: 1,
-                down: true,
-                ..
-            }
-        ) && phase != Phase::Preview
-            && !self.0.disabled
-        {
-            let _ = cx.focus();
-            cx.stop();
-            return;
-        }
         if self.0.activates(cx, phase, input) {
             self.0.checked = !self.0.checked;
             let _ = cx.emit(self.0.checked);
@@ -272,25 +311,17 @@ impl Widget for Switch {
         })
     }
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
-        if matches!(event, Lifecycle::Hover(_) | Lifecycle::Focus(_)) {
-            cx.repaint()
+        match event {
+            Lifecycle::Mount | Lifecycle::Inherited => self.0.publish(cx),
+            Lifecycle::CaptureLost(_) | Lifecycle::Focus(false) | Lifecycle::Visibility(false) => {
+                self.0.pressed = None;
+                cx.repaint();
+            }
+            Lifecycle::Hover(_) | Lifecycle::Focus(true) => cx.repaint(),
+            _ => {}
         }
     }
     fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
-        if matches!(
-            input,
-            Input::Button {
-                button: 1,
-                down: true,
-                ..
-            }
-        ) && phase != Phase::Preview
-            && !self.0.disabled
-        {
-            let _ = cx.focus();
-            cx.stop();
-            return;
-        }
         if self.0.activates(cx, phase, input) {
             self.0.checked = !self.0.checked;
             let _ = cx.emit(self.0.checked);

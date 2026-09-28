@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require a matching pointer press before Checkbox, Switch, or Tab activates on
+  release; dim disabled toggle captions and orient dividers along their long axis.
 - Typed undo groups end at word boundaries and after a one-second pause; completed
   groups release spare text capacity.
 - Keep slider and progress state finite when supplied non-finite values or bounds.
