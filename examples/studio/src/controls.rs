@@ -4,7 +4,7 @@ use fire_ui::*;
 use fire_ui_widgets::*;
 
 fn button(text: &str, style: ButtonStyle) -> Element<Button<Label>> {
-    Button::styled(Element::leaf(Label::new(text)), text, style)
+    Button::styled(Label::new(text), text, style)
 }
 
 /// Every control the widget crate ships, live, with what it reports.

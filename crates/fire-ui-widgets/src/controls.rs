@@ -10,22 +10,26 @@ pub struct Label {
     wrap: bool,
 }
 impl Label {
-    pub fn new(text: impl Into<Arc<str>>) -> Self {
-        Self {
+    pub fn new(text: impl Into<Arc<str>>) -> Element<Self> {
+        Element::leaf(Self {
             text: text.into(),
             appearance: Appearance::default(),
             paragraph: None,
             revision: 0,
             wrap: false,
-        }
+        })
     }
     /// A label at a step of the type scale.
-    pub fn styled(text: impl Into<Arc<str>>, role: TextRole) -> Self {
-        Self::new(text).appearance(Appearance::role(role))
+    pub fn styled(text: impl Into<Arc<str>>, role: TextRole) -> Element<Self> {
+        Self::new(text).map(|label| label.appearance(Appearance::role(role)))
     }
     /// A label at a step of the type scale, in a palette role.
-    pub fn toned(text: impl Into<Arc<str>>, role: TextRole, color: crate::ColorRole) -> Self {
-        Self::new(text).appearance(Appearance::role(role).color(color))
+    pub fn toned(
+        text: impl Into<Arc<str>>,
+        role: TextRole,
+        color: crate::ColorRole,
+    ) -> Element<Self> {
+        Self::new(text).map(|label| label.appearance(Appearance::role(role).color(color)))
     }
     pub fn appearance(mut self, appearance: Appearance) -> Self {
         self.appearance = appearance;
@@ -37,6 +41,19 @@ impl Label {
     }
     pub fn paragraph(&self) -> Option<&Arc<Paragraph>> {
         self.paragraph.as_ref()
+    }
+}
+/// Fluent configuration for a label returned by its constructor.
+pub trait LabelElementExt: Sized {
+    fn appearance(self, appearance: Appearance) -> Self;
+    fn wrap(self) -> Self;
+}
+impl LabelElementExt for Element<Label> {
+    fn appearance(self, appearance: Appearance) -> Self {
+        self.map(|label| label.appearance(appearance))
+    }
+    fn wrap(self) -> Self {
+        self.map(Label::wrap)
     }
 }
 impl Widget for Label {

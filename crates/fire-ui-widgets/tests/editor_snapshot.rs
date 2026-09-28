@@ -47,12 +47,7 @@ fn custom_document_snapshot_is_lazy_and_shared_with_output_and_reflow() {
         reads: reads.clone(),
     });
     assert_eq!(reads.get(), 0, "construction must not copy document data");
-    let mut ui = Ui::new(
-        Element::leaf(editor),
-        Size::new(300., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(editor, Size::new(300., 100.), Limits::default()).unwrap();
     let mut changed = vec![];
     settle(&mut ui, &mut changed);
     let first = ui.root().paragraph().unwrap().text.clone();
@@ -83,12 +78,7 @@ fn custom_document_snapshot_is_lazy_and_shared_with_output_and_reflow() {
 }
 #[test]
 fn hidden_editor_drops_cached_text_even_after_programmatic_edits() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("old")),
-        Size::new(300., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new("old"), Size::new(300., 100.), Limits::default()).unwrap();
     let mut changed = vec![];
     settle(&mut ui, &mut changed);
     let initial = Arc::downgrade(&ui.root().paragraph().unwrap().text);
@@ -110,12 +100,7 @@ fn hidden_editor_drops_cached_text_even_after_programmatic_edits() {
 }
 #[test]
 fn silent_set_invalidates_snapshot_without_emitting_changed() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("old")),
-        Size::new(300., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new("old"), Size::new(300., 100.), Limits::default()).unwrap();
     let mut changed = vec![];
     settle(&mut ui, &mut changed);
     let old = ui.root().paragraph().unwrap().text.clone();

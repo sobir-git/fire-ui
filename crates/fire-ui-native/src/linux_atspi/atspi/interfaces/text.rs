@@ -342,7 +342,7 @@ mod transaction_query_tests {
     use accesskit_atspi_common::{
         Adapter, AdapterCallback, AppContext, Event, FullNodeId, WindowBounds,
     };
-    use fire_ui::{Element, Limits, Size, TestText, Ui};
+    use fire_ui::{Limits, Size, TestText, Ui};
     use fire_ui_widgets::Editor;
     use std::sync::Arc;
     struct NoOp;
@@ -369,12 +369,7 @@ mod transaction_query_tests {
             NoOp,
         );
         let edits = EditDispatcher::new(Arc::new(drop));
-        let mut ui = Ui::new(
-            Element::leaf(Editor::new(value)),
-            Size::new(300., 140.),
-            Limits::default(),
-        )
-        .unwrap();
+        let mut ui = Ui::new(Editor::new(value), Size::new(300., 140.), Limits::default()).unwrap();
         ui.pump(100, |_| {}, |_| {});
         ui.layout(&mut TestText);
         let snapshot = crate::linux_atspi::text::snapshots(&ui.semantics(), 1.)

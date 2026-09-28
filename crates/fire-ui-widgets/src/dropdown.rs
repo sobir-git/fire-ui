@@ -55,9 +55,9 @@ impl Dropdown {
         let first = options.first().cloned().unwrap_or_else(|| Arc::from(""));
         let label = label.into();
         Element::build(|children| Self {
-            caption: children.add(Element::leaf(
-                Label::new(first).appearance(Appearance::role(TextRole::Body)),
-            )),
+            caption: children.add(
+                Label::new(first).map(|label| label.appearance(Appearance::role(TextRole::Body))),
+            ),
             options,
             selected: 0,
             list: None,

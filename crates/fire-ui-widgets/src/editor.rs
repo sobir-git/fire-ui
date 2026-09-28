@@ -175,7 +175,7 @@ mod history_cost_tests {
 
     #[test]
     fn plain_typing_retains_inline_edits_without_selection_allocations() {
-        let mut editor = Editor::new("");
+        let mut editor = Editor::bare("");
         for _ in 0..1_000 {
             editor.insert_typed("x", Duration::ZERO);
         }
@@ -199,7 +199,7 @@ mod history_cost_tests {
 
     #[test]
     fn consecutive_typed_characters_undo_together() {
-        let mut editor = Editor::new("");
+        let mut editor = Editor::bare("");
         for ch in ["a", "🔥", "b"] {
             editor.insert_typed(ch, Duration::ZERO);
         }
@@ -212,7 +212,7 @@ mod history_cost_tests {
 
     #[test]
     fn typing_after_whitespace_starts_a_new_undo_group() {
-        let mut editor = Editor::new("");
+        let mut editor = Editor::bare("");
         for ch in "first second".chars() {
             editor.insert_typed(&ch.to_string(), Duration::ZERO);
         }
@@ -224,7 +224,7 @@ mod history_cost_tests {
 
     #[test]
     fn finished_typing_group_releases_spare_string_capacity() {
-        let mut editor = Editor::new("");
+        let mut editor = Editor::bare("");
         for ch in "abcdef ".chars() {
             editor.insert_typed(&ch.to_string(), Duration::ZERO);
         }
@@ -238,7 +238,7 @@ mod history_cost_tests {
 
     #[test]
     fn moving_lines_preserves_crlf_and_caret_boundaries() {
-        let mut editor = Editor::new("a\r\n🔥\r\né");
+        let mut editor = Editor::bare("a\r\n🔥\r\né");
         editor.caret = Caret::at(3);
         editor.move_lines(true);
         assert_eq!(editor.text(), "a\r\né\r\n🔥");
@@ -255,7 +255,7 @@ mod history_cost_tests {
     #[test]
     fn placeholder_is_reshaped_when_width_changes() {
         let mut ui = Ui::new(
-            Element::leaf(Editor::new("").placeholder("one two three four five six")),
+            Editor::new("").map(|editor| editor.placeholder("one two three four five six")),
             Size::new(200., 90.),
             Limits::default(),
         )
@@ -272,7 +272,7 @@ mod history_cost_tests {
     fn editor_thumb_drag_uses_track_geometry() {
         let text = (0..100).map(|i| format!("line {i}\n")).collect::<String>();
         let size = Size::new(300., 200.);
-        let mut ui = Ui::new(Element::leaf(Editor::new(text)), size, Limits::default()).unwrap();
+        let mut ui = Ui::new(Editor::new(text), size, Limits::default()).unwrap();
         settle(&mut ui);
         let bar = ui.root().scrollbar(Rect::from_size(size)).unwrap();
         let overflow = ui.root().paragraph.as_ref().unwrap().size.height
@@ -546,19 +546,26 @@ pub struct Editor<D: Document = StringDocument> {
     bar_hover: bool,
 }
 impl Editor<StringDocument> {
-    pub fn new(text: impl Into<String>) -> Self {
+    #[cfg(test)]
+    fn bare(text: impl Into<String>) -> Self {
+        Self::bare_with_document(StringDocument::new(text))
+    }
+    pub fn new(text: impl Into<String>) -> Element<Self> {
         Self::with_document(StringDocument::new(text))
     }
-    pub fn field(text: impl Into<String>) -> Self {
-        Self {
+    pub fn field(text: impl Into<String>) -> Element<Self> {
+        Element::leaf(Self {
             multiline: false,
             wrap: false,
-            ..Self::new(text)
-        }
+            ..Self::bare_with_document(StringDocument::new(text))
+        })
     }
 }
 impl<D: Document> Editor<D> {
-    pub fn with_document(document: D) -> Self {
+    pub fn with_document(document: D) -> Element<Self> {
+        Element::leaf(Self::bare_with_document(document))
+    }
+    fn bare_with_document(document: D) -> Self {
         Self {
             document,
             caret: Caret::at(0),
@@ -1321,6 +1328,47 @@ impl<D: Document> Editor<D> {
         cx.painter.restore();
     }
 }
+/// Fluent configuration for an editor returned by its constructor.
+pub trait EditorElementExt: Sized {
+    fn label(self, label: impl Into<String>) -> Self;
+    fn key(self, key: impl Into<String>) -> Self;
+    fn restore(self, state: EditorState) -> Self;
+    fn padding(self, horizontal: f32, vertical: f32) -> Self;
+    fn extension(self, extension: impl EditorExtension) -> Self;
+    fn placeholder(self, text: impl Into<Arc<str>>) -> Self;
+    fn caret_blink(self, enabled: bool) -> Self;
+    fn max_bytes(self, bytes: usize) -> Self;
+    fn chrome(self, chrome: bool) -> Self;
+}
+impl<D: Document> EditorElementExt for Element<Editor<D>> {
+    fn label(self, label: impl Into<String>) -> Self {
+        self.map(|editor| editor.label(label))
+    }
+    fn key(self, key: impl Into<String>) -> Self {
+        self.map(|editor| editor.key(key))
+    }
+    fn restore(self, state: EditorState) -> Self {
+        self.map(|editor| editor.restore(state))
+    }
+    fn padding(self, horizontal: f32, vertical: f32) -> Self {
+        self.map(|editor| editor.padding(horizontal, vertical))
+    }
+    fn extension(self, extension: impl EditorExtension) -> Self {
+        self.map(|editor| editor.extension(extension))
+    }
+    fn placeholder(self, text: impl Into<Arc<str>>) -> Self {
+        self.map(|editor| editor.placeholder(text))
+    }
+    fn caret_blink(self, enabled: bool) -> Self {
+        self.map(|editor| editor.caret_blink(enabled))
+    }
+    fn max_bytes(self, bytes: usize) -> Self {
+        self.map(|editor| editor.max_bytes(bytes))
+    }
+    fn chrome(self, chrome: bool) -> Self {
+        self.map(|editor| editor.chrome(chrome))
+    }
+}
 
 #[cfg(test)]
 mod boundary_performance_tests {
@@ -1328,7 +1376,7 @@ mod boundary_performance_tests {
 
     #[test]
     fn boundary_lookup_near_document_end_is_local() {
-        let editor = Editor::new("a".repeat(1_000_000));
+        let editor = Editor::bare("a".repeat(1_000_000));
         let start = std::time::Instant::now();
         for _ in 0..100 {
             std::hint::black_box(editor.boundary(1));
@@ -1348,7 +1396,7 @@ mod boundary_performance_tests {
     #[test]
     fn local_boundary_matches_complete_segmentation() {
         let value = "a👩‍👩‍👧‍👦e\u{301}🇺🇸क्‍ष\r\nb";
-        let editor = Editor::new(value);
+        let editor = Editor::bare(value);
         let boundaries: Vec<_> = value
             .grapheme_indices(true)
             .map(|(at, _)| at)

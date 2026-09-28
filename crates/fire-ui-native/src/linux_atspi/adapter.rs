@@ -311,7 +311,7 @@ pub(crate) enum Message {
 mod transaction_review_tests {
     use super::*;
     use accesskit::{ActionRequest, Node, NodeId, Role, TreeId, TreeInfo};
-    use fire_ui::{Element, Limits, Size, TestText, Ui};
+    use fire_ui::{Limits, Size, TestText, Ui};
     use fire_ui_widgets::Editor;
     use std::sync::mpsc;
 
@@ -333,12 +333,7 @@ mod transaction_review_tests {
         }
     }
     fn text(value: &str) -> super::super::text::TextSnapshots {
-        let mut ui = Ui::new(
-            Element::leaf(Editor::new(value)),
-            Size::new(300., 140.),
-            Limits::default(),
-        )
-        .unwrap();
+        let mut ui = Ui::new(Editor::new(value), Size::new(300., 140.), Limits::default()).unwrap();
         ui.pump(100, |_| {}, |_| {});
         ui.layout(&mut TestText);
         super::super::text::snapshots(&ui.semantics(), 1.)

@@ -53,7 +53,7 @@ fn rejected_extension_key_does_not_fall_through() {
         }
     }
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("ab").max_bytes(3).extension(LongKey)),
+        Editor::new("ab").max_bytes(3).extension(LongKey),
         Size::new(300., 140.),
         Limits::default(),
     )

@@ -200,7 +200,7 @@ mod tests {
     use accesskit_atspi_common::{
         Adapter, AdapterCallback, AppContext, Event, FullNodeId, WindowBounds,
     };
-    use fire_ui::{Element, Limits, Size, Ui};
+    use fire_ui::{Limits, Size, Ui};
     use fire_ui_widgets::Editor;
     struct Callback;
     impl AdapterCallback for Callback {
@@ -213,7 +213,7 @@ mod tests {
     }
     fn source(value: &str, width: f32) -> Vec<SemanticNode> {
         let mut ui = Ui::new(
-            Element::leaf(Editor::new(value)),
+            Editor::new(value),
             Size::new(width, 100.),
             Limits::default(),
         )

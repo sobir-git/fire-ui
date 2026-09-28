@@ -1,5 +1,5 @@
 use fire_ui::*;
-use fire_ui_widgets::{Edit, Editor, EditorState};
+use fire_ui_widgets::{Edit, Editor, EditorElementExt, EditorState};
 use std::{sync::Arc, time::Duration};
 
 fn settle(ui: &mut Ui<Editor>) {
@@ -15,15 +15,13 @@ fn settle(ui: &mut Ui<Editor>) {
 fn editor(wrap: bool) -> (Ui<Editor>, u64) {
     let value = "café a long line which extends outside the narrow viewport\n".repeat(20);
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new(value)
-                .chrome(false)
-                .padding(0., 0.)
-                .restore(EditorState {
-                    wrap,
-                    ..EditorState::default()
-                }),
-        ),
+        Editor::new(value)
+            .chrome(false)
+            .padding(0., 0.)
+            .restore(EditorState {
+                wrap,
+                ..EditorState::default()
+            }),
         Size::new(120., 80.),
         Limits::default(),
     )

@@ -33,9 +33,10 @@ impl Toggle {
     fn new(children: &mut Children<impl Widget>, text: impl Into<String>) -> Self {
         let text = text.into();
         Self {
-            caption: children.add(Element::leaf(
-                Label::new(text.clone()).appearance(Appearance::role(TextRole::Body)),
-            )),
+            caption: children.add(
+                Label::new(text.clone())
+                    .map(|label| label.appearance(Appearance::role(TextRole::Body))),
+            ),
             text,
             checked: false,
             disabled: false,

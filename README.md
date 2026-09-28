@@ -36,7 +36,7 @@ use fire_ui_widgets::{Label, Padding};
 fn main() -> Result<(), String> {
     let fonts = fire_ui_fonts::Fonts::load(&["/path/to/app-font.ttf"])?;
     run(
-        Padding::new(Element::leaf(Label::new("Hello, Fire UI")), 24.0),
+        Padding::new(Label::new("Hello, Fire UI"), 24.0),
         WindowOptions::default(),
         fire_ui_text::Text::new(fonts.clone())?,
         fire_ui_cairo::Cairo::direct(fonts),

@@ -33,7 +33,7 @@ use fire_ui::Element;
 use fire_ui_widgets::{Button, ButtonStyle, Insets, Label, Padding};
 
 let button = Button::styled(
-    Element::leaf(Label::new("Continue")),
+    Label::new("Continue"),
     "Continue",
     ButtonStyle::Primary,
 );

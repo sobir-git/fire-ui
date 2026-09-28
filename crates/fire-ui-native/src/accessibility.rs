@@ -441,10 +441,12 @@ mod tests {
     use fire_ui_widgets::Editor;
     fn editor(text: &str, anchor: usize, caret: usize) -> Ui<Editor> {
         let mut ui = Ui::new(
-            Element::leaf(Editor::new(text).restore(fire_ui_widgets::EditorState {
-                wrap: false,
-                ..Default::default()
-            })),
+            Editor::new(text).map(|editor| {
+                editor.restore(fire_ui_widgets::EditorState {
+                    wrap: false,
+                    ..Default::default()
+                })
+            }),
             Size::new(300., 200.),
             Limits::default(),
         )
@@ -653,7 +655,7 @@ mod tests {
     #[test]
     fn text_tree_round_trips_unicode_selection_and_rejects_cross_editor_positions() {
         let mut ui = Ui::new(
-            Element::leaf(Editor::new("é\nשלום").label("Body")),
+            Editor::new("é\nשלום").map(|editor| editor.label("Body")),
             Size::new(300., 200.),
             Limits::default(),
         )

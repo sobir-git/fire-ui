@@ -35,7 +35,7 @@ type Rows = VirtualList<usize, Row, fn(&usize) -> Element<Row>>;
 fn row_for(key: &usize) -> Element<Row> {
     let text = format!("Material study {:05}", key + 1);
     Element::build(|children| Row {
-        label: children.add(Element::leaf(Label::styled(text, TextRole::Body))),
+        label: children.add(Label::styled(text, TextRole::Body)),
     })
 }
 
@@ -78,19 +78,17 @@ impl Lists {
                 TextRole::Small,
             )),
             search: children.connect(
-                Element::leaf(Editor::field("").placeholder("Find a material study…")),
+                Editor::field("").map(|editor| editor.placeholder("Find a material study…")),
                 |v| Signal::Query(v.clone()),
             ),
             list: children.connect(
-                surface(SurfaceStyle::Sunken)
-                    .inset(6.)
-                    .wrap(Element::leaf(Rows::new(
-                        (0..TOTAL).collect(),
-                        // A rule, not a number: rows re-resolve when the theme
-                        // changes, so they tighten with everything else.
-                        RowHeight::Scaled(row_height),
-                        row_for as fn(&usize) -> Element<Row>,
-                    ))),
+                surface(SurfaceStyle::Sunken).inset(6.).wrap(Rows::new(
+                    (0..TOTAL).collect(),
+                    // A rule, not a number: rows re-resolve when the theme
+                    // changes, so they tighten with everything else.
+                    RowHeight::Scaled(row_height),
+                    row_for as fn(&usize) -> Element<Row>,
+                )),
                 |v| Signal::Row(v.clone()),
             ),
             count: children.add(muted(format!("{TOTAL} rows"), TextRole::Small)),

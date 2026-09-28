@@ -11,11 +11,11 @@ struct Block {
 impl Block {
     fn new(caption: &str, tone: f32) -> Element<Self> {
         Element::build(|children| Self {
-            caption: children.add(Element::leaf(Label::toned(
+            caption: children.add(Label::toned(
                 caption.to_string(),
                 TextRole::Small,
                 ColorRole::OnAccent,
-            ))),
+            )),
             tone,
         })
     }

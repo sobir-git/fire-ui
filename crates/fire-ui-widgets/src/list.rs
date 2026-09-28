@@ -106,10 +106,10 @@ where
     F: Fn(&K) -> Element<R> + 'static,
 {
     /// A list whose rows are `height` tall: a number, or a rule read from the theme.
-    pub fn new(keys: Vec<K>, height: impl Into<RowHeight>, factory: F) -> Self {
+    pub fn new(keys: Vec<K>, height: impl Into<RowHeight>, factory: F) -> Element<Self> {
         let height_rule = height.into();
         let indices = Self::index(&keys);
-        Self {
+        Element::leaf(Self {
             keys,
             indices,
             rows: vec![],
@@ -127,7 +127,7 @@ where
             bar_hover: false,
             width: 0.,
             bar: 0.,
-        }
+        })
     }
     pub fn select_on_hover(mut self, enabled: bool) -> Self {
         self.hover_selection = enabled;
@@ -257,6 +257,20 @@ where
             cx.request_frame();
         }
         cx.relayout();
+    }
+}
+/// Fluent configuration for a virtual list returned by its constructor.
+pub trait VirtualListElementExt: Sized {
+    fn select_on_hover(self, enabled: bool) -> Self;
+}
+impl<K, R, F> VirtualListElementExt for Element<VirtualList<K, R, F>>
+where
+    K: Data + Clone + Eq + Hash,
+    R: Widget<Output: Clone>,
+    F: Fn(&K) -> Element<R> + 'static,
+{
+    fn select_on_hover(self, enabled: bool) -> Self {
+        self.map(|list| list.select_on_hover(enabled))
     }
 }
 impl<K, R, F> Widget for VirtualList<K, R, F>

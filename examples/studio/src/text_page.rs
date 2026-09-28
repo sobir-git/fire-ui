@@ -38,14 +38,14 @@ impl TextPage {
                     // The surface is the well; the editor draws no chrome of its own,
                     // so there is one box here rather than a box inside a box.
                     surface(SurfaceStyle::Sunken)
-                        .wrap(Element::leaf(Editor::new(SAMPLE).chrome(false))),
+                        .wrap(Editor::new(SAMPLE).map(|editor| editor.chrome(false))),
                 ),
                 |v| Signal::Body(v.clone()),
             ),
             field: children.connect(
                 Field::new(
                     "A single-line field, with a placeholder",
-                    Element::leaf(Editor::field("").placeholder("Type a title…")),
+                    Editor::field("").map(|editor| editor.placeholder("Type a title…")),
                 ),
                 |v| Signal::Field(v.clone()),
             ),

@@ -253,10 +253,10 @@ mod tests {
     }
     #[test]
     fn failed_clipboard_copy_keeps_native_cut_text_and_selection() {
-        use fire_ui::{Element, Limits, SemanticAction, Size, TestText, Ui};
+        use fire_ui::{Limits, SemanticAction, Size, TestText, Ui};
         use fire_ui_widgets::Editor;
         let mut ui = Ui::new(
-            Element::leaf(Editor::new("aé🔥z")),
+            Editor::new("aé🔥z"),
             Size::new(300., 140.),
             Limits::default(),
         )

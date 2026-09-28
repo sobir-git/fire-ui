@@ -30,12 +30,7 @@ fn packed_history_keeps_removed_bytes_separate_from_normalized_inserted_text() {
         } else {
             Editor::new(original)
         };
-        let mut ui = Ui::new(
-            Element::leaf(editor),
-            Size::new(500., 180.),
-            Limits::default(),
-        )
-        .unwrap();
+        let mut ui = Ui::new(editor, Size::new(500., 180.), Limits::default()).unwrap();
         settle(&mut ui);
         replace(
             &mut ui,
@@ -72,12 +67,7 @@ fn packed_history_keeps_removed_bytes_separate_from_normalized_inserted_text() {
 }
 #[test]
 fn packed_history_replays_hundreds_of_variable_length_unicode_replacements() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("α")),
-        Size::new(200., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new("α"), Size::new(200., 100.), Limits::default()).unwrap();
     settle(&mut ui);
     let mut versions = vec!["α".to_owned()];
     for i in 0..400 {

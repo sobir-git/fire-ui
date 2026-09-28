@@ -2,6 +2,14 @@ use fire_ui::*;
 use fire_ui_widgets::*;
 use std::{rc::Rc, sync::Arc};
 
+#[test]
+fn widget_constructors_return_elements() {
+    type TestList = VirtualList<usize, Label, fn(&usize) -> Element<Label>>;
+    let _: Element<Label> = Label::new("label");
+    let _: Element<Editor> = Editor::new("editor");
+    let _: Element<TestList> = VirtualList::new(vec![0], 24., (|_: &usize| Label::new("row")) as _);
+}
+
 #[derive(Debug)]
 struct NonCloneOutput(usize);
 impl Data for NonCloneOutput {
@@ -67,7 +75,7 @@ fn key<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, key: Key) {
 #[test]
 fn editor_grapheme_delete_undo_and_silent_set() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("a👩‍👩‍👧‍👦e\u{301}")),
+        Editor::new("a👩‍👩‍👧‍👦e\u{301}"),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -110,7 +118,7 @@ fn editor_grapheme_delete_undo_and_silent_set() {
 #[test]
 fn editor_hover_and_blink_leave_semantics_stable_but_selection_publishes() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("hello")),
+        Editor::new("hello"),
         Size::new(300., 100.),
         Limits::default(),
     )
@@ -145,12 +153,7 @@ fn editor_hover_and_blink_leave_semantics_stable_but_selection_publishes() {
 
 #[test]
 fn typed_text_events_coalesce_but_caret_movement_starts_a_new_undo_step() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("")),
-        Size::new(300., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new(""), Size::new(300., 100.), Limits::default()).unwrap();
     settle(&mut ui, &mut TestText);
     ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
         .unwrap();
@@ -186,12 +189,7 @@ fn typed_text_events_coalesce_but_caret_movement_starts_a_new_undo_step() {
 
 #[test]
 fn typed_text_after_a_pause_starts_a_new_undo_step() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("")),
-        Size::new(300., 100.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new(""), Size::new(300., 100.), Limits::default()).unwrap();
     settle(&mut ui, &mut TestText);
     ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
         .unwrap();
@@ -219,9 +217,7 @@ fn typed_text_after_a_pause_starts_a_new_undo_step() {
 #[test]
 fn paragraph_is_shared_across_paint_only_theme_and_height_resize() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new(
-            "some text that wraps when the width becomes narrow",
-        )),
+        Editor::new("some text that wraps when the width becomes narrow"),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -244,10 +240,10 @@ fn paragraph_is_shared_across_paint_only_theme_and_height_resize() {
 #[test]
 fn virtual_list_keeps_mounts_bounded_for_one_hundred_thousand_rows() {
     let list = VirtualList::new((0..100_000usize).collect(), 30., |key: &usize| {
-        Element::leaf(Label::new(key.to_string()))
+        Label::new(key.to_string())
     });
     let mut ui = Ui::new(
-        Element::leaf(list),
+        list,
         Size::new(300., 300.),
         Limits {
             nodes: 64,
@@ -274,12 +270,7 @@ fn virtual_list_keeps_mounts_bounded_for_one_hundred_thousand_rows() {
 }
 #[test]
 fn clean_pointer_motion_does_not_remeasure_or_republish_geometry() {
-    let mut ui = Ui::new(
-        Element::leaf(Label::new("still")),
-        Size::new(200., 80.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Label::new("still"), Size::new(200., 80.), Limits::default()).unwrap();
     let mut text = TestText;
     settle(&mut ui, &mut text);
     let before = ui.stats();
@@ -300,7 +291,7 @@ fn clean_pointer_motion_does_not_remeasure_or_republish_geometry() {
 #[test]
 fn editor_focus_and_blink_recover_after_blur_and_occlusion() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("test")),
+        Editor::new("test"),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -329,7 +320,7 @@ fn editor_focus_and_blink_recover_after_blur_and_occlusion() {
 #[test]
 fn quiet_editor_keeps_a_caret_without_scheduling_idle_work() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("Quiet writing").caret_blink(false)),
+        Editor::new("Quiet writing").caret_blink(false),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -348,7 +339,7 @@ fn quiet_editor_keeps_a_caret_without_scheduling_idle_work() {
 #[test]
 fn rejected_oversized_edit_preserves_selection_content_and_undo() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("café").max_bytes(6)),
+        Editor::new("café").max_bytes(6),
         Size::new(300., 100.),
         Limits::default(),
     )
@@ -387,7 +378,7 @@ fn rejected_oversized_edit_preserves_selection_content_and_undo() {
 #[test]
 fn focus_requested_before_window_activation_is_restored_on_activation() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("").caret_blink(false)),
+        Editor::new("").caret_blink(false),
         Size::new(300., 100.),
         Limits::default(),
     )
@@ -427,7 +418,7 @@ fn modified_key(ui: &mut Ui<Editor>, key: Key, modifiers: Modifiers) {
 #[test]
 fn moving_selected_lines_preserves_selection_and_is_undoable() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("one\ntwo\nthree\nfour")),
+        Editor::new("one\ntwo\nthree\nfour"),
         Size::new(300., 200.),
         Limits::default(),
     )
@@ -475,7 +466,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
         wrap: false,
     };
     let mut ui = Ui::new(
-        Element::leaf(Editor::new(text).padding(16., 8.).restore(state)),
+        Editor::new(text).padding(16., 8.).restore(state),
         Size::new(300., 200.),
         Limits::default(),
     )
@@ -520,7 +511,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
 #[test]
 fn shift_click_double_click_and_triple_click_select_expected_text() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("one two\nthree").padding(0., 0.)),
+        Editor::new("one two\nthree").padding(0., 0.),
         Size::new(300., 200.),
         Limits::default(),
     )
@@ -583,12 +574,10 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
 #[test]
 fn list_navigation_and_hover_update_the_selected_row_environment() {
     let mut ui = Ui::new(
-        Element::leaf(
-            VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
-                Element::leaf(Label::new(k.to_string()))
-            })
-            .select_on_hover(true),
-        ),
+        VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
+            Label::new(k.to_string())
+        })
+        .select_on_hover(true),
         Size::new(200., 90.),
         Limits::default(),
     )
@@ -631,9 +620,9 @@ fn list_navigation_and_hover_update_the_selected_row_environment() {
 #[test]
 fn keyboard_list_selection_rebuilds_accessibility() {
     let mut ui = Ui::new(
-        Element::leaf(VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
-            Element::leaf(Label::new(k.to_string()))
-        })),
+        VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
+            Label::new(k.to_string())
+        }),
         Size::new(200., 90.),
         Limits::default(),
     )
@@ -749,7 +738,7 @@ fn menu_outside_click_dismisses_without_activating_an_action() {
 #[test]
 fn button_content_and_accessible_name_update_without_remounting() {
     let mut ui = Ui::new(
-        Button::new(Element::leaf(Label::new("Pause")), "Pause"),
+        Button::new(Label::new("Pause"), "Pause"),
         Size::new(180., 40.),
         Limits::default(),
     )
@@ -774,7 +763,7 @@ fn button_content_and_accessible_name_update_without_remounting() {
 #[test]
 fn semantic_edits_preserve_direction_validate_graphemes_and_use_editor_history() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("aé e\u{301}!").label("Body").key("body")),
+        Editor::new("aé e\u{301}!").label("Body").key("body"),
         Size::new(400., 200.),
         Limits::default(),
     )
@@ -827,7 +816,7 @@ fn semantic_edits_preserve_direction_validate_graphemes_and_use_editor_history()
 #[test]
 fn ime_selection_is_exposed_and_cancelled_without_changing_document() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("original")),
+        Editor::new("original"),
         Size::new(400., 200.),
         Limits::default(),
     )
@@ -893,7 +882,7 @@ impl TextEngine for CompositionText {
 #[test]
 fn ime_edits_reuse_previous_composition_layout() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("alpha\nbeta")),
+        Editor::new("alpha\nbeta"),
         Size::new(400., 200.),
         Limits::default(),
     )
@@ -933,7 +922,7 @@ fn ime_edits_reuse_previous_composition_layout() {
 #[test]
 fn semantic_range_edits_and_set_value_are_atomic_undoable_and_report_limits() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("aé e\u{301}!").max_bytes(32)),
+        Editor::new("aé e\u{301}!").max_bytes(32),
         Size::new(400., 200.),
         Limits::default(),
     )
@@ -1024,7 +1013,7 @@ fn semantic_range_edits_and_set_value_are_atomic_undoable_and_report_limits() {
 #[test]
 fn external_edits_invalidate_old_ime_input_only_after_success() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("old").max_bytes(16)),
+        Editor::new("old").max_bytes(16),
         Size::new(400., 200.),
         Limits::default(),
     )
@@ -1084,7 +1073,7 @@ fn external_edits_invalidate_old_ime_input_only_after_success() {
 #[test]
 fn clipboard_requires_host_opt_in_before_cut_can_mutate_text() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("aé🔥z")),
+        Editor::new("aé🔥z"),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -1190,7 +1179,7 @@ fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: P
 #[test]
 fn dragging_the_pointer_selects_text() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("alpha beta gamma")),
+        Editor::new("alpha beta gamma"),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -1678,11 +1667,7 @@ fn swapping_the_theme_reaches_content_a_control_styles_for_itself() {
     // A filled button publishes a derived theme to its label so the text resolves
     // to `on_accent`. That override must not freeze the label on the old palette.
     let mut ui = Ui::new(
-        Button::styled(
-            Element::leaf(Label::new("Save")),
-            "Save",
-            ButtonStyle::Primary,
-        ),
+        Button::styled(Label::new("Save"), "Save", ButtonStyle::Primary),
         Size::new(200., 80.),
         Limits::default(),
     )
@@ -1712,7 +1697,7 @@ fn swapping_the_theme_reaches_content_a_control_styles_for_itself() {
 #[test]
 fn changing_only_the_scale_reaches_button_content() {
     let mut ui = Ui::new(
-        Button::new(Element::leaf(Label::new("Scale me")), "Scale me"),
+        Button::new(Label::new("Scale me"), "Scale me"),
         Size::new(300., 100.),
         Limits::default(),
     )
@@ -1838,11 +1823,8 @@ impl Widget for Greedy {
 impl Section {
     fn new() -> Element<Self> {
         Element::build(|c| Self {
-            heading: c.add(Element::leaf(Label::styled("Editing", TextRole::Heading))),
-            caption: c.add(Element::leaf(Label::styled(
-                "A supporting line",
-                TextRole::Small,
-            ))),
+            heading: c.add(Label::styled("Editing", TextRole::Heading)),
+            caption: c.add(Label::styled("A supporting line", TextRole::Small)),
             // An editor fills the height it is offered, which is what turns a
             // measurement against the wrong extent into a visible overflow.
             panel: c.discard(surface(SurfaceStyle::Sunken).wrap(Element::leaf(Greedy))),
@@ -1981,9 +1963,9 @@ fn a_scrollbar_takes_its_own_strip_and_the_content_below_it_does_not_claim_the_p
     // The editor asks for a text caret. If the bar floats over it, the pointer
     // resolves through the editor and shows a caret above the scrollbar.
     let mut ui = Ui::new(
-        Scroll::new(Element::leaf(Editor::new(
+        Scroll::new(Editor::new(
             "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
-        ))),
+        )),
         Size::new(240., 90.),
         Limits::default(),
     )
@@ -2012,11 +1994,9 @@ fn a_scrollbar_takes_its_own_strip_and_the_content_below_it_does_not_claim_the_p
 #[test]
 fn a_list_scrollbar_can_be_dragged() {
     let mut ui = Ui::new(
-        Element::leaf(VirtualList::new(
-            (0..500usize).collect(),
-            24.,
-            |key: &usize| Element::leaf(Label::new(key.to_string())),
-        )),
+        VirtualList::new((0..500usize).collect(), 24., |key: &usize| {
+            Label::new(key.to_string())
+        }),
         Size::new(300., 240.),
         Limits::default(),
     )
@@ -2068,9 +2048,7 @@ fn a_list_scrollbar_can_be_dragged() {
 #[test]
 fn an_editors_own_scrollbar_matches_the_others_and_is_not_part_of_the_text() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new(
-            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
-        )),
+        Editor::new("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve"),
         Size::new(240., 90.),
         Limits::default(),
     )
@@ -2095,11 +2073,9 @@ fn an_editors_own_scrollbar_matches_the_others_and_is_not_part_of_the_text() {
 #[test]
 fn a_list_scrollbar_is_not_a_row_and_answers_the_pointer() {
     let mut ui = Ui::new(
-        Element::leaf(VirtualList::new(
-            (0..500usize).collect(),
-            24.,
-            |key: &usize| Element::leaf(Label::new(key.to_string())),
-        )),
+        VirtualList::new((0..500usize).collect(), 24., |key: &usize| {
+            Label::new(key.to_string())
+        }),
         Size::new(300., 240.),
         Limits::default(),
     )
@@ -2148,9 +2124,7 @@ fn a_list_scrollbar_is_not_a_row_and_answers_the_pointer() {
 #[test]
 fn moving_the_pointer_over_an_editor_does_not_drag_the_view_back_to_the_caret() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new(
-            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve",
-        )),
+        Editor::new("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve"),
         Size::new(240., 90.),
         Limits::default(),
     )
@@ -2183,14 +2157,12 @@ fn moving_the_pointer_over_an_editor_does_not_drag_the_view_back_to_the_caret() 
 #[test]
 fn horizontal_wheel_scroll_stops_at_the_texts_right_edge() {
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("x".repeat(200))
-                .padding(0., 0.)
-                .restore(EditorState {
-                    wrap: false,
-                    ..EditorState::default()
-                }),
-        ),
+        Editor::new("x".repeat(200))
+            .padding(0., 0.)
+            .restore(EditorState {
+                wrap: false,
+                ..EditorState::default()
+            }),
         Size::new(100., 50.),
         Limits::default(),
     )
@@ -2224,7 +2196,7 @@ fn a_scale_change_relays_the_window_while_a_palette_change_only_repaints() {
     // Centred, so the button takes its natural size rather than the window's.
     let mut ui = Ui::new(
         Aligned::center(Button::styled(
-            Element::leaf(Label::new("Save")),
+            Label::new("Save"),
             "Save",
             ButtonStyle::Primary,
         )),
@@ -2282,7 +2254,7 @@ fn theme_is_a_small_value() {
 #[test]
 fn scaled_padding_reads_the_active_theme_on_each_layout() {
     let mut ui = Ui::new(
-        Padding::scaled(Element::leaf(Label::new("content")), 3.5),
+        Padding::scaled(Label::new("content"), 3.5),
         Size::new(200., 100.),
         Limits::default(),
     )
@@ -2336,7 +2308,7 @@ fn widgets_work_with_no_theme_installed_and_with_an_invisible_one() {
     // 2. A shipped control with no theme installed falls back to the default rather
     //    than failing, so a consumer can use one without opting into theming.
     let mut ui = Ui::new(
-        Button::styled(Element::leaf(Label::new("Go")), "Go", ButtonStyle::Primary),
+        Button::styled(Label::new("Go"), "Go", ButtonStyle::Primary),
         Size::new(200., 80.),
         Limits::default(),
     )
@@ -2384,19 +2356,14 @@ fn widgets_work_with_no_theme_installed_and_with_an_invisible_one() {
 fn a_row_height_rule_follows_the_theme_while_a_number_does_not() {
     let rows = |height: RowHeight| {
         VirtualList::new((0..200usize).collect(), height, |key: &usize| {
-            Element::leaf(Label::new(key.to_string()))
+            Label::new(key.to_string())
         })
     };
     for (rule, follows) in [
         (RowHeight::Scaled(|scale| scale.space(4.)), true),
         (RowHeight::Fixed(32.), false),
     ] {
-        let mut ui = Ui::new(
-            Element::leaf(rows(rule)),
-            Size::new(200., 200.),
-            Limits::default(),
-        )
-        .unwrap();
+        let mut ui = Ui::new(rows(rule), Size::new(200., 200.), Limits::default()).unwrap();
         let mut text = TestText;
         ui.set_environment(Rc::new(Theme::dark()), true);
         settle(&mut ui, &mut text);
@@ -2442,17 +2409,17 @@ fn a_list_row_reads_the_theme_even_though_the_list_publishes_its_own_state_to_it
     }
 
     let mut ui = Ui::new(
-        Element::leaf(VirtualList::new(
+        VirtualList::new(
             (0..40usize).collect(),
             RowHeight::Fixed(24.),
             |key: &usize| {
                 let text = key.to_string();
                 Element::build(|children| Row {
                     seen: 0.,
-                    label: children.add(Element::leaf(Label::new(text))),
+                    label: children.add(Label::new(text)),
                 })
             },
-        )),
+        ),
         Size::new(200., 200.),
         Limits::default(),
     )
@@ -2484,12 +2451,7 @@ fn a_list_row_reads_the_theme_even_though_the_list_publishes_its_own_state_to_it
 
 #[test]
 fn editor_preserves_history_beyond_256_edits_and_two_megabytes() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("")),
-        Size::new(300., 140.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new(""), Size::new(300., 140.), Limits::default()).unwrap();
     let mut text = TestText;
     settle(&mut ui, &mut text);
     let id = ui
@@ -2596,11 +2558,9 @@ fn extension_activation_and_history_do_not_report_text_insertion() {
     }
     let inserted = Rc::new(std::cell::Cell::new(0));
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("abc")
-                .extension(Observe(inserted.clone()))
-                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
-        ),
+        Editor::new("abc")
+            .extension(Observe(inserted.clone()))
+            .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2650,7 +2610,7 @@ fn extension_target_edits_on_release_and_maps_the_selection() {
     // The stub claims the paragraph region 0..30 x 0..20; the default theme
     // insets the paragraph by 12, so widget (20, 15) is paragraph (8, 3).
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2697,7 +2657,7 @@ fn extension_target_edits_on_release_and_maps_the_selection() {
 #[test]
 fn selection_drag_requests_paint_before_release() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("buy milk").caret_blink(false)),
+        Editor::new("buy milk").caret_blink(false),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2733,7 +2693,7 @@ fn selection_drag_requests_paint_before_release() {
 #[test]
 fn extension_drag_selects_instead_of_activating() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2783,7 +2743,7 @@ fn extension_drag_selects_instead_of_activating() {
 #[test]
 fn extension_shift_press_selects_instead_of_activating() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2814,7 +2774,7 @@ fn extension_shift_press_selects_instead_of_activating() {
 #[test]
 fn extension_key_replaces_the_editor_default_for_that_key() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X'))),
+        Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2846,11 +2806,9 @@ fn extension_key_replaces_the_editor_default_for_that_key() {
 #[test]
 fn extensions_compose_and_the_topmost_target_wins() {
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("abc")
-                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A'))
-                .extension(Stub::at(Rect::new(0., 0., 300., 200.), 'B')),
-        ),
+        Editor::new("abc")
+            .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A'))
+            .extension(Stub::at(Rect::new(0., 0., 300., 200.), 'B')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2878,7 +2836,7 @@ fn extension_transactions_apply_together_or_not_at_all() {
         }
     }
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abcd").extension(Multi)),
+        Editor::new("abcd").extension(Multi),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2908,10 +2866,8 @@ fn extension_transactions_apply_together_or_not_at_all() {
 #[test]
 fn extension_presentation_suppresses_glyphs_until_the_caret_reveals_them() {
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("- [ ] buy milk")
-                .extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X').presenting(0..6)),
-        ),
+        Editor::new("- [ ] buy milk")
+            .extension(Stub::at(Rect::new(0., 0., 0., 0.), 'X').presenting(0..6)),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -2979,9 +2935,7 @@ fn extension_presentation_suppresses_glyphs_until_the_caret_reveals_them() {
 #[test]
 fn extension_semantics_publish_children_and_route_activation() {
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("- [ ] buy milk").extension(Stub::at(Rect::new(0., 0., 20., 16.), '7')),
-        ),
+        Editor::new("- [ ] buy milk").extension(Stub::at(Rect::new(0., 0., 20., 16.), '7')),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -3023,11 +2977,9 @@ fn semantic_children_route_to_their_own_extension_when_ids_collide() {
     // Both stubs pick target id 7 with different edits; each child must
     // activate its own extension, never the first extension holding the id.
     let mut ui = Ui::new(
-        Element::leaf(
-            Editor::new("abc")
-                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A').with_id(7))
-                .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'B').with_id(7)),
-        ),
+        Editor::new("abc")
+            .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'A').with_id(7))
+            .extension(Stub::at(Rect::new(0., 0., 30., 20.), 'B').with_id(7)),
         Size::new(300., 140.),
         Limits::default(),
     )
@@ -3073,12 +3025,7 @@ fn semantic_children_route_to_their_own_extension_when_ids_collide() {
 
 #[test]
 fn undo_restores_the_pre_edit_selection() {
-    let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc")),
-        Size::new(300., 140.),
-        Limits::default(),
-    )
-    .unwrap();
+    let mut ui = Ui::new(Editor::new("abc"), Size::new(300., 140.), Limits::default()).unwrap();
     let mut text = TestText;
     settle(&mut ui, &mut text);
     ui.send(Edit::Select {
@@ -3112,7 +3059,7 @@ fn undo_restores_the_pre_edit_selection() {
 #[test]
 fn an_armed_release_notifies_exactly_once() {
     let mut ui = Ui::new(
-        Element::leaf(Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X'))),
+        Editor::new("abc").extension(Stub::at(Rect::new(0., 0., 30., 20.), 'X')),
         Size::new(300., 140.),
         Limits::default(),
     )

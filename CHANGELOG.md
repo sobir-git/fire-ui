@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Return mountable elements from all widget constructors, with fluent configuration
+  on prepared labels, editors, and virtual lists.
 - Bubble appearance-scoped content output directly, without cloning it or routing
   it through a command; forward content commands into the child.
 - Make window anchors independent of child type inference, while keeping typed

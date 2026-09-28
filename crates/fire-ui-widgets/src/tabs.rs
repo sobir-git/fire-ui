@@ -13,9 +13,10 @@ impl Tab {
     fn new(text: impl Into<String>) -> Element<Self> {
         let text = text.into();
         Element::build(|children| Self {
-            caption: children.add(Element::leaf(
-                Label::new(text.clone()).appearance(Appearance::role(TextRole::Body)),
-            )),
+            caption: children.add(
+                Label::new(text.clone())
+                    .map(|label| label.appearance(Appearance::role(TextRole::Body))),
+            ),
             text,
             selected: false,
             pressed: None,

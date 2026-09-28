@@ -16,7 +16,7 @@ children without downcasts, numeric routing tags or access to their private stat
 
 ```rust
 Element::build(|children| Counter {
-    value: children.add(Element::leaf(Label::new("0"))),
+    value: children.add(Label::new("0")),
     add: children.connect(button("Add one"), |_| ()),
     count: 0,
     pending: false,

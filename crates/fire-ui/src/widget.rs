@@ -285,6 +285,7 @@ pub(crate) enum OutputMap {
 }
 pub(crate) trait Erased {
     fn state(&self) -> &dyn Any;
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
     fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool;
     fn update(&mut self, cx: &mut crate::context::RawUpdate<'_>, payload: Payload);
     fn lifecycle(&mut self, cx: &mut crate::context::RawUpdate<'_>, event: Lifecycle);
@@ -304,6 +305,9 @@ pub(crate) trait Erased {
     ) -> Result<(), SemanticError>;
 }
 impl<W: Widget> Erased for W {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
     fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool {
         self.close_requested(&mut cx.typed())
     }
@@ -389,6 +393,32 @@ impl<W: Widget> Element<W> {
                 output: None,
                 count,
                 anchor: None,
+            },
+            marker: PhantomData,
+        }
+    }
+    /// Configure a widget before mounting, preserving its prepared children.
+    pub fn map(self, configure: impl FnOnce(W) -> W) -> Self {
+        let Prepared {
+            id,
+            widget,
+            children,
+            output,
+            count,
+            anchor,
+        } = self.prepared;
+        let widget = widget
+            .into_any()
+            .downcast::<W>()
+            .expect("private element type invariant");
+        Self {
+            prepared: Prepared {
+                id,
+                widget: Box::new(configure(*widget)),
+                children,
+                output,
+                count,
+                anchor,
             },
             marker: PhantomData,
         }

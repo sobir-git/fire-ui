@@ -6,7 +6,7 @@ fn main() -> Result<(), String> {
     let fonts = fire_ui_fonts::Fonts::load(&[
         fire_ui_fonts::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?
     ])?;
-    let content = Padding::new(Element::leaf(Label::new("Hello, Fire UI")), 24.0);
+    let content = Padding::new(Label::new("Hello, Fire UI"), 24.0);
     run(
         content,
         WindowOptions {
