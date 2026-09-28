@@ -42,12 +42,6 @@ pub(crate) fn apply<W: Widget>(
     if required.is_some_and(|a| !s.actions.contains(&a)) {
         return Err("text is read-only".into());
     }
-    let range = |start, end| -> Result<std::ops::Range<usize>, String> {
-        if start > end {
-            return Err("invalid text range".into());
-        }
-        Ok(byte_offset(value, start)?..byte_offset(value, end)?)
-    };
     let action = match operation {
         Operation::Set(text) => SemanticAction::SetValue(text.clone()),
         Operation::Scroll { x, y } => SemanticAction::ScrollBy(fire_ui::Point::new(*x, *y)),
@@ -89,7 +83,7 @@ pub(crate) fn apply<W: Widget>(
             }
         }
         Operation::Delete { start, end } => {
-            let r = range(*start, *end)?;
+            let r = editable_range(value, *start, *end)?;
             SemanticAction::ReplaceText {
                 start: r.start,
                 end: r.end,
@@ -97,7 +91,7 @@ pub(crate) fn apply<W: Widget>(
             }
         }
         Operation::Copy { start, end } | Operation::Cut { start, end } => {
-            let r = range(*start, *end)?;
+            let r = editable_range(value, *start, *end)?;
             // Keep the clipboard owner alive in the host. A failed copy must
             // never turn CutText into a destructive delete.
             copy(&value[r.clone()])?;
@@ -117,6 +111,29 @@ pub(crate) fn apply<W: Widget>(
         return Err("request expired".into());
     }
     ui.accessibility(id, action).map_err(|e| format!("{e:?}"))
+}
+
+fn editable_range(text: &str, start: i32, end: i32) -> Result<std::ops::Range<usize>, String> {
+    let length = text.chars().count();
+    let start = (start.max(0) as usize).min(length);
+    // GTK Editable treats a negative end as the end of the text. Other
+    // out-of-range offsets are clamped before converting scalar to byte indices.
+    let end = if end < 0 {
+        length
+    } else {
+        (end as usize).min(length)
+    };
+    if start > end {
+        return Err("invalid text range".into());
+    }
+    let byte = |offset| {
+        text.char_indices()
+            .map(|(index, _)| index)
+            .chain(std::iter::once(text.len()))
+            .nth(offset)
+            .unwrap()
+    };
+    Ok(byte(start)..byte(end))
 }
 
 #[cfg(feature = "clipboard")]
@@ -183,5 +200,15 @@ mod tests {
         assert!(insert_prefix(text, 3).is_err());
         assert_eq!(insert_prefix(text, 10), Ok(text));
         assert!(insert_prefix(text, -2).is_err());
+    }
+
+    #[test]
+    fn editable_ranges_clamp_offsets_and_treat_negative_end_as_text_end() {
+        let text = "é🔥e\u{301}";
+        assert_eq!(editable_range(text, 1, -1), Ok(2..text.len()));
+        assert_eq!(editable_range(text, -10, 2), Ok(0..6));
+        assert_eq!(editable_range(text, 2, 10_000), Ok(6..text.len()));
+        assert_eq!(editable_range(text, 10_000, -1), Ok(text.len()..text.len()));
+        assert!(editable_range(text, 3, 1).is_err());
     }
 }

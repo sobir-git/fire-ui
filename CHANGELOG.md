@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clamp AT-SPI delete, cut, and copy ranges to Unicode text length; negative end
+  offsets select through the end.
 - Deliver synthetic key releases on focus loss and read keyboard paste off the UI
   thread. Recompute logical size on scale changes even if no resize event follows.
 - Require a matching pointer press before Checkbox, Switch, or Tab activates on

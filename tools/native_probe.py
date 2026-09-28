@@ -299,13 +299,20 @@ def main():
                                     editable("PasteText", 0)
                                     expected = "é中ae\u0301!é中"
                                     expect_text(expected)
+                                    editable("CopyText", -20, -1)
+                                    expect_text(expected)
+                                    editable("CutText", 2, 10000)
+                                    expect_text("é中")
+                                    editable("DeleteText", 0, -1)
+                                    expect_text("")
+                                    editable("SetTextContents", expected)
+                                    expect_text(expected)
                                     for method, args in [
                                         ("InsertText", (-1, "x", 1)),
                                         ("InsertText", (0, "é", 1)),
                                         ("DeleteText", (3, 1)),
-                                        ("DeleteText", (0, 10000)),
                                         ("PasteText", (-1,)),
-                                        ("CopyText", (-1, 1)),
+                                        ("CopyText", (3, 1)),
                                     ]:
                                         try:
                                             editable(method, *args)
