@@ -88,7 +88,7 @@ impl Body {
             wordmark: c.add(text("Fire UI", TextRole::Title)),
             version: c.add(muted("Studio · 0.8.0", TextRole::Micro)),
             nav: c.connect(Tabs::vertical(SECTIONS), |v| Message::Navigate(*v)),
-            rule: c.add(Element::leaf(Divider)),
+            rule: c.add(Element::leaf(Divider::horizontal())),
             status: c.add(muted("Ready", TextRole::Small)),
             overview: c.connect(page(overview::Overview::new()), |e| {
                 Message::Page(e.clone())

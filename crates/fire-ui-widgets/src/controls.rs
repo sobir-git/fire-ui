@@ -418,16 +418,24 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
     }
 }
 
-/// A one-pixel rule. Horizontal when wider than tall.
-#[derive(Default)]
-pub struct Divider;
+/// A one-pixel rule with an explicit orientation.
+pub struct Divider {
+    vertical: bool,
+}
+impl Divider {
+    pub fn horizontal() -> Self {
+        Self { vertical: false }
+    }
+    pub fn vertical() -> Self {
+        Self { vertical: true }
+    }
+}
 impl Widget for Divider {
     type Command = Infallible;
     type Output = Infallible;
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
         let border = theme(cx).scale.border;
-        let vertical = c.max.height > c.max.width;
-        Metrics::new(c.constrain(if vertical {
+        Metrics::new(c.constrain(if self.vertical {
             Size::new(
                 border,
                 if c.max.height.is_finite() {

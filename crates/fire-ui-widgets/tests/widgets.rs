@@ -1443,9 +1443,9 @@ struct DividerProbe {
     measured: Size,
 }
 impl DividerProbe {
-    fn new(available: Size) -> Element<Self> {
+    fn new(available: Size, divider: Divider) -> Element<Self> {
         Element::build(|c| Self {
-            divider: c.add(Element::leaf(Divider)),
+            divider: c.add(Element::leaf(divider)),
             available,
             measured: Size::ZERO,
         })
@@ -1463,9 +1463,9 @@ impl Widget for DividerProbe {
 }
 
 #[test]
-fn divider_uses_the_longer_available_axis() {
+fn divider_uses_its_explicit_orientation() {
     let mut vertical = Ui::new(
-        DividerProbe::new(Size::new(20., 100.)),
+        DividerProbe::new(Size::new(20., 100.), Divider::vertical()),
         Size::new(100., 100.),
         Limits::default(),
     )
@@ -1477,7 +1477,7 @@ fn divider_uses_the_longer_available_axis() {
     );
 
     let mut horizontal = Ui::new(
-        DividerProbe::new(Size::new(100., 20.)),
+        DividerProbe::new(Size::new(100., 20.), Divider::horizontal()),
         Size::new(100., 100.),
         Limits::default(),
     )
@@ -1486,6 +1486,40 @@ fn divider_uses_the_longer_available_axis() {
     assert_eq!(
         horizontal.root().measured,
         Size::new(100., Theme::default().scale.border)
+    );
+}
+
+struct ScrollingDividerColumn {
+    divider: Child<Divider>,
+    measured: Rc<std::cell::Cell<Size>>,
+}
+impl Widget for ScrollingDividerColumn {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let measured = cx.measure(self.divider, Constraints::loose(c.max));
+        self.measured.set(measured.size);
+        column(cx, c, Flow::default(), &[Entry::natural(self.divider)])
+    }
+}
+
+#[test]
+fn horizontal_divider_fills_a_scrolling_column() {
+    let measured = Rc::new(std::cell::Cell::new(Size::ZERO));
+    let content = Element::build(|c| ScrollingDividerColumn {
+        divider: c.add(Element::leaf(Divider::horizontal())),
+        measured: measured.clone(),
+    });
+    let mut ui = Ui::new(
+        Scroll::new(content),
+        Size::new(240., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(
+        measured.get(),
+        Size::new(240., Theme::default().scale.border)
     );
 }
 
