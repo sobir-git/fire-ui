@@ -175,7 +175,7 @@ Native preedit/commit events carry the enabled input method's focus session and
 composition selection. The editor builds a temporary display paragraph without
 changing the document until commit.
 Linux IBus Cangjie5/XIM composition and Orca speech generation are verified by native
-probes. Windows/macOS input-method combinations need platform verification. Do not infer these guarantees from headless tests.
+probes. Do not infer these guarantees from headless tests.
 
 ## Work and native host
 
@@ -201,8 +201,8 @@ choosers can run on a platform dialog thread. Keyboard events with no focused ch
 target the root, so empty applications can still handle their shortcuts.
 
 The native accessibility bridge publishes roles, values, focus and shared geometry
-through AccessKit. Windows and macOS use its winit adapter; Linux owns the AT-SPI
-transport and uses the published common adapter for tree translation.
+through AccessKit. The Linux host owns the AT-SPI transport and uses the published
+common adapter for tree translation.
 It supplies native activation, focus and editor actions, text runs, character geometry
 and directed selection. Only changed AccessKit nodes are sent after activation.
 The Unix inspection socket exposes the same semantic contract for agents and tests;
@@ -259,10 +259,9 @@ button and invokes it, checking that its command reaches the studio.
 
 Remaining limitations include variable-height virtualization, per-row list-item
 semantics (a virtual list publishes itself but its rows reach assistive technology as
-their own content, not as selectable entries), Windows/macOS native IME and
-screen-reader verification, and large-document layout costs. Geometry changes and visibility reconciliation still contain
+their own content, not as selectable entries), and large-document layout costs. Geometry changes and visibility reconciliation still contain
 whole-tree passes; clean pointer input avoids them. Physical mouse-to-display latency,
-hardware-GPU power use and cross-platform behavior require target-device measurements.
+hardware-GPU power use requires target-device measurements.
 These limits are implementation work, not reasons for another framework rewrite.
 
 ## Reference study

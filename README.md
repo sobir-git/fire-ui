@@ -68,9 +68,8 @@ repainting are explicit app choices. OpenGL bitmap-font decoding and rasterized
 ## Support and limits
 
 The core and widgets are platform-independent Rust with `std`. The native host
-targets Linux, macOS and Windows. Linux X11 interactions are verified using Xvfb;
-macOS and Windows have CI build/test checks, not verified desktop interaction
-parity. Browser, mobile, embedded and `no_std` hosts are not provided.
+supports Linux X11/XWayland only. Native X11 interactions are verified using Xvfb.
+Browser, mobile, embedded and `no_std` hosts are not provided.
 
 Supply explicitly selected, licensed font files through `fire-ui-fonts::Fonts`, or provide owned/static bytes.
 `Fonts::load` owns stable bytes; the optional `mmap` feature adds `unsafe Fonts::map`,
@@ -87,8 +86,8 @@ through the optional `inspection` feature and Unix socket. The `accessibility` f
 enables AccessKit, which publishes text runs and selection to native
 assistive technology. Linux implements all six AT-SPI EditableText methods with atomic
 range edits, undo and asynchronous clipboard reads. Native probes use installed IBus
-Cangjie5/XIM and Orca, including its generated speech. Windows/macOS native IME and
-screen-reader verification, and variable-height lists, remain future work.
+Cangjie5/XIM and Orca, including its generated speech. Variable-height lists remain
+future work.
 
 The [performance report](docs/performance.md) records native measurements and their
 limits. Low idle CPU, memory use, direct pointer response and fast resizing remain
@@ -142,7 +141,7 @@ cargo package --workspace --exclude fire-ui-studio --locked
 ```
 
 `cargo doc --open -p fire-ui --no-deps` opens the public API reference locally.
-CI builds/tests on Linux, macOS and Windows and checks the minimum Rust version.
+CI builds/tests on Linux and checks the minimum Rust version.
 The Linux native probe uses Xvfb, xdotool, Pillow, fonts and a private accessibility bus:
 
 ```sh

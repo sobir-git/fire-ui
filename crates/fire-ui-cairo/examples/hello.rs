@@ -1,4 +1,3 @@
-use fire_ui::Element;
 use fire_ui_native::{run, WindowOptions};
 use fire_ui_widgets::*;
 

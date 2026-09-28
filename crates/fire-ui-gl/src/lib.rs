@@ -65,17 +65,6 @@ impl RendererFactory for OpenGl {
     ) -> Result<(std::sync::Arc<Window>, Box<dyn Renderer>), String> {
         // glutin-winit's picker must return a Config, so it cannot report an
         // empty iterator. Create the display directly to keep this path fallible.
-        #[cfg(target_os = "windows")]
-        let window = event_loop
-            .create_window(attributes)
-            .map_err(|e| e.to_string())?;
-        #[cfg(target_os = "windows")]
-        let raw = window.window_handle().map_err(|e| e.to_string())?.as_raw();
-        #[cfg(target_os = "windows")]
-        let preference = DisplayApiPreference::Wgl(Some(raw));
-        #[cfg(target_os = "macos")]
-        let preference = DisplayApiPreference::Cgl;
-        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         let preference =
             DisplayApiPreference::Glx(Box::new(winit::platform::x11::register_xlib_error_hook));
         let handle = event_loop.display_handle().map_err(|e| e.to_string())?;
@@ -86,14 +75,10 @@ impl RendererFactory for OpenGl {
             .with_alpha_size(8)
             .with_stencil_size(8)
             .with_depth_size(0);
-        #[cfg(target_os = "windows")]
-        let template = template.compatible_with_native_window(raw);
-        // SAFETY: on WGL the template names the live window above; elsewhere
-        // it contains no window handle.
+        // SAFETY: the template does not contain a native window handle.
         let configs =
             unsafe { display.find_configs(template.build()) }.map_err(|e| e.to_string())?;
         let config = select_config(configs)?;
-        #[cfg(not(target_os = "windows"))]
         let window = finalize_window(event_loop, attributes, &config).map_err(|e| e.to_string())?;
         let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
         let attrs = ContextAttributesBuilder::new().build(Some(handle));

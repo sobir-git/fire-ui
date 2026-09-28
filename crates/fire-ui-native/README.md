@@ -24,8 +24,7 @@ positioned-glyph paragraph contract. Custom renderers implement the same
 
 Linux requires X11 and xkbcommon libraries, including `libxkbcommon-x11-0` on
 Debian/Ubuntu. GPU libraries are required only by the OpenGL renderer. Native
-Wayland support is not implemented. Windows and macOS retain the OpenGL host
-path and CI build checks; their native interaction parity needs verification.
+Native Wayland support is not implemented. X11/XWayland is the supported window path.
 
 Core semantics and IME routing do not require accessibility or inspection.
 Accessibility can be built without clipboard support; AT-SPI clipboard methods
@@ -38,7 +37,7 @@ semantic query/action protocol.
 
 `WindowKind::Overlay` creates an undecorated window above normal windows. A passive
 overlay lets the pointer through; an interactive one receives input. Linux overlays
-require X11/XWayland; macOS and Windows overlay interaction remains unverified.
+require X11/XWayland.
 
 Cargo features are additive across a shared build. `tools/lean_probe.py` builds
 independent consumers to expose the actual cost of optional integrations.

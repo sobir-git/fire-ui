@@ -1,4 +1,3 @@
-#![cfg(target_os = "linux")]
 use fire_ui::{Limits, Size, TextEngine, Ui};
 use fire_ui_fonts::Fonts;
 use fire_ui_text::Text;

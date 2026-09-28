@@ -510,7 +510,6 @@ mod plan_tests {
         }
     }
     #[test]
-    #[cfg(target_os = "linux")]
     fn reused_plans_and_buffers_match_fresh_shaping_for_alternating_fonts_and_scripts() {
         let fonts = Fonts::load(&[
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",

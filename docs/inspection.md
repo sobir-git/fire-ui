@@ -70,8 +70,7 @@ window before testing keyboard or pointer input.
 
 The socket uses mode 0600 inside a directory with no group/other access, refuses to
 replace an existing path, bounds request size and wait time, and removes its path
-on orderly exit. It sleeps in blocking accept while idle. Windows uses AccessKit's
-native automation bridge; the Unix inspection socket is not implemented there.
+on orderly exit. It sleeps in blocking accept while idle.
 
 ## Build widgets that agents can use
 
@@ -120,8 +119,7 @@ is different from the inspection protocol's byte offsets. See the
 The bridge uses [AccessKit 0.25 text runs](https://docs.rs/accesskit/0.25.0/accesskit/struct.Node.html#method.set_character_lengths).
 The private Linux transport derives from AccessKit Unix 0.23 under its MIT license;
 the released adapter only implements whole-field replacement. The published common
-adapter still translates the tree and native events. Windows and macOS keep their
-AccessKit platform adapters and use the same Fire UI semantic contract.
+adapter still translates the tree and native events.
 
 `linux_input_probe.py` uses real installed IBus Cangjie5 through XIM and real Orca
 with keyboard echo disabled. It checks composition/commit/cancel, focus transfer,
@@ -130,4 +128,4 @@ editing, selection and buttons. Speech synthesis/audio output is excluded. On De
 or Ubuntu, its additional packages are `ibus ibus-table-cangjie5 orca x11-utils
 x11-apps python3-pil`; the native probe also needs `xvfb xdotool dbus-x11`. Install
 `fonts-droid-fallback` or a supported CJK font and `fonts-noto-color-emoji` for glyphs.
-Wayland and Windows/macOS native verification remain outside this Linux pass.
+Native Wayland is not supported; X11/XWayland is the verified window path.

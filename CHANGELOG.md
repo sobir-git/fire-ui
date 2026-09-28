@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Linux (X11) is the only supported platform; macOS and Windows support is removed.
 - Handle inserted child outputs in the owning widget without exposing private
   delivery cases in list, dropdown, or appearance-scope commands.
 - Use one widget constructor per input shape and fluent element configuration for
@@ -188,7 +189,7 @@ assistive technology as their own content rather than as selectable list entries
 - Complete Linux AT-SPI EditableText operations with atomic Unicode range editing,
   undo, failure acknowledgements and asynchronous clipboard reads.
 - Verify installed IBus XIM and Orca; fix CJK fallback, candidate placement and stale
-  composition after external edits. Native Windows/macOS adapters stay separate.
+  composition after external edits.
 
 - Add shared semantic action capabilities, validated text selection, stable app keys,
   editor composition state, AccessKit text runs, and opt-in Unix JSON inspection.

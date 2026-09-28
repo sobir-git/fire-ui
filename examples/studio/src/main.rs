@@ -344,35 +344,28 @@ fn main() -> Result<(), String> {
 
 /// This application chooses multilingual coverage; the framework loads no defaults.
 fn fallback_fonts() -> Vec<std::path::PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        [
-            &[
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            ][..],
-            &[
-                "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            ][..],
-            &[
-                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-            ][..],
-        ]
-        .into_iter()
-        .filter_map(|choices| {
-            choices
-                .iter()
-                .map(std::path::PathBuf::from)
-                .find(|p| p.is_file())
-        })
-        .collect()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        vec![]
-    }
+    [
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ][..],
+        &[
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ][..],
+        &[
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+        ][..],
+    ]
+    .into_iter()
+    .filter_map(|choices| {
+        choices
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.is_file())
+    })
+    .collect()
 }

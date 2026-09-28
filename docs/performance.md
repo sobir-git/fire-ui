@@ -238,8 +238,8 @@ Its agent probe checks directed selection, Unicode replacement, native keyboard 
 invalid/stale requests and orderly socket cleanup. The screenshot includes Hebrew,
 Arabic, combining characters, color emoji and animated selected text.
 
-Windows/macOS native interaction, hardware-GPU performance and physical-display
-latency remain unverified. Linux evidence covers the installed IBus/XIM and Orca
+Hardware-GPU performance and physical-display latency remain unverified. Linux
+evidence covers the installed IBus/XIM and Orca
 versions above, not every engine or assistive device. Variable-height lists and
 large-document incremental layout remain future work. Wayland is deferred.
 

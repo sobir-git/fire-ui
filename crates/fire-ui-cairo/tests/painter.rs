@@ -122,7 +122,6 @@ fn transformed_box_tiles_have_no_transparent_seams() {
     assert!(image.iter().all(|pixel| *pixel == 0xffffffff));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn font_resources_validate_with_freetype_and_keep_selected_collection_face_alive() {
     use fire_ui_fonts::{Font, FontBytes};

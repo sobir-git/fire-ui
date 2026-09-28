@@ -1,11 +1,11 @@
 #![doc = include_str!("../README.md")]
 #[cfg(feature = "accessibility")]
 mod accessibility;
-#[cfg(all(unix, feature = "inspection"))]
+#[cfg(feature = "inspection")]
 mod inspection;
-#[cfg(all(target_os = "linux", feature = "accessibility"))]
+#[cfg(feature = "accessibility")]
 mod linux_atspi;
-#[cfg(all(target_os = "linux", feature = "accessibility"))]
+#[cfg(feature = "accessibility")]
 mod linux_edit;
 #[cfg(feature = "accessibility")]
 mod platform_accessibility;

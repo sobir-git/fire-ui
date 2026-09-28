@@ -12,7 +12,6 @@ fn validation_rejects_empty_and_unshapable_fonts() {
     }]))
     .is_err());
 }
-#[cfg(target_os = "linux")]
 #[test]
 fn selected_collection_face_is_used_by_shaping() {
     use fire_ui::*;

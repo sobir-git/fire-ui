@@ -116,8 +116,6 @@ pub fn system_font() -> Option<std::path::PathBuf> {
     [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "C:\\Windows\\Fonts\\segoeui.ttf",
     ]
     .into_iter()
     .map(std::path::PathBuf::from)

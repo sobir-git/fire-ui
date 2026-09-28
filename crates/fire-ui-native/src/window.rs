@@ -58,7 +58,7 @@ impl Default for WindowOptions {
     }
 }
 enum HostEvent {
-    #[cfg(all(unix, feature = "inspection"))]
+    #[cfg(feature = "inspection")]
     Inspect(Box<crate::inspection::Pending>),
     Command(Posted),
     #[cfg(feature = "clipboard")]
@@ -67,25 +67,25 @@ enum HostEvent {
         text: Result<String, String>,
     },
     #[cfg(feature = "accessibility")]
-    Accessibility(accesskit_winit::Event),
-    #[cfg(all(target_os = "linux", feature = "accessibility"))]
+    Accessibility(crate::platform_accessibility::Event),
+    #[cfg(feature = "accessibility")]
     LinuxEdit(crate::linux_atspi::PendingEdit),
-    #[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+    #[cfg(all(feature = "accessibility", feature = "clipboard"))]
     LinuxPaste {
         pending: crate::linux_atspi::PendingEdit,
         text: Result<String, String>,
         expected: String,
     },
 }
-#[cfg(all(target_os = "linux", feature = "accessibility"))]
+#[cfg(feature = "accessibility")]
 impl From<crate::linux_atspi::PendingEdit> for HostEvent {
     fn from(pending: crate::linux_atspi::PendingEdit) -> Self {
         Self::LinuxEdit(pending)
     }
 }
 #[cfg(feature = "accessibility")]
-impl From<accesskit_winit::Event> for HostEvent {
-    fn from(event: accesskit_winit::Event) -> Self {
+impl From<crate::platform_accessibility::Event> for HostEvent {
+    fn from(event: crate::platform_accessibility::Event) -> Self {
         Self::Accessibility(event)
     }
 }
@@ -168,7 +168,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
                 #[cfg(any(
                     feature = "clipboard",
                     feature = "accessibility",
-                    all(unix, feature = "inspection")
+                    feature = "inspection"
                 ))]
                 let HostEvent::Command(post) = error.0
                 else {
@@ -177,7 +177,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
                 #[cfg(not(any(
                     feature = "clipboard",
                     feature = "accessibility",
-                    all(unix, feature = "inspection")
+                    feature = "inspection"
                 )))]
                 let HostEvent::Command(post) = error.0;
                 Err((
@@ -257,7 +257,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         count: Arc::new(AtomicUsize::new(0)),
         bytes: Arc::new(AtomicUsize::new(0)),
     };
-    #[cfg(all(unix, feature = "inspection"))]
+    #[cfg(feature = "inspection")]
     let _inspection = if let Some(path) = std::env::var_os("FIRE_UI_INSPECT") {
         let proxy = wake.proxy.clone();
         Some(crate::inspection::Server::start(
@@ -416,7 +416,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
                 }
             }
         }
-        #[cfg(all(feature = "accessibility", target_os = "linux"))]
+        #[cfg(feature = "accessibility")]
         s.accessibility
             .synchronize(s.ui.layout_pending(s.text.as_ref()), |active| {
                 s.ui.layout(s.text.as_mut());
@@ -437,7 +437,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
                 s.semantic_revision = Some(revision);
                 Some((tree, snapshots))
             });
-        #[cfg(not(all(feature = "accessibility", target_os = "linux")))]
+        #[cfg(not(feature = "accessibility"))]
         s.ui.layout(s.text.as_mut());
         let edge = if !self.options.decorations {
             resize_edge(self.pointer, s.ui.size())
@@ -463,24 +463,6 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
             self.cursor = Some(cursor);
         }
 
-        #[cfg(all(feature = "accessibility", not(target_os = "linux")))]
-        {
-            let revision = s.ui.semantic_revision();
-            if s.semantic_revision != Some(revision) {
-                let started = Instant::now();
-                s.accessibility.update_if_active(|| {
-                    s.accessibility_tree.tree(
-                        s.ui.semantics(),
-                        &self.options.title,
-                        s.window.scale_factor(),
-                    )
-                });
-                if self.profile {
-                    eprintln!("accessibility_update_us={}", started.elapsed().as_micros());
-                }
-                s.semantic_revision = Some(revision);
-            }
-        }
         let caret = s.ui.ime_cursor();
         let target = caret.map(|_| s.ui.session());
         if target != self.ime_target {
@@ -559,7 +541,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
     }
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
-            #[cfg(all(unix, feature = "inspection"))]
+            #[cfg(feature = "inspection")]
             HostEvent::Inspect(pending) => {
                 if Instant::now() > pending.deadline {
                     let _ = pending
@@ -603,7 +585,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     s.ui.paste(token, text);
                 }
             }
-            #[cfg(all(target_os = "linux", feature = "accessibility"))]
+            #[cfg(feature = "accessibility")]
             HostEvent::LinuxEdit(pending) => {
                 self.service();
                 if let crate::linux_atspi::Operation::Paste {
@@ -662,7 +644,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     pending.complete(result);
                 }
             }
-            #[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+            #[cfg(all(feature = "accessibility", feature = "clipboard"))]
             HostEvent::LinuxPaste {
                 mut pending,
                 text,
@@ -697,10 +679,10 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                         return;
                     }
                     match event.window_event {
-                        accesskit_winit::WindowEvent::InitialTreeRequested => {
+                        crate::platform_accessibility::AccessibilityEvent::InitialTreeRequested => {
                             s.semantic_revision = None;
                         }
-                        accesskit_winit::WindowEvent::ActionRequested(request) => {
+                        crate::platform_accessibility::AccessibilityEvent::ActionRequested(request) => {
                             if let Some(action) = s
                                 .accessibility_tree
                                 .action(request.clone(), &s.ui.semantics())
@@ -708,7 +690,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                                 let _ = s.ui.accessibility(request.target_node.0, action);
                             }
                         }
-                        accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                        crate::platform_accessibility::AccessibilityEvent::AccessibilityDeactivated => {
                             s.semantic_revision = None;
                         }
                     }
@@ -1019,7 +1001,7 @@ fn create<W: Widget>(
             options.min_size.width,
             options.min_size.height,
         ));
-    #[cfg(all(target_os = "linux", feature = "x11"))]
+    #[cfg(feature = "x11")]
     let attrs = if overlay {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
         attrs
@@ -1065,9 +1047,7 @@ fn create<W: Widget>(
         #[cfg(feature = "accessibility")]
         accessibility,
         #[cfg(feature = "accessibility")]
-        accessibility_tree: crate::accessibility::AccessibilityTree::new(!cfg!(
-            target_os = "linux"
-        )),
+        accessibility_tree: crate::accessibility::AccessibilityTree::default(),
         #[cfg(feature = "accessibility")]
         semantic_revision: None,
         renderer,
@@ -1155,7 +1135,7 @@ fn resize_edge(p: Point, size: Size) -> Option<ResizeEdge> {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "accessibility", feature = "clipboard"))]
+#[cfg(all(feature = "accessibility", feature = "clipboard"))]
 fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) -> Result<(), String> {
     if slot.is_none() {
         *slot = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);

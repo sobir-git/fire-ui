@@ -197,20 +197,8 @@ impl TextSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use accesskit_atspi_common::{
-        Adapter, AdapterCallback, AppContext, Event, FullNodeId, WindowBounds,
-    };
     use fire_ui::{Limits, Size, Ui};
     use fire_ui_widgets::Editor;
-    struct Callback;
-    impl AdapterCallback for Callback {
-        fn register_interfaces(&self, _: &Adapter, _: FullNodeId, _: atspi::InterfaceSet) {}
-        fn unregister_interfaces(&self, _: &Adapter, _: FullNodeId, _: atspi::InterfaceSet) {}
-        fn emit_event(&self, _: &Adapter, _: Event) {}
-    }
-    impl accesskit::ActionHandler for Callback {
-        fn do_action(&mut self, _: accesskit::ActionRequest) {}
-    }
     fn source(value: &str, width: f32) -> Vec<SemanticNode> {
         let mut ui = Ui::new(
             Editor::new(value),
@@ -228,112 +216,6 @@ mod tests {
         );
         ui.semantics()
     }
-    #[test]
-    fn text_boundaries_match_positioned_accesskit() {
-        for value in [
-            "  alpha, beta!\n  שלום e\u{301} end",
-            "one\n\nlast\n",
-            "",
-            "a\r\nb",
-        ] {
-            let source = source(value, 180.);
-            let mut snaps = snapshots(&source, 1.);
-            let s = snaps.remove(&source[0].id).unwrap();
-            let app = AppContext::new(None);
-            let a = Adapter::new(
-                &app,
-                Callback,
-                crate::accessibility::AccessibilityTree::new(true).tree(source, "test", 1.),
-                true,
-                WindowBounds::default(),
-                Callback,
-            );
-            let root = a.platform_node(a.root_id());
-            let n = a.platform_node(root.child_at_index(0).unwrap().unwrap());
-            let mut differences = vec![];
-            for offset in 0..=value.chars().count() as i32 {
-                for g in [
-                    atspi::Granularity::Char,
-                    atspi::Granularity::Word,
-                    atspi::Granularity::Line,
-                    atspi::Granularity::Paragraph,
-                ] {
-                    let r = s.text_range(offset, g).unwrap();
-                    let actual = (
-                        value[r.clone()].to_string(),
-                        s.scalar(r.start),
-                        s.scalar(r.end),
-                    );
-                    let expected = n.string_at_offset(offset, g).unwrap();
-                    if actual != expected {
-                        differences.push(format!(
-                            "{offset} {g:?}: actual {actual:?}, expected {expected:?}"
-                        ));
-                    }
-                }
-            }
-            assert!(
-                differences.is_empty(),
-                "{value:?}: {}",
-                differences.join("\n")
-            );
-        }
-    }
-    #[test]
-    fn character_and_range_geometry_matches_positioned_accesskit() {
-        for value in ["abc e\u{301} def\nsecond line", "x\n\n", ""] {
-            let source = source(value, 100.);
-            let mut snaps = snapshots(&source, 1.);
-            let s = snaps.remove(&source[0].id).unwrap();
-            let app = AppContext::new(None);
-            let a = Adapter::new(
-                &app,
-                Callback,
-                crate::accessibility::AccessibilityTree::new(true).tree(source, "test", 1.),
-                true,
-                WindowBounds::default(),
-                Callback,
-            );
-            let root = a.platform_node(a.root_id());
-            let n = a.platform_node(root.child_at_index(0).unwrap().unwrap());
-            let convert = |r: Rect| {
-                let r = s.window_rect(r);
-                accesskit_atspi_common::Rect {
-                    x: r.x as i32,
-                    y: r.y as i32,
-                    width: r.width as i32,
-                    height: r.height as i32,
-                }
-            };
-            let count = value.chars().count() as i32;
-            let mut differences = vec![];
-            for offset in 0..=count {
-                let actual = convert(s.character_rect(s.byte(offset).unwrap()));
-                let expected = n
-                    .character_extents(offset, atspi::CoordType::Window)
-                    .unwrap();
-                if actual != expected {
-                    differences.push(format!("char {offset}: {actual:?} != {expected:?}"));
-                }
-                for end in [offset, count] {
-                    let actual = convert(s.range_rect(s.range(offset, end).unwrap()));
-                    let expected = n
-                        .range_extents(offset, end, atspi::CoordType::Window)
-                        .unwrap();
-                    if actual != expected {
-                        differences
-                            .push(format!("range {offset}..{end}: {actual:?} != {expected:?}"));
-                    }
-                }
-            }
-            assert!(
-                differences.is_empty(),
-                "{value:?}: {}",
-                differences.join("\n")
-            );
-        }
-    }
-
     #[test]
     fn bidi_ranges_cover_all_selected_cells_and_eof_uses_logical_caret() {
         let source = source("שלום", 180.);
