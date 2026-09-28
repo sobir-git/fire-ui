@@ -217,6 +217,7 @@ struct Host<W: Widget, F, R> {
     pending_pointer: bool,
     next_frame: Instant,
     redraw_requested: bool,
+    needs_full_redraw: bool,
     modifiers: ModifiersState,
     composing: bool,
     ime_session: Option<u64>,
@@ -281,6 +282,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         pending_pointer: false,
         next_frame: Instant::now(),
         redraw_requested: false,
+        needs_full_redraw: true,
         modifiers: ModifiersState::empty(),
         composing: false,
         ime_session: None,
@@ -760,6 +762,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     s.ui.window_visible(!occluded);
                     if !occluded {
                         s.ui.repaint();
+                        self.needs_full_redraw = true;
                         self.redraw_requested = true;
                         s.window.request_redraw()
                     }
@@ -770,6 +773,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     if size.width > 0 && size.height > 0 {
                         s.ui.resize(logical_size(size, s.window.scale_factor()));
                         s.resize_at = Some(Instant::now());
+                        self.needs_full_redraw = true;
                         self.redraw_requested = true;
                         s.window.request_redraw()
                     }
@@ -782,6 +786,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     let size = s.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         s.ui.resize(logical_size(size, scale_factor));
+                        self.needs_full_redraw = true;
                         self.redraw_requested = true;
                         s.window.request_redraw();
                     }
@@ -899,19 +904,19 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             }
             WindowEvent::RedrawRequested => {
                 let internal = std::mem::take(&mut self.redraw_requested);
+                if !internal {
+                    self.needs_full_redraw = true;
+                }
                 self.service();
                 self.frame_if_due();
                 self.service();
                 if let Some(s) = &mut self.state {
                     if !s.occluded {
-                        let plan = redraw_plan(s.ui.paint_damage(), internal);
-                        if plan != Redraw::Skip {
-                            if let Err(error) =
-                                render(s, self.options.background, plan, self.profile)
-                            {
-                                self.error = Some(error);
-                                event_loop.exit();
-                            }
+                        let full = std::mem::take(&mut self.needs_full_redraw);
+                        let plan = redraw_plan(s.ui.paint_damage(), internal, full);
+                        if let Err(error) = render(s, self.options.background, plan, self.profile) {
+                            self.error = Some(error);
+                            event_loop.exit();
                         }
                     }
                 }
@@ -937,14 +942,16 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             .map(|s| s.ui.next_work())
             .unwrap_or_default();
         let visible = self.state.as_ref().is_some_and(|s| !s.occluded);
-        if visible && work.paint {
+        if should_request_redraw(work, visible) {
             self.redraw_requested = true;
             self.state.as_ref().unwrap().window.request_redraw()
         }
-        let mut deadline = work.deadline.map(|d| self.start + d);
-        if visible && work.frame {
-            deadline = Some(deadline.map_or(self.next_frame, |d| d.min(self.next_frame)));
-        }
+        let deadline = wait_deadline(
+            work.deadline.map(|d| self.start + d),
+            work.frame,
+            visible,
+            self.next_frame,
+        );
         event_loop.set_control_flow(if work.ready || !self.pending_posts.is_empty() {
             ControlFlow::Poll
         } else if let Some(deadline) = deadline {
@@ -1073,17 +1080,35 @@ fn create<W: Widget>(
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Redraw {
-    Skip,
     Full,
     Region(Rect),
 }
 
-fn redraw_plan(damage: Option<Rect>, internal: bool) -> Redraw {
-    if !internal {
+fn redraw_plan(damage: Option<Rect>, internal: bool, needs_full: bool) -> Redraw {
+    // Winit can coalesce an expose with our outstanding request. With no UI
+    // damage, repaint in full even when the request also looked internal.
+    if needs_full || !internal {
         Redraw::Full
     } else {
-        damage.map_or(Redraw::Skip, Redraw::Region)
+        damage.map_or(Redraw::Full, Redraw::Region)
     }
+}
+
+fn wait_deadline(
+    timer: Option<Instant>,
+    frame: bool,
+    visible: bool,
+    next_frame: Instant,
+) -> Option<Instant> {
+    if visible && frame {
+        Some(timer.map_or(next_frame, |deadline| deadline.min(next_frame)))
+    } else {
+        timer
+    }
+}
+
+fn should_request_redraw(work: Work, visible: bool) -> bool {
+    visible && work.paint
 }
 
 fn render<W: Widget>(
@@ -1095,7 +1120,6 @@ fn render<W: Widget>(
     let damage = match plan {
         Redraw::Full => None,
         Redraw::Region(region) => Some(region),
-        Redraw::Skip => return Ok(()),
     };
     s.renderer
         .render(&s.window, background, damage, &mut |painter, region| {
@@ -1162,11 +1186,42 @@ mod tests {
     }
 
     #[test]
-    fn frame_only_redraw_skips_presentation_but_os_redraw_paints_full() {
+    fn coalesced_os_redraw_cannot_skip_an_exposed_window() {
         let region = Rect::new(1., 2., 3., 4.);
-        assert_eq!(redraw_plan(None, true), Redraw::Skip);
-        assert_eq!(redraw_plan(Some(region), true), Redraw::Region(region));
-        assert_eq!(redraw_plan(None, false), Redraw::Full);
-        assert_eq!(redraw_plan(Some(region), false), Redraw::Full);
+        assert_eq!(redraw_plan(None, true, false), Redraw::Full);
+        assert_eq!(
+            redraw_plan(Some(region), true, false),
+            Redraw::Region(region)
+        );
+        assert_eq!(redraw_plan(Some(region), true, true), Redraw::Full);
+        assert_eq!(redraw_plan(None, false, false), Redraw::Full);
+        assert_eq!(redraw_plan(Some(region), false, false), Redraw::Full);
+    }
+
+    #[test]
+    fn frame_work_sets_a_wait_deadline_without_spinning_at_idle() {
+        let now = Instant::now();
+        let timer = now + Duration::from_millis(50);
+        let frame = now + Duration::from_millis(16);
+        assert_eq!(wait_deadline(None, true, true, frame), Some(frame));
+        assert_eq!(wait_deadline(Some(timer), true, true, frame), Some(frame));
+        assert_eq!(wait_deadline(Some(now), true, true, frame), Some(now));
+        assert_eq!(wait_deadline(None, false, true, frame), None);
+        assert_eq!(wait_deadline(None, true, false, frame), None);
+        assert!(!should_request_redraw(
+            Work {
+                frame: true,
+                ..Work::default()
+            },
+            true
+        ));
+        assert!(!should_request_redraw(Work::default(), true));
+        assert!(should_request_redraw(
+            Work {
+                paint: true,
+                ..Work::default()
+            },
+            true
+        ));
     }
 }

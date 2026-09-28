@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Treat renderer damage consistently: absent damage requests a full repaint,
-  while frame callbacks without paint avoid a presentation.
+  while frame callbacks without paint avoid a presentation. Resize, scale and
+  exposure redraws retain a full repaint need even alongside an internal request.
 - Report missing OpenGL configurations as errors and reject text engines with
   no shaping font.
 - Let themes choose text leading explicitly while keeping the natural font metrics
