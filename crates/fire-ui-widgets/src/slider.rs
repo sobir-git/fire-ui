@@ -32,11 +32,28 @@ pub struct Slider {
     halo: f32,
 }
 impl Slider {
+    fn bounds(min: f32, max: f32) -> (f32, f32) {
+        let min = if min.is_finite() { min } else { 0. };
+        let max = if max.is_finite() && max > min {
+            max
+        } else {
+            min + 1.
+        };
+        if max.is_finite() && max > min && (max - min).is_finite() {
+            (min, max)
+        } else {
+            (0., 1.)
+        }
+    }
     /// A slider over `min..=max`, starting at `value`.
     pub fn new(label: impl Into<String>, value: f32, min: f32, max: f32) -> Element<Self> {
-        let max = if max > min { max } else { min + 1. };
+        let (min, max) = Self::bounds(min, max);
         Element::leaf(Self {
-            value: value.clamp(min, max),
+            value: if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                min
+            },
             min,
             max,
             step: (max - min) / 100.,
@@ -55,12 +72,16 @@ impl Slider {
         max: f32,
         step: f32,
     ) -> Element<Self> {
-        let max = if max > min { max } else { min + 1. };
+        let (min, max) = Self::bounds(min, max);
         Element::leaf(Self {
-            value: value.clamp(min, max),
+            value: if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                min
+            },
             min,
             max,
-            step: step.max(0.),
+            step: if step.is_finite() { step.max(0.) } else { 0. },
             label: label.into(),
             disabled: false,
             dragging: None,
@@ -84,6 +105,9 @@ impl Slider {
     }
     /// Applies a new value, emitting it when it actually changed.
     fn set(&mut self, cx: &mut Update<'_, Self>, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
         let value = self.quantise(value);
         if value != self.value {
             self.value = value;
@@ -106,6 +130,9 @@ impl Widget for Slider {
     fn update(&mut self, cx: &mut Update<'_, Self>, command: SliderCommand) {
         match command {
             SliderCommand::Value(value) => {
+                if !value.is_finite() {
+                    return;
+                }
                 let value = self.quantise(value);
                 if value != self.value {
                     self.value = value;
@@ -311,7 +338,11 @@ pub struct Progress {
 impl Progress {
     pub fn new(label: impl Into<String>, fraction: f32) -> Element<Self> {
         Element::leaf(Self {
-            fraction: fraction.clamp(0., 1.),
+            fraction: if fraction.is_finite() {
+                fraction.clamp(0., 1.)
+            } else {
+                0.
+            },
             label: label.into(),
         })
     }
@@ -324,6 +355,9 @@ impl Widget for Progress {
     type Command = f32;
     type Output = Infallible;
     fn update(&mut self, cx: &mut Update<'_, Self>, fraction: f32) {
+        if !fraction.is_finite() {
+            return;
+        }
         let fraction = fraction.clamp(0., 1.);
         if fraction != self.fraction {
             self.fraction = fraction;

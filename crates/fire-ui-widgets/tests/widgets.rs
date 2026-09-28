@@ -1334,6 +1334,43 @@ fn changing_only_the_scale_reaches_button_content() {
 }
 
 #[test]
+fn slider_and_progress_keep_finite_state_for_nonfinite_input() {
+    let mut basic = Ui::new(
+        Slider::new("Basic", 5., 0., f32::NAN),
+        Size::new(200., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut basic, &mut TestText);
+    assert!(basic.root().value().is_finite());
+
+    let mut slider = Ui::new(
+        Slider::stepped("Level", f32::NAN, f32::NAN, 10., f32::NAN),
+        Size::new(200., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut slider, &mut TestText);
+    assert!(slider.root().value().is_finite());
+    let before = slider.root().value();
+    slider.send(SliderCommand::Value(f32::INFINITY)).unwrap();
+    slider.pump(100, |_| {}, |_| {});
+    assert_eq!(slider.root().value(), before);
+
+    let mut progress = Ui::new(
+        Progress::new("Loading", f32::NAN),
+        Size::new(200., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut progress, &mut TestText);
+    assert!(progress.root().fraction().is_finite());
+    progress.send(f32::NEG_INFINITY).unwrap();
+    progress.pump(100, |_| {}, |_| {});
+    assert!(progress.root().fraction().is_finite());
+}
+
+#[test]
 fn a_focus_ring_is_a_ring_and_does_not_wash_the_control_it_marks() {
     // `glow` fills its interior as well as its edge. Drawing one after a control
     // has painted itself tints the whole control, which is what a focused dropdown
