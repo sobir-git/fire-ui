@@ -275,10 +275,7 @@ impl<W: Widget> Update<'_, W> {
         let mut mapped = None;
         // A bubble can pass through decorators before its owner's map expands
         // the payload. Reserve that final cost while the original is still owned.
-        loop {
-            let Some(node) = self.raw.tree().get(id) else {
-                break;
-            };
+        while let Some(node) = self.raw.tree().get(id) {
             match node.output.as_ref() {
                 Some(OutputMap::Map(map)) => {
                     let (payload, cost) = map(&output);

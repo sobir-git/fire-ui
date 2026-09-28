@@ -123,7 +123,8 @@ fn paragraph_line_metrics_come_from_the_selected_font() {
     let face = rustybuzz::Face::from_slice(entry.bytes.as_ref(), entry.face_index).unwrap();
     let size = 22.;
     let scale = size / face.units_per_em() as f32;
-    let expected_baseline = face.ascender() as f32 * scale;
+    // Half of the font's line gap sits above the glyph box.
+    let expected_baseline = (face.ascender() as f32 + face.line_gap() as f32 / 2.) * scale;
     let expected_height = (face.ascender() - face.descender() + face.line_gap()) as f32 * scale;
     let mut engine = Text::new(fonts).unwrap();
     let paragraph = engine.layout(TextRequest {

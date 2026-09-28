@@ -220,11 +220,15 @@ with tempfile.TemporaryDirectory(prefix="fire-ui-lifetime-test-") as scratch:
                 except ValueError as error:
                     assert 'Active Cargo build' in str(error),str(error)
                 second=subprocess.Popen(['cargo','build','--offline','--target-dir',str(root/'a/target')],cwd=root/'b',stdout=log,stderr=log)
-                # Shared CI runners can take several seconds to start the second Cargo.
+                # Older Cargo blocks on the shared target; newer Cargo locks finer
+                # and may finish. Either way the second build must make progress.
                 deadline = time.monotonic() + 60
                 while True:
                     log.seek(0)
                     if 'Blocking waiting for file lock' in log.read():
+                        break
+                    if second.poll() is not None:
+                        self.assertEqual(second.returncode, 0)
                         break
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(.05)

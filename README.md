@@ -115,7 +115,7 @@ python3 -m unittest discover -s tools -p 'test_*.py'
 The guard checks every registered worktree before and after Cargo: at most 4 GiB
 per target and at least 8 GiB free per filesystem. It refuses further builds when
 these limits are reached; it never deletes caches automatically. Separate targets
-let worktrees compile concurrently; sharing one makes Cargo wait for its build lock.
+let worktrees compile concurrently; sharing one can make Cargo wait for its build lock.
 Cleanup removes native `target/debug` and `target/release` contents while preserving
 Cargo lock files, and refuses active builds, symlinked targets and tracked files.
 It leaves source, `artifacts`, packaged crates, docs and cross-compilation targets
