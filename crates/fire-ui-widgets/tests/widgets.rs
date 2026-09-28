@@ -1194,6 +1194,7 @@ fn a_dropdown_inside_a_scrolling_panel_still_opens_over_it() {
 struct Recorder {
     /// Solid colours text was drawn in.
     fills: Vec<Color>,
+    text_sizes: Vec<f32>,
     /// Every filled rectangle, with the brush it was filled by.
     rects: Vec<(Rect, Brush)>,
     /// Every stroked rectangle and its colour.
@@ -1215,7 +1216,8 @@ impl Painter for Recorder {
         self.strokes.push((rect, color))
     }
     fn path(&mut self, _: &[Path], _: Brush, _: Option<f32>) {}
-    fn paragraph(&mut self, _: &Paragraph, _: Point, brush: Brush) {
+    fn paragraph(&mut self, paragraph: &Paragraph, _: Point, brush: Brush) {
+        self.text_sizes.push(paragraph.style.size);
         if let Brush::Solid(c) = brush {
             self.fills.push(c)
         }
@@ -1256,6 +1258,30 @@ fn swapping_the_theme_reaches_content_a_control_styles_for_itself() {
         vec![Theme::light().color.on_accent],
         "swapping the palette re-derives the colour the button gave its label"
     );
+}
+
+#[test]
+fn changing_only_the_scale_reaches_button_content() {
+    let mut ui = Ui::new(
+        Button::new(Element::leaf(Label::new("Scale me")), "Scale me"),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let mut painter = Recorder::default();
+    ui.paint(&mut painter);
+    let before = painter.text_sizes[0];
+
+    let mut theme = Theme::default();
+    theme.scale.font_size *= 2.;
+    ui.set_environment(Rc::new(theme), true);
+    settle(&mut ui, &mut text);
+    let mut painter = Recorder::default();
+    ui.paint(&mut painter);
+    let after = painter.text_sizes[0];
+    assert_eq!(after, before * 2., "text stayed at the previous scale");
 }
 
 #[test]

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Republish the full derived button theme when its scale or other theme values change.
 - Menu arrow navigation can start at an explicit current item; dropdowns start
   from their selected option without treating it as a checked action.
 - A handle returned by `insert` is usable in the same callback: commands, focus,

@@ -154,7 +154,7 @@ pub struct Button<C: Widget<Output = Infallible>> {
     disabled: bool,
     style: ButtonStyle,
     label: String,
-    published: Option<Color>,
+    published: Option<Theme>,
 }
 impl<C: Widget<Output = Infallible>> Button<C> {
     pub fn new(content: Element<C>, label: impl Into<String>) -> Element<Self> {
@@ -182,15 +182,18 @@ impl<C: Widget<Output = Infallible>> Button<C> {
         } else {
             self.style.foreground(&t)
         };
-        if self.published != Some(foreground) {
-            let mut derived = t;
-            derived.color.foreground = foreground;
-            if cx
-                .set_environment(self.content, Rc::new(derived), false)
+        let mut derived = t;
+        derived.color.foreground = foreground;
+        if self.published != Some(derived)
+            && cx
+                .set_environment(
+                    self.content,
+                    Rc::new(derived),
+                    self.published.is_none_or(|old| old.scale != derived.scale),
+                )
                 .is_ok()
-            {
-                self.published = Some(foreground);
-            }
+        {
+            self.published = Some(derived);
         }
     }
 }
