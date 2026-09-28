@@ -431,8 +431,10 @@ impl<W: Widget> Ui<W> {
             inserted: 0,
         };
         call(widget.as_mut(), &mut cx);
-        self.semantic_revision += 1;
         let effects = cx.effects;
+        if effects.semantics {
+            self.semantic_revision += 1;
+        }
         let stop = effects.stop;
         self.tree.get_mut(id).unwrap().widget = Some(widget);
         if notifying && !effects.mutations.is_empty() {
@@ -668,6 +670,7 @@ impl<W: Widget> Ui<W> {
             return;
         }
         let previous = std::mem::replace(&mut self.focus, next);
+        self.semantic_revision += 1;
         self.session += 1;
         self.pressed.clear();
         if let Some(id) = previous {

@@ -218,8 +218,11 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
                 let _ = cx.send(self.content, command);
             }
             ButtonCommand::Label(label) => {
-                self.label = label;
-                cx.repaint()
+                if self.label != label {
+                    self.label = label;
+                    cx.semantics_changed();
+                    cx.repaint()
+                }
             }
             ButtonCommand::Style(style) => {
                 self.style = style;
@@ -227,11 +230,15 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
                 cx.repaint()
             }
             ButtonCommand::Disabled(value) => {
+                if self.disabled == value {
+                    return;
+                }
                 self.disabled = value;
                 if let Some(pointer) = self.pressed.take() {
                     let _ = cx.release(pointer);
                 }
                 self.publish(cx);
+                cx.semantics_changed();
                 cx.repaint()
             }
         }

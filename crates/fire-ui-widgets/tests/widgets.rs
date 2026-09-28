@@ -68,6 +68,41 @@ fn editor_grapheme_delete_undo_and_silent_set() {
 }
 
 #[test]
+fn editor_hover_and_blink_leave_semantics_stable_but_selection_publishes() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("hello")),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    settle(&mut ui, &mut text);
+    let baseline = ui.semantic_revision();
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(40., 20.),
+        },
+        &mut text,
+    );
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.semantic_revision(), baseline);
+    ui.advance(std::time::Duration::from_millis(600), 128);
+    settle(&mut ui, &mut text);
+    assert_eq!(ui.semantic_revision(), baseline);
+    ui.send(Edit::Select {
+        anchor: 0,
+        caret: 3,
+    })
+    .unwrap();
+    settle(&mut ui, &mut text);
+    assert!(ui.semantic_revision() > baseline);
+}
+
+#[test]
 fn typed_text_events_coalesce_but_caret_movement_starts_a_new_undo_step() {
     let mut ui = Ui::new(
         Element::leaf(Editor::new("")),

@@ -61,6 +61,7 @@ pub(crate) struct Effects {
     pub repaint: bool,
     pub damage: Option<Rect>,
     pub layout: bool,
+    pub semantics: bool,
     pub stop: bool,
     /// Children inserted by this callback, usable before the insertion commits.
     pub pending: Vec<Id>,
@@ -77,6 +78,7 @@ impl Effects {
             repaint: false,
             damage: None,
             layout: false,
+            semantics: false,
             stop: false,
             pending: vec![],
             split: false,
@@ -483,6 +485,12 @@ impl<W: Widget> Update<'_, W> {
     pub fn relayout(&mut self) {
         self.raw.effects().layout = true;
         self.repaint()
+    }
+    /// Publish a changed accessible label, value, selection, state, or child list.
+    /// Paint-only changes do not need this; layout and focus changes are tracked
+    /// by the runtime.
+    pub fn semantics_changed(&mut self) {
+        self.raw.effects().semantics = true;
     }
     pub fn stop(&mut self) {
         self.raw.effects().stop = true

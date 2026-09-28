@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Publish accessibility revisions for semantic, focus, and geometry changes;
+  paint-only pointer and animation callbacks leave the accessibility tree stable.
 - Treat renderer damage consistently: absent damage requests a full repaint,
   while frame callbacks without paint avoid a presentation. Resize, scale and
   exposure redraws retain a full repaint need even alongside an internal request.

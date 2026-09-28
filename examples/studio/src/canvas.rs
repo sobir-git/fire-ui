@@ -31,7 +31,11 @@ impl Widget for Playground {
     type Command = bool;
     type Output = std::convert::Infallible;
     fn update(&mut self, cx: &mut Update<'_, Self>, running: bool) {
+        if self.running == running {
+            return;
+        }
         self.running = running;
+        cx.semantics_changed();
         if running {
             cx.request_frame()
         } else {

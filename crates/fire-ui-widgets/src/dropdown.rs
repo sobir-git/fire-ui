@@ -122,6 +122,7 @@ impl Dropdown {
         self.selected = index;
         let _ = cx.send(self.caption, self.options[index].to_string());
         let _ = cx.emit(index);
+        cx.semantics_changed();
         cx.repaint()
     }
     /// Publishes the caption colour, which dims when the control is disabled.
@@ -154,15 +155,20 @@ impl Widget for Dropdown {
                 if index < self.options.len() && index != self.selected {
                     self.selected = index;
                     let _ = cx.send(self.caption, self.options[index].to_string());
+                    cx.semantics_changed();
                     cx.repaint()
                 }
             }
             Routed::Command(DropdownCommand::Disabled(value)) => {
+                if self.disabled == value {
+                    return;
+                }
                 self.disabled = value;
                 if value {
                     self.close(cx)
                 }
                 self.publish(cx);
+                cx.semantics_changed();
                 cx.repaint()
             }
             Routed::Command(DropdownCommand::Options(options)) => {

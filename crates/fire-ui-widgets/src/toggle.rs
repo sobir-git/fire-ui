@@ -70,6 +70,9 @@ impl Toggle {
                 self.checked = value
             }
             ToggleCommand::Disabled(value) => {
+                if self.disabled == value {
+                    return false;
+                }
                 self.disabled = value;
                 if value {
                     if let Some(pointer) = self.pressed.take() {
@@ -79,10 +82,14 @@ impl Toggle {
                 self.publish(cx);
             }
             ToggleCommand::Label(text) => {
+                if self.text == text {
+                    return false;
+                }
                 let _ = cx.send(self.caption, text.clone());
                 self.text = text;
             }
         }
+        cx.semantics_changed();
         cx.repaint();
         true
     }
@@ -214,6 +221,7 @@ impl Widget for Checkbox {
         if self.0.activates(cx, phase, input) {
             self.0.checked = !self.0.checked;
             let _ = cx.emit(self.0.checked);
+            cx.semantics_changed();
             cx.repaint();
             cx.stop()
         }
@@ -325,6 +333,7 @@ impl Widget for Switch {
         if self.0.activates(cx, phase, input) {
             self.0.checked = !self.0.checked;
             let _ = cx.emit(self.0.checked);
+            cx.semantics_changed();
             cx.repaint();
             cx.stop()
         }
@@ -403,6 +412,7 @@ fn toggle_action<W: Widget>(
         SemanticAction::Focus => cx.focus().map_err(|_| SemanticError::Unavailable),
         SemanticAction::Activate => {
             toggle.checked = !toggle.checked;
+            cx.semantics_changed();
             cx.repaint();
             emit(cx, toggle.checked).map_err(|_| SemanticError::Unavailable)
         }

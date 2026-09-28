@@ -1,6 +1,70 @@
 use fire_ui::*;
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
+struct SemanticProbe {
+    label: &'static str,
+    moves: usize,
+}
+impl Widget for SemanticProbe {
+    type Command = bool;
+    type Output = Infallible;
+    fn update(&mut self, cx: &mut Update<'_, Self>, change: bool) {
+        if change {
+            self.label = "changed";
+            cx.semantics_changed();
+        } else {
+            cx.repaint();
+        }
+    }
+    fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
+        if phase == Phase::Target && matches!(input, Input::Pointer { .. }) {
+            self.moves += 1;
+            cx.repaint();
+        }
+    }
+    fn semantics(&self) -> Semantics {
+        Semantics {
+            role: Role::Text,
+            label: self.label.into(),
+            ..Semantics::default()
+        }
+    }
+}
+
+#[test]
+fn pointer_and_paint_only_callbacks_do_not_rebuild_semantics() {
+    let mut ui = Ui::new(
+        Element::leaf(SemanticProbe {
+            label: "same",
+            moves: 0,
+        }),
+        Size::new(100., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+    let revision = ui.semantic_revision();
+    for i in 0..100 {
+        ui.dispatch(
+            Input::Pointer {
+                pointer: 0,
+                position: Point::new(i as f32 % 100., 5.),
+            },
+            &mut TestText,
+        );
+    }
+    assert_eq!(ui.root().moves, 100);
+    assert_eq!(ui.semantic_revision(), revision);
+    ui.send(false).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    assert_eq!(ui.semantic_revision(), revision);
+    ui.send(true).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    assert!(ui.semantic_revision() > revision);
+    assert_eq!(ui.semantics()[0].semantics.label, "changed");
+}
+
 struct OrderLeaf(&'static str);
 impl Widget for OrderLeaf {
     type Command = Infallible;

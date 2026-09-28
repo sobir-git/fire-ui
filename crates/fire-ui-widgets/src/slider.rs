@@ -112,6 +112,7 @@ impl Slider {
         if value != self.value {
             self.value = value;
             let _ = cx.emit(value);
+            cx.semantics_changed();
             cx.repaint()
         }
     }
@@ -136,14 +137,19 @@ impl Widget for Slider {
                 let value = self.quantise(value);
                 if value != self.value {
                     self.value = value;
+                    cx.semantics_changed();
                     cx.repaint()
                 }
             }
             SliderCommand::Disabled(value) => {
+                if self.disabled == value {
+                    return;
+                }
                 self.disabled = value;
                 if let Some(pointer) = self.dragging.take() {
                     let _ = cx.release(pointer);
                 }
+                cx.semantics_changed();
                 cx.repaint()
             }
         }
@@ -361,6 +367,7 @@ impl Widget for Progress {
         let fraction = fraction.clamp(0., 1.);
         if fraction != self.fraction {
             self.fraction = fraction;
+            cx.semantics_changed();
             cx.repaint()
         }
     }
