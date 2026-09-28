@@ -10,10 +10,16 @@ use std::{
 pub struct TextStyle {
     pub size: f32,
     pub font: u32,
+    /// Multiplier on the font's natural line height. Extra leading is centered.
+    pub line_height: f32,
 }
 impl Default for TextStyle {
     fn default() -> Self {
-        Self { size: 15., font: 0 }
+        Self {
+            size: 15.,
+            font: 0,
+            line_height: 1.,
+        }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1516,6 +1516,7 @@ impl<D: Document> Widget for Editor<D> {
         let style = TextStyle {
             size: self.theme.scale.font_size,
             font: 0,
+            line_height: self.theme.scale.line_height,
         };
         let inset = self.insets();
         let revision = self.document.revision();

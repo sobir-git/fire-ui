@@ -53,6 +53,7 @@ impl Widget for Label {
         let style = TextStyle {
             size: self.appearance.resolve_size(&theme(cx)),
             font: 0,
+            line_height: theme(cx).scale.line_height,
         };
         let width = self.wrap.then_some(c.max.width).filter(|w| w.is_finite());
         if self.paragraph.as_ref().is_none_or(|p| {

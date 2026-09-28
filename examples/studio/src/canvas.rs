@@ -86,6 +86,7 @@ impl Widget for Playground {
                 style: TextStyle {
                     size: theme(cx).size(TextRole::Display) * 1.5,
                     font: 0,
+                    line_height: theme(cx).scale.line_height,
                 },
                 width: None,
                 revision: 0,

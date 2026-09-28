@@ -313,6 +313,7 @@ impl Widget for MenuRow {
         let style = TextStyle {
             size: theme(cx).scale.font_size,
             font: 0,
+            line_height: theme(cx).scale.line_height,
         };
         for (source, target) in [
             (&self.label, &mut self.text),

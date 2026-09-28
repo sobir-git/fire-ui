@@ -284,12 +284,15 @@ impl TextEngine for Text {
             .get((r.style.font as usize).min(shaping.faces.len().saturating_sub(1)))
             .map(|face| {
                 let scale = r.style.size / face.units_per_em() as f32;
+                let glyph_box = (face.ascender() - face.descender()) as f32 * scale;
+                let natural = glyph_box + face.line_gap() as f32 * scale;
+                let height = natural * r.style.line_height;
                 (
-                    (face.ascender() - face.descender() + face.line_gap()) as f32 * scale,
-                    face.ascender() as f32 * scale,
+                    height,
+                    face.ascender() as f32 * scale + (height - glyph_box) / 2.,
                 )
             })
-            .unwrap_or((r.style.size, r.style.size));
+            .unwrap_or((r.style.size * r.style.line_height, r.style.size));
         let mut lines = vec![];
         let mut base = 0;
         let previous = r
@@ -542,7 +545,11 @@ mod plan_tests {
                 ("Привет", false),
             ] {
                 for font in [0, 1] {
-                    let style = TextStyle { font, size: 16. };
+                    let style = TextStyle {
+                        font,
+                        size: 16.,
+                        ..TextStyle::default()
+                    };
                     let (width, _, runs) = engine.shape(value, style, rtl, &mut shaping);
                     assert!(runs.iter().all(|run| run.font == runs[0].font));
                     let face = rustybuzz::Face::from_slice(

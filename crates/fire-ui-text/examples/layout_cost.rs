@@ -51,7 +51,11 @@ fn main() {
         let request = |revision| TextRequest {
             previous: None,
             text: source.clone(),
-            style: TextStyle { size: 16., font: 0 },
+            style: TextStyle {
+                size: 16.,
+                font: 0,
+                ..TextStyle::default()
+            },
             width: Some(width),
             revision,
         };

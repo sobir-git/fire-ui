@@ -129,13 +129,47 @@ fn paragraph_line_metrics_come_from_the_selected_font() {
     let paragraph = engine.layout(TextRequest {
         previous: None,
         text: Arc::from("first\nsecond"),
-        style: TextStyle { size, font: 0 },
+        style: TextStyle {
+            size,
+            font: 0,
+            ..TextStyle::default()
+        },
         width: None,
         revision: 0,
     });
     assert!((paragraph.baseline - expected_baseline).abs() < 0.01);
     assert!((paragraph.line_height - expected_height).abs() < 0.01);
     assert!((paragraph.lines[1].y - expected_height).abs() < 0.01);
+}
+
+#[test]
+fn extra_line_height_centers_leading_around_the_glyph_box() {
+    let font = fire_ui_fonts::system_font().unwrap();
+    let fonts = Fonts::load(&[font]).unwrap();
+    let entry = fonts.get(0).unwrap();
+    let face = rustybuzz::Face::from_slice(entry.bytes.as_ref(), entry.face_index).unwrap();
+    let size = 20.;
+    let scale = size / face.units_per_em() as f32;
+    let natural = (face.ascender() - face.descender() + face.line_gap()) as f32 * scale;
+    let glyph_box = (face.ascender() - face.descender()) as f32 * scale;
+    let expected_ascent = face.ascender() as f32 * scale;
+    let mut engine = Text::new(fonts).unwrap();
+    let paragraph = engine.layout(TextRequest {
+        previous: None,
+        text: Arc::from("one\ntwo"),
+        style: TextStyle {
+            size,
+            font: 0,
+            line_height: 1.3,
+        },
+        width: None,
+        revision: 0,
+    });
+    let height = natural * 1.3;
+    let baseline = expected_ascent + (height - glyph_box) / 2.;
+    assert!((paragraph.line_height - height).abs() < 0.01);
+    assert!((paragraph.baseline - baseline).abs() < 0.01);
+    assert!((paragraph.lines[1].y - height).abs() < 0.01);
 }
 
 #[test]

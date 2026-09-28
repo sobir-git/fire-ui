@@ -253,7 +253,11 @@ fn box_glyph_bounds_include_origins_overhangs_and_transforms() {
     let paragraph = Text::new(fonts).unwrap().layout(TextRequest {
         previous: None,
         text: Arc::from("jÁé العربية"),
-        style: TextStyle { size: 22., font: 0 },
+        style: TextStyle {
+            size: 22.,
+            font: 0,
+            ..TextStyle::default()
+        },
         width: Some(110.),
         revision: 0,
     });

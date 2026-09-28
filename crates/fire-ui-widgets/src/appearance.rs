@@ -117,6 +117,8 @@ impl Palette {
 pub struct Scale {
     /// Body text size. The whole type scale is a multiple of it.
     pub font_size: f32,
+    /// Multiplier on the font's natural line height.
+    pub line_height: f32,
     /// One unit of the spacing rhythm.
     pub unit: f32,
     /// Padding inside a control, between its border and its content.
@@ -150,6 +152,7 @@ impl Scale {
     pub fn compact() -> Self {
         Self {
             font_size: 12.5,
+            line_height: 1.29,
             unit: 5.,
             inset: 7.,
             radius: 5.,
@@ -164,6 +167,7 @@ impl Default for Scale {
     fn default() -> Self {
         Self {
             font_size: 15.,
+            line_height: 1.29,
             unit: 8.,
             inset: 12.,
             radius: 9.,

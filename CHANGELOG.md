@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let themes choose text leading explicitly while keeping the natural font metrics
+  and centering extra leading around the glyph box.
 - Keep nonbreaking spaces with their adjacent words when wrapping text, and
   derive paragraph line height and baseline from the selected font's metrics.
 - Use ownership-tree order for focus, semantics, overlays, and lifecycle notices;
