@@ -4,6 +4,8 @@ use crate::{
 };
 use std::{
     any::{Any, TypeId},
+    cell::Cell,
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap},
     rc::Rc,
 };
@@ -90,6 +92,7 @@ pub(crate) struct Tree {
     pub viewport: Rect,
     pub layout_count: u64,
     pub geometry_count: u64,
+    pub walked_for_ids: Cell<u64>,
 }
 impl Tree {
     pub fn len(&self) -> usize {
@@ -119,7 +122,38 @@ impl Tree {
             order.push(id);
             stack.extend(node.children.iter().rev().copied());
         }
+        self.walked_for_ids
+            .set(self.walked_for_ids.get() + order.len() as u64);
         order.into_iter()
+    }
+    /// Compare two live nodes in ownership-tree pre-order without walking the tree.
+    pub fn compare_order(&self, left: Id, right: Id) -> Ordering {
+        fn ancestry(tree: &Tree, mut id: Id) -> Vec<Id> {
+            let mut path = vec![id];
+            while let Some(parent) = tree.get(id).and_then(|n| n.parent) {
+                path.push(parent);
+                id = parent;
+            }
+            path.reverse();
+            path
+        }
+        let left = ancestry(self, left);
+        let right = ancestry(self, right);
+        for (a, b) in left.iter().zip(&right) {
+            if a != b {
+                let parent = self.get(*a).and_then(|n| n.parent);
+                return match parent {
+                    Some(parent) => {
+                        let siblings = &self.get(parent).unwrap().children;
+                        let a = siblings.iter().position(|id| id == a).unwrap();
+                        let b = siblings.iter().position(|id| id == b).unwrap();
+                        a.cmp(&b)
+                    }
+                    None => a.cmp(b),
+                };
+            }
+        }
+        left.len().cmp(&right.len())
     }
     pub fn descendant(&self, mut id: Id, parent: Id) -> bool {
         loop {

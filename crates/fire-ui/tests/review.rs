@@ -220,6 +220,65 @@ fn overlay_hit_order_follows_tree_order() {
     assert_eq!(&*hits.borrow(), &["last"]);
 }
 
+struct PaintSink;
+impl Painter for PaintSink {
+    fn save(&mut self) {}
+    fn restore(&mut self) {}
+    fn transform(&mut self, _: Transform) {}
+    fn clip(&mut self, _: Rect) {}
+    fn rect(&mut self, _: Rect, _: f32, _: Brush) {}
+    fn stroke(&mut self, _: Rect, _: f32, _: f32, _: Color) {}
+    fn path(&mut self, _: &[Path], _: Brush, _: Option<f32>) {}
+    fn paragraph(&mut self, _: &Paragraph, _: Point, _: Brush) {}
+}
+
+struct ManyNodes {
+    overlay: Child<OverlayLeaf>,
+}
+impl Widget for ManyNodes {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            cx.anchor(self.overlay, Anchor::<OverlayLeaf>::Window)
+                .unwrap();
+        }
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics {
+        cx.overlay(limits)
+    }
+}
+
+#[test]
+fn pointer_and_paint_do_not_walk_all_nodes_to_find_overlays() {
+    let hits = Rc::default();
+    let element = Element::build(|children| {
+        for _ in 0..200 {
+            children.add(Element::leaf(Empty));
+        }
+        ManyNodes {
+            overlay: children.add(Element::leaf(OverlayLeaf {
+                name: "overlay",
+                hits,
+            })),
+        }
+    });
+    let mut ui = Ui::new(element, Size::new(100., 40.), Limits::default()).unwrap();
+    ui.pump(300, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+    let walked = ui.stats().tree_walked;
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 0,
+            position: Point::new(5., 5.),
+        },
+        &mut TestText,
+    );
+    assert_eq!(ui.stats().tree_walked, walked);
+    ui.paint(&mut PaintSink);
+    assert_eq!(ui.stats().tree_walked, walked);
+}
+
 struct RemovedLayoutChild {
     child: Child<Empty>,
 }

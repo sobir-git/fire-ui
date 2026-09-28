@@ -62,6 +62,8 @@ pub struct Stats {
     pub overloaded: u64,
     /// Nodes inspected while reconciling lifecycle visibility.
     pub reconciled: u64,
+    /// Nodes visited to build ordered whole-tree ID lists.
+    pub tree_walked: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct PasteToken {
@@ -162,6 +164,7 @@ pub struct SemanticNode {
 pub struct Ui<W: Widget> {
     tree: Tree,
     root: Id,
+    overlays: Vec<Id>,
     mailbox: Mailbox,
     limits: Limits,
     size: Size,
@@ -204,6 +207,11 @@ impl<W: Widget> Ui<W> {
         let mut tree = Tree::default();
         let mut mounts = vec![];
         tree.insert(None, element.prepared, &mut mounts);
+        let overlays = mounts
+            .iter()
+            .copied()
+            .filter(|id| tree.get(*id).is_some_and(|n| n.anchor.is_some()))
+            .collect();
         let mut mailbox = Mailbox {
             clipboard_enabled: false,
             items: VecDeque::new(),
@@ -221,6 +229,7 @@ impl<W: Widget> Ui<W> {
         Ok(Self {
             tree,
             root,
+            overlays,
             mailbox,
             limits,
             size,
@@ -325,6 +334,7 @@ impl<W: Widget> Ui<W> {
             stale: self.stale,
             overloaded: self.overloaded,
             reconciled: self.reconciled,
+            tree_walked: self.tree.walked_for_ids.get(),
         }
     }
     pub fn session(&self) -> u64 {
@@ -539,6 +549,9 @@ impl<W: Widget> Ui<W> {
                 let mut mounts = vec![];
                 self.tree.insert(Some(owner), p, &mut mounts);
                 self.tree.get_mut(owner).unwrap().children.push(id);
+                for id in mounts.iter().copied() {
+                    self.update_overlay(id);
+                }
                 for id in mounts {
                     self.mailbox.push_reserved(Delivery::Mount(id), 0)
                 }
@@ -629,6 +642,7 @@ impl<W: Widget> Ui<W> {
                         .is_some_and(|n| n.parent == Some(owner) && !n.retiring)
                 {
                     self.tree.get_mut(id).unwrap().anchor = anchor;
+                    self.update_overlay(id);
                     self.tree.invalidate(id);
                     self.reconcile()
                 }
@@ -639,6 +653,16 @@ impl<W: Widget> Ui<W> {
             Mutation::Send(id, payload, bytes) => self
                 .mailbox
                 .push_reserved(Delivery::Command(id, payload, None), bytes),
+        }
+    }
+    fn update_overlay(&mut self, id: Id) {
+        self.overlays.retain(|existing| *existing != id);
+        if self.tree.get(id).is_some_and(|n| n.anchor.is_some()) {
+            let at = self
+                .overlays
+                .binary_search_by(|existing| self.tree.compare_order(*existing, id))
+                .unwrap_or_else(|at| at);
+            self.overlays.insert(at, id);
         }
     }
     fn cancel_timer(&mut self, id: Id, timer: Timer) {
@@ -824,6 +848,7 @@ impl<W: Widget> Ui<W> {
                 });
             }
         }
+        self.overlays.retain(|id| !ids.contains(id));
         for k in ids {
             self.tree.discard(k)
         }
@@ -1017,11 +1042,6 @@ impl<W: Widget> Ui<W> {
             self.geometry_revision,
             false,
         );
-        let overlays: Vec<_> = self
-            .tree
-            .ids()
-            .filter(|id| self.tree.get(*id).is_some_and(|n| n.anchor.is_some()))
-            .collect();
         fn publish_overlay(
             tree: &mut Tree,
             id: Id,
@@ -1053,7 +1073,7 @@ impl<W: Widget> Ui<W> {
             tree.publish(id, transform, viewport, visible, revision, true);
         }
         let mut done = HashSet::new();
-        for id in overlays {
+        for id in self.overlays.iter().copied() {
             publish_overlay(
                 &mut self.tree,
                 id,
@@ -1216,12 +1236,7 @@ impl<W: Widget> Ui<W> {
                 _ => None,
             };
             captured.or_else(|| {
-                let overlays: Vec<_> = self
-                    .tree
-                    .ids()
-                    .filter(|id| self.tree.get(*id).is_some_and(|n| n.anchor.is_some()))
-                    .collect();
-                overlays
+                self.overlays
                     .iter()
                     .rev()
                     .find_map(|id| self.hit(*id, position))
@@ -1426,12 +1441,7 @@ impl<W: Widget> Ui<W> {
             &mut self.painted,
             region,
         );
-        let overlays: Vec<_> = self
-            .tree
-            .ids()
-            .filter(|id| self.tree.get(*id).is_some_and(|n| n.anchor.is_some()))
-            .collect();
-        for id in overlays {
+        for id in self.overlays.iter().copied() {
             paint(
                 &self.tree,
                 id,

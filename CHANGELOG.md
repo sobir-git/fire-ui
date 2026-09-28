@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Maintain overlays in ownership-tree order as nodes are inserted, anchored, or
+  removed, avoiding a whole-tree scan on pointer events and paints.
 - Reconcile a run of mounts once per pump, before later commands observe the
   mounted tree; expose reconciliation visits in runtime stats.
 - Publish accessibility revisions automatically when ordinary callbacks request
