@@ -488,6 +488,7 @@ fn menu_keyboard_skips_disabled_actions_and_stays_inside_the_window() {
                 MenuItem::new(2, "Close"),
             ],
             Point::new(298., 190.),
+            None,
         ),
         Size::new(300., 200.),
         Limits::default(),
@@ -552,7 +553,11 @@ fn menu_keyboard_skips_disabled_actions_and_stays_inside_the_window() {
 #[test]
 fn menu_outside_click_dismisses_without_activating_an_action() {
     let mut ui = Ui::new(
-        Menu::new(vec![MenuItem::new(1usize, "Save")], Point::new(20., 20.)),
+        Menu::new(
+            vec![MenuItem::new(1usize, "Save")],
+            Point::new(20., 20.),
+            None,
+        ),
         Size::new(400., 300.),
         Limits::default(),
     )
@@ -1109,10 +1114,8 @@ fn an_open_dropdown_list_is_modal_and_takes_the_keyboard() {
         focused.is_some_and(|n| n.id != field.id),
         "the list takes focus in the callback that opened it"
     );
-    for _ in 0..2 {
-        key(&mut ui, &mut text, Key::Down);
-        settle(&mut ui, &mut text);
-    }
+    key(&mut ui, &mut text, Key::Down);
+    settle(&mut ui, &mut text);
     key(&mut ui, &mut text, Key::Enter);
     let mut chosen = vec![];
     ui.pump(100, |o| chosen.push(o), |_| {});
@@ -1126,6 +1129,28 @@ fn an_open_dropdown_list_is_modal_and_takes_the_keyboard() {
         node(&ui, Role::Menu, "Palette").unwrap().focused,
         "focus returns to the field"
     );
+}
+
+#[test]
+fn dropdown_arrows_start_from_its_selection() {
+    let mut ui = Ui::new(
+        Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]),
+        Size::new(320., 400.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    assert!(ui.send(Routed::Command(DropdownCommand::Select(1))).is_ok());
+    settle(&mut ui, &mut text);
+    let field = node(&ui, Role::Menu, "Palette").unwrap();
+    click(&mut ui, &mut text, center(field.bounds));
+    settle(&mut ui, &mut text);
+    key(&mut ui, &mut text, Key::Down);
+    key(&mut ui, &mut text, Key::Enter);
+    let mut chosen = vec![];
+    ui.pump(100, |o| chosen.push(o), |_| {});
+    assert_eq!(chosen, vec![2]);
 }
 
 #[test]

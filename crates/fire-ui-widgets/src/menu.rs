@@ -65,7 +65,14 @@ pub struct Menu<K: Data + Clone> {
     selected: Option<usize>,
 }
 impl<K: Data + Clone> Menu<K> {
-    pub fn new(items: Vec<MenuItem<K>>, at: Point) -> Element<Self> {
+    /// `initial_current` sets where arrow navigation starts. It is independent of
+    /// each item's checked state, which describes an action's toggle state.
+    pub fn new(
+        items: Vec<MenuItem<K>>,
+        at: Point,
+        initial_current: Option<usize>,
+    ) -> Element<Self> {
+        let selected = initial_current.filter(|&i| items.get(i).is_some_and(|item| item.enabled));
         Element::build(|c| {
             let rows = items
                 .iter()
@@ -86,7 +93,7 @@ impl<K: Data + Clone> Menu<K> {
                 })
                 .collect();
             Self {
-                selected: None,
+                selected,
                 items,
                 rows,
                 at,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Menu arrow navigation can start at an explicit current item; dropdowns start
+  from their selected option without treating it as a checked action.
 - A handle returned by `insert` is usable in the same callback: commands, focus,
   modality and other requests naming the new child run after it mounts. Dropdown
   lists are now modal and take the keyboard when they open.

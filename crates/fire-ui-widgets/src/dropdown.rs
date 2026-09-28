@@ -79,15 +79,17 @@ impl Dropdown {
             .options
             .iter()
             .enumerate()
-            .map(|(i, option)| MenuItem::new(i, option.clone()).checked(i == self.selected))
+            .map(|(i, option)| MenuItem::new(i, option.clone()))
             .collect();
         let field = cx.window_bounds();
         let at = Point::new(field.x, field.y + field.height + 4.);
         // Born an overlay against the window, so the list is neither positioned nor
         // clipped by whatever panel the field happens to sit in.
-        match cx.insert_at(Menu::new(items, at), Anchor::<Self>::Window, |o| {
-            Routed::Chosen(o.clone())
-        }) {
+        match cx.insert_at(
+            Menu::new(items, at, Some(self.selected)),
+            Anchor::<Self>::Window,
+            |o| Routed::Chosen(o.clone()),
+        ) {
             Ok(list) => {
                 // A list that cannot trap input would leave the page usable under it.
                 if cx
