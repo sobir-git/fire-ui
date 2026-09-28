@@ -835,6 +835,61 @@ fn ime_selection_is_exposed_and_cancelled_without_changing_document() {
         .is_none());
 }
 
+struct CompositionText {
+    previous: Vec<bool>,
+}
+impl TextEngine for CompositionText {
+    fn revision(&self) -> TextRevision {
+        TestText.revision()
+    }
+    fn layout(&mut self, request: TextRequest) -> Arc<Paragraph> {
+        if request.text.contains("日本") {
+            self.previous.push(request.previous.is_some());
+        }
+        TestText.layout(request)
+    }
+}
+
+#[test]
+fn ime_edits_reuse_previous_composition_layout() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("alpha\nbeta")),
+        Size::new(400., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = CompositionText { previous: vec![] };
+    settle(&mut ui, &mut text);
+    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
+        .unwrap();
+    settle(&mut ui, &mut text);
+    let session = ui.session();
+    for composition in ["日本", "日本語"] {
+        ui.dispatch(
+            Input::Preedit {
+                session,
+                text: composition.into(),
+                selection: None,
+            },
+            &mut text,
+        );
+        ui.layout(&mut text);
+    }
+    assert_eq!(text.previous, [false, true]);
+    let layouts = ui.stats().layouts;
+    ui.dispatch(
+        Input::Preedit {
+            session,
+            text: "日本語".into(),
+            selection: Some((0, 3)),
+        },
+        &mut text,
+    );
+    ui.layout(&mut text);
+    assert_eq!(text.previous, [false, true]);
+    assert_eq!(ui.stats().layouts, layouts);
+}
+
 #[test]
 fn semantic_range_edits_and_set_value_are_atomic_undoable_and_report_limits() {
     let mut ui = Ui::new(

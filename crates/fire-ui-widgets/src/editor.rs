@@ -1,7 +1,7 @@
 use crate::{theme, Theme};
 use fire_ui::*;
 use std::{ops::Range, sync::Arc, time::Duration};
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 /// Storage adapters own text; editing and rendering share versioned paragraph snapshots.
 pub trait Document: 'static {
     fn text(&self) -> &str;
@@ -519,6 +519,7 @@ pub struct Editor<D: Document = StringDocument> {
     label: Option<String>,
     key: Option<String>,
     composition_layout: Option<Arc<Paragraph>>,
+    composition_source: Option<(u64, Range<usize>, String, Arc<str>)>,
     last_click: Option<(Duration, Point)>,
     click_count: u8,
     modifiers: Modifiers,
@@ -587,6 +588,7 @@ impl<D: Document> Editor<D> {
             label: None,
             key: None,
             composition_layout: None,
+            composition_source: None,
             last_click: None,
             click_count: 0,
             modifiers: Modifiers::default(),
@@ -807,13 +809,20 @@ impl<D: Document> Editor<D> {
         self.paragraph.as_ref()
     }
     fn boundary(&self, byte: usize) -> usize {
-        self.text()
-            .grapheme_indices(true)
-            .map(|(i, _)| i)
-            .chain(std::iter::once(self.text().len()))
-            .take_while(|i| *i <= byte)
-            .last()
-            .unwrap_or(0)
+        let text = self.text();
+        let mut at = byte.min(text.len());
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        let mut cursor = GraphemeCursor::new(at, text.len(), true);
+        if cursor.is_boundary(text, 0).expect("complete text chunk") {
+            at
+        } else {
+            cursor
+                .prev_boundary(text, 0)
+                .expect("complete text chunk")
+                .unwrap_or(0)
+        }
     }
     fn move_to(&mut self, byte: usize, select: bool) {
         self.finish_typing_group();
@@ -1151,6 +1160,7 @@ impl<D: Document> Editor<D> {
         self.preedit.clear();
         self.preedit_selection = None;
         self.composition_layout = None;
+        self.composition_source = None;
     }
     fn composition_start(&self) -> usize {
         self.selection().map_or(self.caret.byte, |r| r.start)
@@ -1309,6 +1319,50 @@ impl<D: Document> Editor<D> {
         ));
         cx.painter.paragraph(p, Point::default(), brush);
         cx.painter.restore();
+    }
+}
+
+#[cfg(test)]
+mod boundary_performance_tests {
+    use super::*;
+
+    #[test]
+    fn boundary_lookup_near_document_end_is_local() {
+        let editor = Editor::new("a".repeat(1_000_000));
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(editor.boundary(1));
+        }
+        let near_start = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(editor.boundary(999_999));
+        }
+        let near_end = start.elapsed();
+        assert!(
+            near_end < near_start * 50 + Duration::from_millis(50),
+            "near-end lookup took {near_end:?} versus {near_start:?} near the start"
+        );
+    }
+
+    #[test]
+    fn local_boundary_matches_complete_segmentation() {
+        let value = "a👩‍👩‍👧‍👦e\u{301}🇺🇸क्‍ष\r\nb";
+        let editor = Editor::new(value);
+        let boundaries: Vec<_> = value
+            .grapheme_indices(true)
+            .map(|(at, _)| at)
+            .chain(std::iter::once(value.len()))
+            .collect();
+        for at in 0..=value.len() {
+            let expected = boundaries
+                .iter()
+                .copied()
+                .take_while(|b| *b <= at)
+                .last()
+                .unwrap();
+            assert_eq!(editor.boundary(at), expected, "offset {at}");
+        }
     }
 }
 impl<D: Document> Widget for Editor<D> {
@@ -1597,25 +1651,52 @@ impl<D: Document> Widget for Editor<D> {
                 revision: 0,
             }));
         }
-        self.composition_layout = if self.preedit.is_empty() {
-            None
+        if self.preedit.is_empty() {
+            self.composition_layout = None;
+            self.composition_source = None;
         } else {
             let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
-            let display: Arc<str> = format!(
-                "{}{}{}",
-                &self.text()[..range.start],
-                self.preedit,
-                &self.text()[range.end..]
-            )
-            .into();
-            Some(cx.paragraph(TextRequest {
-                previous: None,
-                text: display,
-                style,
-                width,
-                revision,
-            }))
-        };
+            let display = match &self.composition_source {
+                Some((old_revision, old_range, old_preedit, display))
+                    if *old_revision == revision
+                        && *old_range == range
+                        && *old_preedit == self.preedit =>
+                {
+                    display.clone()
+                }
+                _ => {
+                    let mut display = String::with_capacity(
+                        self.text().len() - (range.end - range.start) + self.preedit.len(),
+                    );
+                    display.push_str(&self.text()[..range.start]);
+                    display.push_str(&self.preedit);
+                    display.push_str(&self.text()[range.end..]);
+                    let display: Arc<str> = display.into();
+                    self.composition_source =
+                        Some((revision, range, self.preedit.clone(), display.clone()));
+                    display
+                }
+            };
+            let previous = self.composition_layout.take();
+            self.composition_layout = Some(
+                if previous.as_ref().is_some_and(|p| {
+                    p.text.as_ref() == display.as_ref()
+                        && p.style == style
+                        && p.width == width
+                        && p.service_revision == cx.text_revision()
+                }) {
+                    previous.unwrap()
+                } else {
+                    cx.paragraph(TextRequest {
+                        previous: previous.as_deref(),
+                        text: display,
+                        style,
+                        width,
+                        revision,
+                    })
+                },
+            );
+        }
         let p = self.paragraph.as_ref().unwrap();
         let desired = Size::new(
             if c.max.width.is_finite() {
@@ -1849,10 +1930,17 @@ impl<D: Document> Widget for Editor<D> {
                 text, selection, ..
             } => {
                 self.finish_typing_group();
-                self.preedit = text.clone();
-                self.preedit_selection = selection
+                let text_changed = self.preedit != *text;
+                self.preedit.clone_from(text);
+                let next_selection = selection
                     .filter(|(a, b)| text.is_char_boundary(*a) && text.is_char_boundary(*b));
-                cx.relayout();
+                if text_changed {
+                    self.preedit_selection = next_selection;
+                    cx.relayout();
+                } else if self.preedit_selection != next_selection {
+                    self.preedit_selection = next_selection;
+                    cx.repaint();
+                }
             }
             Input::Scroll { delta, .. } if self.multiline => {
                 if let Some(p) = &self.paragraph {

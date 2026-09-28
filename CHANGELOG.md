@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Find editor grapheme boundaries near the requested byte; retain IME display
+  text and reuse prior composition layout across preedit updates.
 - Maintain overlays in ownership-tree order as nodes are inserted, anchored, or
   removed, avoiding a whole-tree scan on pointer events and paints.
 - Reconcile a run of mounts once per pump, before later commands observe the
