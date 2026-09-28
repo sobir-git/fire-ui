@@ -29,10 +29,7 @@ pub struct Surface<C: Widget> {
 }
 impl<C: Widget> Surface<C> {
     pub fn new(content: Element<C>) -> Element<Self> {
-        Self::styled(content, SurfaceStyle::default())
-    }
-    pub fn styled(content: Element<C>, style: SurfaceStyle) -> Element<Self> {
-        surface(style).wrap(content)
+        surface(SurfaceStyle::default()).wrap(content)
     }
     fn insets(&self, t: &Theme) -> f32 {
         self.inset.unwrap_or(match self.style {
@@ -42,6 +39,18 @@ impl<C: Widget> Surface<C> {
     }
     fn corner(&self, t: &Theme) -> f32 {
         self.radius.unwrap_or(t.scale.panel_radius)
+    }
+}
+/// Fluent initial style for a prepared surface.
+pub trait SurfaceElementExt: Sized {
+    fn style(self, style: SurfaceStyle) -> Self;
+}
+impl<C: Widget> SurfaceElementExt for Element<Surface<C>> {
+    fn style(self, style: SurfaceStyle) -> Self {
+        self.map(|mut surface| {
+            surface.style = style;
+            surface
+        })
     }
 }
 /// Begin a surface whose padding or radius differs from the theme's choice:

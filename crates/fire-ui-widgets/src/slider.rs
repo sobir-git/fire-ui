@@ -64,31 +64,6 @@ impl Slider {
             halo: 5.,
         })
     }
-    /// A slider that moves in fixed increments. `step` of zero is continuous.
-    pub fn stepped(
-        label: impl Into<String>,
-        value: f32,
-        min: f32,
-        max: f32,
-        step: f32,
-    ) -> Element<Self> {
-        let (min, max) = Self::bounds(min, max);
-        Element::leaf(Self {
-            value: if value.is_finite() {
-                value.clamp(min, max)
-            } else {
-                min
-            },
-            min,
-            max,
-            step: if step.is_finite() { step.max(0.) } else { 0. },
-            label: label.into(),
-            disabled: false,
-            dragging: None,
-            knob: 18.,
-            halo: 5.,
-        })
-    }
     pub fn value(&self) -> f32 {
         self.value
     }
@@ -122,6 +97,18 @@ impl Slider {
     }
     fn knob_for(t: &crate::Theme) -> f32 {
         (t.scale.font_size * 1.2).round()
+    }
+}
+/// Fluent initial step size for a prepared slider. Zero is continuous.
+pub trait SliderElementExt: Sized {
+    fn step(self, step: f32) -> Self;
+}
+impl SliderElementExt for Element<Slider> {
+    fn step(self, step: f32) -> Self {
+        self.map(|mut slider| {
+            slider.step = if step.is_finite() { step.max(0.) } else { 0. };
+            slider
+        })
     }
 }
 impl Widget for Slider {

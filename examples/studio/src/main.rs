@@ -77,7 +77,7 @@ const PAGE_INSET: f32 = 3.5;
 
 /// Wraps a page in the padding every page shares, inside a viewport.
 fn page<W: Widget>(content: Element<W>) -> Element<Scroll<Padding<W>>> {
-    Scroll::new(Padding::scaled(content, PAGE_INSET))
+    Scroll::new(Padding::new(content).scaled(PAGE_INSET))
 }
 impl Body {
     fn new() -> Element<Self> {
@@ -87,7 +87,9 @@ impl Body {
                 concat!("Studio · ", env!("CARGO_PKG_VERSION")),
                 TextRole::Micro,
             )),
-            nav: c.connect(Tabs::vertical(SECTIONS), |v| Message::Navigate(*v)),
+            nav: c.connect(Tabs::new(SECTIONS).axis(Axis::Vertical), |v| {
+                Message::Navigate(*v)
+            }),
             rule: c.add(Element::leaf(Divider::horizontal())),
             status: c.add(muted("Ready", TextRole::Small)),
             overview: c.connect(page(overview::Overview::new()), |e| {
@@ -100,7 +102,7 @@ impl Body {
                 Message::Page(e.clone())
             }),
             // The list owns its own viewport, so it is not put inside another one.
-            lists: c.connect(Padding::scaled(lists::Lists::new(), PAGE_INSET), |e| {
+            lists: c.connect(Padding::new(lists::Lists::new()).scaled(PAGE_INSET), |e| {
                 Message::Page(e.clone())
             }),
             canvas: c.connect(page(canvas::Canvas::new()), |e| Message::Page(e.clone())),

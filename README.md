@@ -31,12 +31,12 @@ Linux/X11 app, use path dependencies on `fire-ui`, `fire-ui-widgets`,
 ```rust,no_run
 use fire_ui::Element;
 use fire_ui_native::{run, WindowOptions};
-use fire_ui_widgets::{Label, Padding};
+use fire_ui_widgets::*;
 
 fn main() -> Result<(), String> {
     let fonts = fire_ui_fonts::Fonts::load(&["/path/to/app-font.ttf"])?;
     run(
-        Padding::new(Label::new("Hello, Fire UI"), 24.0),
+        Padding::new(Label::new("Hello, Fire UI")).insets(24.0),
         WindowOptions::default(),
         fire_ui_text::Text::new(fonts.clone())?,
         fire_ui_cairo::Cairo::direct(fonts),

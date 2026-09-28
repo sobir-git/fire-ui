@@ -30,14 +30,10 @@ changing the scale relays.
 
 ```rust
 use fire_ui::Element;
-use fire_ui_widgets::{Button, ButtonStyle, Insets, Label, Padding};
+use fire_ui_widgets::*;
 
-let button = Button::styled(
-    Label::new("Continue"),
-    "Continue",
-    ButtonStyle::Primary,
-);
-let content = Padding::new(button, Insets::all(16.0));
+let button = Button::new(Label::new("Continue"), "Continue").style(ButtonStyle::Primary);
+let content = Padding::new(button).insets(Insets::all(16.0));
 ```
 
 Connect a control's output to an owner command with `children.connect`, or adopt a

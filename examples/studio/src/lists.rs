@@ -35,7 +35,7 @@ type Rows = VirtualList<usize, Row, fn(&usize) -> Element<Row>>;
 fn row_for(key: &usize) -> Element<Row> {
     let text = format!("Material study {:05}", key + 1);
     Element::build(|children| Row {
-        label: children.add(Label::styled(text, TextRole::Body)),
+        label: children.add(Label::new(text).appearance(Appearance::role(TextRole::Body))),
     })
 }
 
@@ -78,7 +78,9 @@ impl Lists {
                 TextRole::Small,
             )),
             search: children.connect(
-                Editor::field("").map(|editor| editor.placeholder("Find a material study…")),
+                Editor::new("")
+                    .single_line()
+                    .map(|editor| editor.placeholder("Find a material study…")),
                 |v| Signal::Query(v.clone()),
             ),
             list: children.connect(

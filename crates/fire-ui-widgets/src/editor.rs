@@ -553,13 +553,6 @@ impl Editor<StringDocument> {
     pub fn new(text: impl Into<String>) -> Element<Self> {
         Self::with_document(StringDocument::new(text))
     }
-    pub fn field(text: impl Into<String>) -> Element<Self> {
-        Element::leaf(Self {
-            multiline: false,
-            wrap: false,
-            ..Self::bare_with_document(StringDocument::new(text))
-        })
-    }
 }
 impl<D: Document> Editor<D> {
     pub fn with_document(document: D) -> Element<Self> {
@@ -795,6 +788,11 @@ impl<D: Document> Editor<D> {
     }
     pub fn chrome(mut self, chrome: bool) -> Self {
         self.chrome = chrome;
+        self
+    }
+    pub fn single_line(mut self) -> Self {
+        self.multiline = false;
+        self.wrap = false;
         self
     }
     /// How far the view has scrolled from the top, in pixels.
@@ -1339,6 +1337,7 @@ pub trait EditorElementExt: Sized {
     fn caret_blink(self, enabled: bool) -> Self;
     fn max_bytes(self, bytes: usize) -> Self;
     fn chrome(self, chrome: bool) -> Self;
+    fn single_line(self) -> Self;
 }
 impl<D: Document> EditorElementExt for Element<Editor<D>> {
     fn label(self, label: impl Into<String>) -> Self {
@@ -1367,6 +1366,9 @@ impl<D: Document> EditorElementExt for Element<Editor<D>> {
     }
     fn chrome(self, chrome: bool) -> Self {
         self.map(|editor| editor.chrome(chrome))
+    }
+    fn single_line(self) -> Self {
+        self.map(Editor::single_line)
     }
 }
 

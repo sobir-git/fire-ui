@@ -4,7 +4,7 @@ use fire_ui::*;
 use fire_ui_widgets::*;
 
 fn button(text: &str, style: ButtonStyle) -> Element<Button<Label>> {
-    Button::styled(Label::new(text), text, style)
+    Button::new(Label::new(text), text).style(style)
 }
 
 /// Every control the widget crate ships, live, with what it reports.
@@ -73,7 +73,7 @@ impl Controls {
             slider: children.connect(
                 Field::new(
                     "A quantity, by pointer or arrow keys",
-                    Slider::stepped("Warmth", 62., 0., 100., 1.),
+                    Slider::new("Warmth", 62., 0., 100.).step(1.),
                 ),
                 |v| Signal::Slid(*v),
             ),

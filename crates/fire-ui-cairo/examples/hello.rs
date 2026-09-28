@@ -1,12 +1,12 @@
 use fire_ui::Element;
 use fire_ui_native::{run, WindowOptions};
-use fire_ui_widgets::{Label, Padding};
+use fire_ui_widgets::*;
 
 fn main() -> Result<(), String> {
     let fonts = fire_ui_fonts::Fonts::load(&[
         fire_ui_fonts::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?
     ])?;
-    let content = Padding::new(Label::new("Hello, Fire UI"), 24.0);
+    let content = Padding::new(Label::new("Hello, Fire UI")).insets(24.0);
     run(
         content,
         WindowOptions {

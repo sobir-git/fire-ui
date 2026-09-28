@@ -26,7 +26,7 @@ fn packed_history_keeps_removed_bytes_separate_from_normalized_inserted_text() {
     for field in [false, true] {
         let original = "前\ré👩‍👩‍👧‍👦\n後";
         let editor = if field {
-            Editor::field(original)
+            Editor::new(original).single_line()
         } else {
             Editor::new(original)
         };

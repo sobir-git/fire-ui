@@ -10,6 +10,14 @@ fn widget_constructors_return_elements() {
     let _: Element<TestList> = VirtualList::new(vec![0], 24., (|_: &usize| Label::new("row")) as _);
 }
 
+#[test]
+fn constructor_presets_are_fluent_from_glob_import() {
+    let _: Element<Slider> = Slider::new("level", 5., 0., 10.).step(1.);
+    let _: Element<Button<Label>> = Button::new(Label::new("Go"), "Go").style(ButtonStyle::Primary);
+    let _: Element<Surface<Label>> = Surface::new(Label::new("Body")).style(SurfaceStyle::Sunken);
+    let _: Element<Tabs> = Tabs::new(["One", "Two"]).axis(Axis::Vertical);
+}
+
 #[derive(Debug)]
 struct NonCloneOutput(usize);
 impl Data for NonCloneOutput {
@@ -1479,10 +1487,10 @@ fn a_dropdown_inside_a_scrolling_panel_still_opens_over_it() {
     // The studio's shape: the field is deep inside a clipping viewport, so the list
     // is only usable if it escapes that clip as a window overlay.
     let mut ui = Ui::new(
-        Scroll::new(Padding::new(
-            Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]),
-            Insets::all(28.),
-        )),
+        Scroll::new(
+            Padding::new(Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]))
+                .insets(Insets::all(28.)),
+        ),
         Size::new(420., 300.),
         Limits::default(),
     )
@@ -1667,7 +1675,7 @@ fn swapping_the_theme_reaches_content_a_control_styles_for_itself() {
     // A filled button publishes a derived theme to its label so the text resolves
     // to `on_accent`. That override must not freeze the label on the old palette.
     let mut ui = Ui::new(
-        Button::styled(Label::new("Save"), "Save", ButtonStyle::Primary),
+        Button::new(Label::new("Save"), "Save").style(ButtonStyle::Primary),
         Size::new(200., 80.),
         Limits::default(),
     )
@@ -1730,7 +1738,7 @@ fn slider_and_progress_keep_finite_state_for_nonfinite_input() {
     assert!(basic.root().value().is_finite());
 
     let mut slider = Ui::new(
-        Slider::stepped("Level", f32::NAN, f32::NAN, 10., f32::NAN),
+        Slider::new("Level", f32::NAN, f32::NAN, 10.).step(f32::NAN),
         Size::new(200., 40.),
         Limits::default(),
     )
@@ -1823,8 +1831,9 @@ impl Widget for Greedy {
 impl Section {
     fn new() -> Element<Self> {
         Element::build(|c| Self {
-            heading: c.add(Label::styled("Editing", TextRole::Heading)),
-            caption: c.add(Label::styled("A supporting line", TextRole::Small)),
+            heading: c.add(Label::new("Editing").appearance(Appearance::role(TextRole::Heading))),
+            caption: c
+                .add(Label::new("A supporting line").appearance(Appearance::role(TextRole::Small))),
             // An editor fills the height it is offered, which is what turns a
             // measurement against the wrong extent into a visible overflow.
             panel: c.discard(surface(SurfaceStyle::Sunken).wrap(Element::leaf(Greedy))),
@@ -2195,11 +2204,11 @@ fn a_scale_change_relays_the_window_while_a_palette_change_only_repaints() {
 
     // Centred, so the button takes its natural size rather than the window's.
     let mut ui = Ui::new(
-        Aligned::center(Button::styled(
-            Label::new("Save"),
-            "Save",
-            ButtonStyle::Primary,
-        )),
+        Aligned::new(
+            Button::new(Label::new("Save"), "Save").style(ButtonStyle::Primary),
+            Align::Center,
+            Align::Center,
+        ),
         Size::new(300., 120.),
         Limits::default(),
     )
@@ -2254,7 +2263,7 @@ fn theme_is_a_small_value() {
 #[test]
 fn scaled_padding_reads_the_active_theme_on_each_layout() {
     let mut ui = Ui::new(
-        Padding::scaled(Label::new("content"), 3.5),
+        Padding::new(Label::new("content")).scaled(3.5),
         Size::new(200., 100.),
         Limits::default(),
     )
@@ -2308,7 +2317,7 @@ fn widgets_work_with_no_theme_installed_and_with_an_invisible_one() {
     // 2. A shipped control with no theme installed falls back to the default rather
     //    than failing, so a consumer can use one without opting into theming.
     let mut ui = Ui::new(
-        Button::styled(Label::new("Go"), "Go", ButtonStyle::Primary),
+        Button::new(Label::new("Go"), "Go").style(ButtonStyle::Primary),
         Size::new(200., 80.),
         Limits::default(),
     )

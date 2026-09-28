@@ -516,19 +516,30 @@ enum PaddingInsets {
     Scaled(f32),
 }
 impl<C: Widget> Padding<C> {
-    pub fn new(content: Element<C>, insets: impl Into<Insets>) -> Element<Self> {
-        let insets = insets.into();
+    pub fn new(content: Element<C>) -> Element<Self> {
         Element::build(|children| Self {
             child: children.bubble(content),
-            insets: PaddingInsets::Fixed(insets),
+            insets: PaddingInsets::Fixed(Insets::all(0.)),
         })
     }
-    /// Theme rhythm units, resolved again when the inherited theme changes.
-    pub fn scaled(content: Element<C>, steps: f32) -> Element<Self> {
+}
+/// Fluent padding, fixed or resolved from the active theme at layout time.
+pub trait PaddingElementExt: Sized {
+    fn insets(self, insets: impl Into<Insets>) -> Self;
+    fn scaled(self, steps: f32) -> Self;
+}
+impl<C: Widget> PaddingElementExt for Element<Padding<C>> {
+    fn insets(self, insets: impl Into<Insets>) -> Self {
+        self.map(|mut padding| {
+            padding.insets = PaddingInsets::Fixed(insets.into());
+            padding
+        })
+    }
+    fn scaled(self, steps: f32) -> Self {
         assert!(steps.is_finite() && steps >= 0.);
-        Element::build(|children| Self {
-            child: children.bubble(content),
-            insets: PaddingInsets::Scaled(steps),
+        self.map(|mut padding| {
+            padding.insets = PaddingInsets::Scaled(steps);
+            padding
         })
     }
 }
@@ -568,10 +579,6 @@ impl<C: Widget> Aligned<C> {
             horizontal,
             vertical,
         })
-    }
-    /// Content centred on both axes.
-    pub fn center(content: Element<C>) -> Element<Self> {
-        Self::new(content, Align::Center, Align::Center)
     }
 }
 impl<C: Widget> Widget for Aligned<C> {
@@ -624,14 +631,6 @@ impl<C: Widget> Constrain<C> {
             max,
         })
     }
-    /// Content that never grows past `width`, whatever room it is offered.
-    pub fn width(content: Element<C>, width: f32) -> Element<Self> {
-        Self::new(content, Size::ZERO, Size::new(width, f32::INFINITY))
-    }
-    /// Content at exactly this size.
-    pub fn exact(content: Element<C>, size: Size) -> Element<Self> {
-        Self::new(content, size, size)
-    }
 }
 impl<C: Widget> Widget for Constrain<C> {
     type Command = C::Command;
@@ -667,12 +666,20 @@ pub struct Spacer {
 }
 impl Spacer {
     /// A spacer with no natural size, for use with `Entry::fill`.
-    pub fn flexible() -> Element<Self> {
+    pub fn new() -> Element<Self> {
         Element::leaf(Self::default())
     }
-    /// A fixed gap, for when the flow's own gap is not the right one here.
-    pub fn fixed(size: Size) -> Element<Self> {
-        Element::leaf(Self { size })
+}
+/// Fluent natural size for a spacer.
+pub trait SpacerElementExt: Sized {
+    fn size(self, size: Size) -> Self;
+}
+impl SpacerElementExt for Element<Spacer> {
+    fn size(self, size: Size) -> Self {
+        self.map(|mut spacer| {
+            spacer.size = size;
+            spacer
+        })
     }
 }
 impl Widget for Spacer {

@@ -19,18 +19,6 @@ impl Label {
             wrap: false,
         })
     }
-    /// A label at a step of the type scale.
-    pub fn styled(text: impl Into<Arc<str>>, role: TextRole) -> Element<Self> {
-        Self::new(text).map(|label| label.appearance(Appearance::role(role)))
-    }
-    /// A label at a step of the type scale, in a palette role.
-    pub fn toned(
-        text: impl Into<Arc<str>>,
-        role: TextRole,
-        color: crate::ColorRole,
-    ) -> Element<Self> {
-        Self::new(text).map(|label| label.appearance(Appearance::role(role).color(color)))
-    }
     pub fn appearance(mut self, appearance: Appearance) -> Self {
         self.appearance = appearance;
         self
@@ -176,19 +164,12 @@ pub struct Button<C: Widget<Output = Infallible>> {
 }
 impl<C: Widget<Output = Infallible>> Button<C> {
     pub fn new(content: Element<C>, label: impl Into<String>) -> Element<Self> {
-        Self::styled(content, label, ButtonStyle::default())
-    }
-    pub fn styled(
-        content: Element<C>,
-        label: impl Into<String>,
-        style: ButtonStyle,
-    ) -> Element<Self> {
         let label = label.into();
         Element::build(|children| Self {
             content: children.add(content),
             pressed: None,
             disabled: false,
-            style,
+            style: ButtonStyle::default(),
             label,
             published: None,
         })
@@ -213,6 +194,18 @@ impl<C: Widget<Output = Infallible>> Button<C> {
         {
             self.published = Some(derived);
         }
+    }
+}
+/// Fluent initial style for a prepared button.
+pub trait ButtonElementExt: Sized {
+    fn style(self, style: ButtonStyle) -> Self;
+}
+impl<C: Widget<Output = Infallible>> ButtonElementExt for Element<Button<C>> {
+    fn style(self, style: ButtonStyle) -> Self {
+        self.map(|mut button| {
+            button.style = style;
+            button
+        })
     }
 }
 impl<C: Widget<Output = Infallible>> Widget for Button<C> {

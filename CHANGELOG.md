@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use one widget constructor per input shape and fluent element configuration for
+  appearance, step size, orientation, padding and single-line editing.
 - Return mountable elements from all widget constructors, with fluent configuration
   on prepared labels, editors, and virtual lists.
 - Bubble appearance-scoped content output directly, without cloning it or routing

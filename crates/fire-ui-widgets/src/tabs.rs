@@ -158,16 +158,6 @@ pub struct Tabs {
 impl Tabs {
     /// A horizontal tab strip.
     pub fn new(labels: impl IntoIterator<Item = impl Into<String>>) -> Element<Self> {
-        Self::along(labels, crate::Axis::Horizontal)
-    }
-    /// A vertical rail, for a sidebar.
-    pub fn vertical(labels: impl IntoIterator<Item = impl Into<String>>) -> Element<Self> {
-        Self::along(labels, crate::Axis::Vertical)
-    }
-    pub fn along(
-        labels: impl IntoIterator<Item = impl Into<String>>,
-        axis: crate::Axis,
-    ) -> Element<Self> {
         Element::build(|children| Self {
             tabs: labels
                 .into_iter()
@@ -175,7 +165,7 @@ impl Tabs {
                 .map(|(i, label)| children.connect(Tab::new(label), move |_| TabsCommand(i)))
                 .collect(),
             selected: 0,
-            axis,
+            axis: crate::Axis::Horizontal,
         })
     }
     pub fn selected(&self) -> usize {
@@ -192,6 +182,18 @@ impl Tabs {
         let _ = cx.send(self.tabs[index], true);
         let _ = cx.emit(index);
         cx.repaint()
+    }
+}
+/// Fluent orientation for a prepared tab strip.
+pub trait TabsElementExt: Sized {
+    fn axis(self, axis: crate::Axis) -> Self;
+}
+impl TabsElementExt for Element<Tabs> {
+    fn axis(self, axis: crate::Axis) -> Self {
+        self.map(|mut tabs| {
+            tabs.axis = axis;
+            tabs
+        })
     }
 }
 impl Widget for Tabs {

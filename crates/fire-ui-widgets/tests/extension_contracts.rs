@@ -124,7 +124,7 @@ impl Widget for Owner {
 #[test]
 fn child_default_bounds_match_translated_owner() {
     let mut ui = Ui::new(
-        Padding::new(Element::leaf(Owner { disabled: false }), Insets::all(20.)),
+        Padding::new(Element::leaf(Owner { disabled: false })).insets(Insets::all(20.)),
         Size::new(300., 140.),
         Limits::default(),
     )

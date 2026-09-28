@@ -6,19 +6,21 @@ use fire_ui_widgets::*;
 
 /// Text at a step of the type scale, in the theme's ordinary foreground.
 pub fn text(content: impl Into<std::sync::Arc<str>>, role: TextRole) -> Element<Label> {
-    Label::styled(content, role)
+    Label::new(content).appearance(Appearance::role(role))
 }
 /// Secondary text: captions, hints and supporting lines.
 pub fn muted(content: impl Into<std::sync::Arc<str>>, role: TextRole) -> Element<Label> {
-    Label::toned(content, role, ColorRole::Muted)
+    Label::new(content).appearance(Appearance::role(role).color(ColorRole::Muted))
 }
 /// Secondary text that wraps.
 pub fn muted_paragraph(content: impl Into<std::sync::Arc<str>>, role: TextRole) -> Element<Label> {
-    Label::toned(content, role, ColorRole::Muted).map(|label| label.wrap())
+    Label::new(content)
+        .appearance(Appearance::role(role).color(ColorRole::Muted))
+        .wrap()
 }
 /// Text in the accent, for the one word that should catch the eye.
 pub fn accent(content: impl Into<std::sync::Arc<str>>, role: TextRole) -> Element<Label> {
-    Label::toned(content, role, ColorRole::Accent)
+    Label::new(content).appearance(Appearance::role(role).color(ColorRole::Accent))
 }
 
 /// A heading and its supporting line, above content. The studio's unit of teaching.

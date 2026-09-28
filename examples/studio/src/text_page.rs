@@ -45,7 +45,9 @@ impl TextPage {
             field: children.connect(
                 Field::new(
                     "A single-line field, with a placeholder",
-                    Editor::field("").map(|editor| editor.placeholder("Type a title…")),
+                    Editor::new("")
+                        .single_line()
+                        .map(|editor| editor.placeholder("Type a title…")),
                 ),
                 |v| Signal::Field(v.clone()),
             ),

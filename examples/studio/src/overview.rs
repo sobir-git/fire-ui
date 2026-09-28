@@ -38,20 +38,18 @@ struct Banner {
 impl Banner {
     fn new() -> Element<Surface<Self>> {
         surface(SurfaceStyle::Accent).wrap(Element::build(|children| Self {
-            headline: children.add(Label::toned(
-                "Widgets that keep their own state.",
-                TextRole::Heading,
-                ColorRole::OnAccent,
-            )),
+            headline: children.add(
+                Label::new("Widgets that keep their own state.")
+                    .appearance(Appearance::role(TextRole::Heading).color(ColorRole::OnAccent)),
+            ),
             detail: children.add(
-                Label::toned(
+                Label::new(
                     "Nothing rebuilds a tree every frame. A widget owns its data, \
                      declares what it accepts and what it reports, and asks for a repaint \
                      when it has something new to show.",
-                    TextRole::Small,
-                    ColorRole::OnAccent,
                 )
-                .map(|label| label.wrap()),
+                .appearance(Appearance::role(TextRole::Small).color(ColorRole::OnAccent))
+                .wrap(),
             ),
         }))
     }
