@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reconcile a run of mounts once per pump, before later commands observe the
+  mounted tree; expose reconciliation visits in runtime stats.
 - Publish accessibility revisions automatically when ordinary callbacks request
   paint, layout, mutation, or output. Timer and animation repaint alone stays cheap.
 - Treat renderer damage consistently: absent damage requests a full repaint,

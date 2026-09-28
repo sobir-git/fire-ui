@@ -60,6 +60,8 @@ pub struct Stats {
     pub painted: u64,
     pub stale: u64,
     pub overloaded: u64,
+    /// Nodes inspected while reconciling lifecycle visibility.
+    pub reconciled: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct PasteToken {
@@ -187,6 +189,7 @@ pub struct Ui<W: Widget> {
     painted: u64,
     stale: u64,
     overloaded: u64,
+    reconciled: u64,
     marker: PhantomData<fn(W) -> W>,
 }
 impl<W: Widget> Ui<W> {
@@ -245,6 +248,7 @@ impl<W: Widget> Ui<W> {
             painted: 0,
             stale: 0,
             overloaded: 0,
+            reconciled: 0,
             marker: PhantomData,
         })
     }
@@ -320,6 +324,7 @@ impl<W: Widget> Ui<W> {
             painted: self.painted,
             stale: self.stale,
             overloaded: self.overloaded,
+            reconciled: self.reconciled,
         }
     }
     pub fn session(&self) -> u64 {
@@ -771,6 +776,7 @@ impl<W: Widget> Ui<W> {
         }
         let ids: Vec<_> = self.tree.ids().collect();
         for id in ids {
+            self.reconciled += 1;
             let visible = self.tree.active(id);
             let anchor = self
                 .tree
@@ -837,10 +843,17 @@ impl<W: Widget> Ui<W> {
         mut platform: impl FnMut(HostRequest),
     ) -> usize {
         let mut done = 0;
+        let mut mounted = false;
         while done < budget {
             let Some((item, bytes)) = self.mailbox.pop() else {
                 break;
             };
+            // Complete a run of mounts before delivering a command that may
+            // inspect visibility, focus, or anchor state.
+            if mounted && !matches!(&item, Delivery::Mount(_)) {
+                self.reconcile();
+                mounted = false;
+            }
             done += 1;
             match item {
                 Delivery::Close => platform(HostRequest::Close),
@@ -862,7 +875,7 @@ impl<W: Widget> Ui<W> {
                         self.invoke(id, false, false, false, |w, cx| {
                             w.lifecycle(cx, Lifecycle::Mount)
                         });
-                        self.reconcile()
+                        mounted = true;
                     }
                 }
                 Delivery::Command(id, payload, ticket) => {
@@ -933,6 +946,9 @@ impl<W: Widget> Ui<W> {
                     }
                 }
             }
+        }
+        if mounted {
+            self.reconcile();
         }
         done
     }

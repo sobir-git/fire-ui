@@ -463,6 +463,25 @@ fn layout_does_not_visit_widgets_waiting_for_mount() {
 }
 
 #[test]
+fn mounting_siblings_reconciles_at_most_once_per_pump() {
+    struct Leaf;
+    impl Widget for Leaf {
+        type Command = Infallible;
+        type Output = Infallible;
+    }
+    let element = Element::build(|children| {
+        for _ in 0..100 {
+            children.add(Element::leaf(Leaf));
+        }
+        Leaf
+    });
+    let mut ui = Ui::new(element, Size::new(20., 20.), Limits::default()).unwrap();
+    ui.pump(200, |v| match v {}, |_| {});
+    assert_eq!(ui.stats().nodes, 101);
+    assert!(ui.stats().reconciled <= 2 * ui.stats().nodes as u64);
+}
+
+#[test]
 fn dropping_the_host_unmounts_children_before_their_owner() {
     use std::{cell::RefCell, convert::Infallible, rc::Rc};
     struct Tracked(&'static str, Rc<RefCell<Vec<&'static str>>>);
