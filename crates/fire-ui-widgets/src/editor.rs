@@ -149,20 +149,31 @@ impl Undo {
 struct UndoEdit {
     start: usize,
     removed_len: usize,
-    text: Box<str>,
+    text: String,
 }
 
 #[cfg(test)]
 mod history_cost_tests {
     use super::*;
 
+    fn settle(ui: &mut Ui<Editor>) {
+        for _ in 0..20 {
+            ui.pump(4096, |_| {}, |_| {});
+            ui.layout(&mut TestText);
+            if !ui.next_work().ready {
+                return;
+            }
+        }
+        panic!("editor did not settle");
+    }
+
     #[test]
     fn plain_typing_retains_inline_edits_without_selection_allocations() {
         let mut editor = Editor::new("");
         for _ in 0..1_000 {
-            editor.insert("x");
+            editor.insert_typed("x");
         }
-        assert_eq!(editor.undo.len(), 1_000);
+        assert_eq!(editor.undo.len(), 1);
         assert!(editor
             .undo
             .iter()
@@ -172,16 +183,85 @@ mod history_cost_tests {
             "Plain editor: {} bytes fixed history metadata/edit, no per-edit metadata allocation",
             std::mem::size_of::<Undo>()
         );
-        for _ in 0..1_000 {
-            editor.history(false);
-        }
+        editor.history(false);
         assert_eq!(editor.text(), "");
         assert_eq!(editor.caret.byte, 0);
-        for _ in 0..1_000 {
-            editor.history(true);
-        }
+        editor.history(true);
         assert_eq!(editor.text().len(), 1_000);
         assert_eq!(editor.caret.byte, 1_000);
+    }
+
+    #[test]
+    fn consecutive_typed_characters_undo_together() {
+        let mut editor = Editor::new("");
+        for ch in ["a", "🔥", "b"] {
+            editor.insert_typed(ch);
+        }
+        assert_eq!(editor.text(), "a🔥b");
+        editor.history(false);
+        assert_eq!(editor.text(), "");
+        editor.history(true);
+        assert_eq!(editor.text(), "a🔥b");
+    }
+
+    #[test]
+    fn moving_lines_preserves_crlf_and_caret_boundaries() {
+        let mut editor = Editor::new("a\r\n🔥\r\né");
+        editor.caret = Caret::at(3);
+        editor.move_lines(true);
+        assert_eq!(editor.text(), "a\r\né\r\n🔥");
+        assert!(editor.text().is_char_boundary(editor.caret.byte));
+        editor.move_lines(false);
+        assert_eq!(editor.text(), "a\r\n🔥\r\né");
+        assert!(editor.text().is_char_boundary(editor.caret.byte));
+        editor.history(false);
+        assert_eq!(editor.text(), "a\r\né\r\n🔥");
+        editor.history(false);
+        assert_eq!(editor.text(), "a\r\n🔥\r\né");
+    }
+
+    #[test]
+    fn placeholder_is_reshaped_when_width_changes() {
+        let mut ui = Ui::new(
+            Element::leaf(Editor::new("").placeholder("one two three four five six")),
+            Size::new(200., 90.),
+            Limits::default(),
+        )
+        .unwrap();
+        settle(&mut ui);
+        let wide = ui.root().placeholder_layout.as_ref().unwrap().width;
+        ui.resize(Size::new(100., 90.));
+        settle(&mut ui);
+        let narrow = ui.root().placeholder_layout.as_ref().unwrap().width;
+        assert_ne!(narrow, wide);
+    }
+
+    #[test]
+    fn editor_thumb_drag_uses_track_geometry() {
+        let text = (0..100).map(|i| format!("line {i}\n")).collect::<String>();
+        let size = Size::new(300., 200.);
+        let mut ui = Ui::new(Element::leaf(Editor::new(text)), size, Limits::default()).unwrap();
+        settle(&mut ui);
+        let bar = ui.root().scrollbar(Rect::from_size(size)).unwrap();
+        let overflow = ui.root().paragraph.as_ref().unwrap().size.height
+            + 2. * ui.root().insets().y
+            - size.height;
+        let position = Point::new(
+            bar.track.x + bar.track.width / 2.,
+            bar.track.y + bar.track.height * 0.75,
+        );
+        let expected = bar.offset_for(position.y - bar.thumb.height / 2., overflow);
+        ui.dispatch(
+            Input::Button {
+                pointer: 1,
+                button: 1,
+                down: true,
+                position,
+            },
+            &mut TestText,
+        );
+        settle(&mut ui);
+        assert!((ui.root().scroll.y - expected).abs() < 0.01);
     }
 }
 impl UndoEdit {
@@ -393,6 +473,7 @@ pub struct Editor<D: Document = StringDocument> {
     placeholder_layout: Option<Arc<Paragraph>>,
     undo: Vec<Undo>,
     redo: Vec<Undo>,
+    typing_end: Option<usize>,
     blink: Timer,
     caret_on: bool,
     caret_blink: bool,
@@ -460,6 +541,7 @@ impl<D: Document> Editor<D> {
             placeholder_layout: None,
             undo: Vec::new(),
             redo: vec![],
+            typing_end: None,
             blink: Timer::new(),
             caret_on: true,
             caret_blink: true,
@@ -702,6 +784,7 @@ impl<D: Document> Editor<D> {
             .unwrap_or(0)
     }
     fn move_to(&mut self, byte: usize, select: bool) {
+        self.typing_end = None;
         if select {
             if self.anchor.is_none() {
                 self.anchor = Some(self.caret.byte)
@@ -740,6 +823,10 @@ impl<D: Document> Editor<D> {
     /// transaction is rejected: out-of-bounds or overlapping ranges, or the
     /// size limit.
     fn apply(&mut self, transaction: Transaction) -> bool {
+        self.apply_inner(transaction, true)
+    }
+    fn apply_inner(&mut self, transaction: Transaction, normalize: bool) -> bool {
+        self.typing_end = None;
         let mut edits = transaction.edits;
         if edits.is_empty() {
             return false;
@@ -748,7 +835,9 @@ impl<D: Document> Editor<D> {
         let before_anchor = self.anchor;
         // Extension transactions meet the same text policy as typed input.
         for edit in &mut edits {
-            if edit.text.contains('\r') || (!self.multiline && edit.text.contains('\n')) {
+            if normalize
+                && (edit.text.contains('\r') || (!self.multiline && edit.text.contains('\n')))
+            {
                 let mut text = edit.text.replace('\r', "");
                 if !self.multiline {
                     text = text.replace('\n', " ");
@@ -792,7 +881,7 @@ impl<D: Document> Editor<D> {
             let undo = UndoEdit {
                 start,
                 removed_len,
-                text: record.into_boxed_str(),
+                text: record,
             };
             self.document.replace(start..end, &edit.text);
             delta += edit.text.len() as isize - edit.range.len() as isize;
@@ -851,7 +940,37 @@ impl<D: Document> Editor<D> {
         self.inserted |=
             self.document.revision() != before && text.chars().any(|ch| ch != '\n' && ch != '\r');
     }
+    fn insert_typed(&mut self, text: &str) {
+        let start = self.caret.byte;
+        let eligible = self.selection().is_none()
+            && text.graphemes(true).count() == 1
+            && !text.chars().any(char::is_control);
+        let merge = eligible
+            && self.typing_end == Some(start)
+            && self.undo.last().is_some_and(|entry| {
+                entry.selection.is_none()
+                    && matches!(&entry.edits, UndoEdits::Single(edit)
+                        if edit.removed_len == 0 && edit.start + edit.inserted().len() == start)
+            });
+        let history_len = self.undo.len();
+        self.insert(text);
+        if !eligible || self.undo.len() != history_len + 1 {
+            return;
+        }
+        if merge {
+            let last = self.undo.pop().unwrap();
+            let UndoEdits::Single(last_edit) = last.edits else {
+                unreachable!("one typed character makes one edit")
+            };
+            let UndoEdits::Single(previous) = &mut self.undo.last_mut().unwrap().edits else {
+                unreachable!("the previous typing edit is single")
+            };
+            previous.text.push_str(last_edit.inserted());
+        }
+        self.typing_end = Some(self.caret.byte);
+    }
     fn move_lines(&mut self, down: bool) {
+        self.typing_end = None;
         let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
         let start = self.text()[..range.start].rfind('\n').map_or(0, |i| i + 1);
         let last = if range.end > range.start && self.text().as_bytes()[range.end - 1] == b'\n' {
@@ -864,28 +983,67 @@ impl<D: Document> Editor<D> {
             .map_or(self.text().len(), |i| last + i);
         let caret = self.caret.byte - start;
         let anchor = self.anchor.map(|a| a - start);
-        let destination = if down && end < self.text().len() {
+        let (replace_range, moved, destination) = if down && end < self.text().len() {
             let next_end = self.text()[end + 1..]
                 .find('\n')
                 .map_or(self.text().len(), |i| end + 1 + i);
-            let following = self.text()[end + 1..next_end].to_owned();
-            let text = format!("{}\n{}", following, &self.text()[start..end]);
-            self.replace(start..next_end, &text);
-            start + following.len() + 1
+            if next_end < self.text().len() {
+                let following = &self.text()[end + 1..next_end + 1];
+                let moved = format!("{}{}", following, &self.text()[start..end + 1]);
+                (start..next_end + 1, moved, start + following.len())
+            } else {
+                let break_start = if end > start && self.text().as_bytes()[end - 1] == b'\r' {
+                    end - 1
+                } else {
+                    end
+                };
+                let following = &self.text()[end + 1..];
+                let ending = &self.text()[break_start..end + 1];
+                let moved = format!(
+                    "{}{}{}",
+                    following,
+                    ending,
+                    &self.text()[start..break_start]
+                );
+                (
+                    start..self.text().len(),
+                    moved,
+                    start + following.len() + ending.len(),
+                )
+            }
         } else if !down && start > 0 {
             let previous = self.text()[..start - 1].rfind('\n').map_or(0, |i| i + 1);
-            let text = format!(
-                "{}\n{}",
-                &self.text()[start..end],
-                &self.text()[previous..start - 1]
-            );
-            self.replace(previous..end, &text);
-            previous
+            if end < self.text().len() {
+                let moved = format!(
+                    "{}{}",
+                    &self.text()[start..end + 1],
+                    &self.text()[previous..start]
+                );
+                (previous..end + 1, moved, previous)
+            } else {
+                let break_end = start - 1;
+                let break_start =
+                    if break_end > previous && self.text().as_bytes()[break_end - 1] == b'\r' {
+                        break_end - 1
+                    } else {
+                        break_end
+                    };
+                let moved = format!(
+                    "{}{}{}",
+                    &self.text()[start..],
+                    &self.text()[break_start..start],
+                    &self.text()[previous..break_start]
+                );
+                (previous..self.text().len(), moved, previous)
+            }
         } else {
             return;
         };
-        self.caret = Caret::at((destination + caret).min(self.text().len()));
-        self.anchor = anchor.map(|a| (destination + a).min(self.text().len()));
+        if !self.apply_inner(Transaction::replace(replace_range, moved), false) {
+            return;
+        }
+        self.caret = Caret::at(self.boundary((destination + caret).min(self.text().len())));
+        self.anchor = anchor.map(|a| self.boundary((destination + a).min(self.text().len())));
         // The move adjustment above happens after the edit was recorded; keep
         // the record's post-change selection in step so redo restores it.
         if let Some(e) = self.undo.last_mut() {
@@ -897,6 +1055,7 @@ impl<D: Document> Editor<D> {
         }
     }
     fn history(&mut self, redo: bool) {
+        self.typing_end = None;
         if redo {
             if let Some(e) = self.redo.pop() {
                 for edit in e.edits.as_slice() {
@@ -979,10 +1138,8 @@ impl<D: Document> Editor<D> {
     }
     fn drag_scrollbar(&mut self, cx: &mut Update<'_, Self>, position: Point, grab: f32) {
         if let (Some(bar), Some(p)) = (self.scrollbar(cx.bounds()), &self.paragraph) {
-            let thumb = bar.thumb;
             let max = (p.size.height + 2. * self.insets().y - cx.bounds().height).max(0.);
-            let travel = (cx.bounds().height - thumb.height).max(1.);
-            self.scroll.y = ((position.y - grab) / travel).clamp(0., 1.) * max;
+            self.scroll.y = bar.offset_for(position.y - grab, max);
             self.report_state(cx);
             cx.repaint();
         }
@@ -1114,6 +1271,7 @@ impl<D: Document> Widget for Editor<D> {
                 return;
             }
             Edit::Set(text) => {
+                self.typing_end = None;
                 self.document.replace(0..self.text().len(), &text);
                 self.caret = Caret::at(0);
                 self.anchor = None;
@@ -1128,6 +1286,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Edit::Insert(text) => self.insert(&text),
             Edit::Select { anchor, caret } => {
+                self.typing_end = None;
                 self.anchor = Some(self.boundary(anchor));
                 self.caret = Caret::at(self.boundary(caret));
             }
@@ -1245,6 +1404,7 @@ impl<D: Document> Widget for Editor<D> {
                 }
             }
             Lifecycle::Focus(false) | Lifecycle::Visibility(false) | Lifecycle::Unmount => {
+                self.typing_end = None;
                 if event == Lifecycle::Focus(false) {
                     self.focused = false;
                     let _ = cx.emit(EditorOutput::FocusChanged(false));
@@ -1360,11 +1520,9 @@ impl<D: Document> Widget for Editor<D> {
             self.paragraph = Some(paragraph);
         }
         let width = content_width(self.strip);
-        if self
-            .placeholder_layout
-            .as_ref()
-            .is_none_or(|p| p.style != style || p.service_revision != cx.text_revision())
-        {
+        if self.placeholder_layout.as_ref().is_none_or(|p| {
+            p.style != style || p.width != width || p.service_revision != cx.text_revision()
+        }) {
             self.placeholder_layout = Some(cx.paragraph(TextRequest {
                 previous: None,
                 text: self.placeholder.clone(),
@@ -1536,6 +1694,7 @@ impl<D: Document> Widget for Editor<D> {
                 down: true,
                 position,
             } => {
+                self.typing_end = None;
                 // A target that claims the press arms for activation on release
                 // inside; the press is consumed either way.
                 if self.arm_target(*position, *pointer, cx.focused()) {
@@ -1617,12 +1776,13 @@ impl<D: Document> Widget for Editor<D> {
                 let _ = cx.release(*pointer);
             }
             Input::Text { text, .. } => {
-                self.insert(text);
+                self.insert_typed(text);
                 self.clear_preedit();
             }
             Input::Preedit {
                 text, selection, ..
             } => {
+                self.typing_end = None;
                 self.preedit = text.clone();
                 self.preedit_selection = selection
                     .filter(|(a, b)| text.is_char_boundary(*a) && text.is_char_boundary(*b));
@@ -1633,7 +1793,11 @@ impl<D: Document> Widget for Editor<D> {
                     let max = (p.size.height + 2. * self.insets().y - cx.bounds().height).max(0.);
                     self.scroll.y = (self.scroll.y - delta.y).clamp(0., max);
                     if !self.wrap {
-                        self.scroll.x = (self.scroll.x - delta.x).max(0.)
+                        self.scroll.x = (self.scroll.x - delta.x).clamp(
+                            0.,
+                            (p.size.width + 2. * self.insets().x + self.strip - cx.bounds().width)
+                                .max(0.),
+                        )
                     }
                     self.report_state(cx);
                     cx.repaint();

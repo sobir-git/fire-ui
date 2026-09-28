@@ -147,7 +147,7 @@ leave/enter events. Paint state and hover lifecycle notifications use the same p
 The editor owns a `Document` adapter. `StringDocument` is the default; storage is not
 part of the kernel. Edits support selection, insertion, grapheme deletion, clipboard,
 preedit, undo and redo. Programmatic `Set` is silent; actual edits emit a revision and
-text snapshot. Undo history is bounded. An optional byte limit rejects growth with
+text snapshot. Undo history is uncapped. An optional byte limit rejects growth with
 an explicit output, preserving the previous text and selection. Caret blinking can
 be disabled without losing the visible caret, allowing a focused notes editor to sleep.
 `EditorState` restores caret, anchor, scroll and wrap together, without forcing the

@@ -66,6 +66,47 @@ fn editor_grapheme_delete_undo_and_silent_set() {
     assert!(outputs.is_empty());
     assert_eq!(ui.root().text(), "new value");
 }
+
+#[test]
+fn typed_text_events_coalesce_but_caret_movement_starts_a_new_undo_step() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("")),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
+        .unwrap();
+    for ch in ["a", "🔥", "b"] {
+        ui.dispatch(
+            Input::Text {
+                session: ui.session(),
+                text: ch.into(),
+            },
+            &mut TestText,
+        );
+        settle(&mut ui, &mut TestText);
+    }
+    assert_eq!(ui.root().text(), "a🔥b");
+    key(&mut ui, &mut TestText, Key::Left);
+    settle(&mut ui, &mut TestText);
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "x".into(),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "a🔥xb");
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "a🔥b");
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "");
+}
 #[test]
 fn paragraph_is_shared_across_paint_only_theme_and_height_resize() {
     let mut ui = Ui::new(
@@ -1700,6 +1741,34 @@ fn moving_the_pointer_over_an_editor_does_not_drag_the_view_back_to_the_caret() 
         scrolled,
         "moving the pointer must not scroll the view back to the caret"
     );
+}
+
+#[test]
+fn horizontal_wheel_scroll_stops_at_the_texts_right_edge() {
+    let mut ui = Ui::new(
+        Element::leaf(
+            Editor::new("x".repeat(200))
+                .padding(0., 0.)
+                .restore(EditorState {
+                    wrap: false,
+                    ..EditorState::default()
+                }),
+        ),
+        Size::new(100., 50.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.dispatch(
+        Input::Scroll {
+            position: Point::new(20., 20.),
+            delta: Point::new(-100_000., 0.),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    let max = (ui.root().paragraph().unwrap().size.width - 100.).max(0.);
+    assert_eq!(ui.root().state().scroll.x, max);
 }
 
 #[test]

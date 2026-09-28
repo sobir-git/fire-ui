@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve CRLF and caret boundaries when moving editor lines; clamp horizontal
+  wheel scrolling, use shared scrollbar geometry, and reshape placeholders on
+  width changes. Consecutive typed characters now undo together.
 - Size loosely constrained centered flows to their children, and compute row
   baselines when an individual entry requests baseline alignment.
 - Republish the full derived button theme when its scale or other theme values change.
