@@ -14,7 +14,11 @@ pub trait RendererFactory: 'static {
 }
 /// A window drawing target. Fonts and text services are supplied by the application.
 pub trait Renderer {
-    /// Invoke paint with None for the whole window, or a clipped logical damage region.
+    /// Paint and present the window. `damage: None` requests a full repaint;
+    /// `Some(region)` repaints only that logical region. The host does not call
+    /// this method for a frame that has no damage and no OS redraw request.
+    /// Invoke `paint` with the same full/region choice after any renderer-side
+    /// enlargement needed for a recreated surface or antialiasing.
     fn render(
         &mut self,
         window: &Window,

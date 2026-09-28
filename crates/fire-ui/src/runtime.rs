@@ -1336,7 +1336,8 @@ impl<W: Widget> Ui<W> {
         };
         self.paint_dirty = true;
     }
-    /// Damage in window coordinates. None means no paint is pending.
+    /// Pending paint in window coordinates. None means no paint is needed;
+    /// a full repaint is represented by the entire window rectangle.
     pub fn paint_damage(&self) -> Option<Rect> {
         self.paint_dirty
             .then(|| self.damage.unwrap_or(Rect::from_size(self.size)))

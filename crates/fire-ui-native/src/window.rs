@@ -216,6 +216,7 @@ struct Host<W: Widget, F, R> {
     pointer: Point,
     pending_pointer: bool,
     next_frame: Instant,
+    redraw_requested: bool,
     modifiers: ModifiersState,
     composing: bool,
     ime_session: Option<u64>,
@@ -279,6 +280,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         pointer: Point::default(),
         pending_pointer: false,
         next_frame: Instant::now(),
+        redraw_requested: false,
         modifiers: ModifiersState::empty(),
         composing: false,
         ime_session: None,
@@ -300,6 +302,20 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
     host.error.map_or(Ok(()), Err)
 }
 impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W, F, R> {
+    fn frame_if_due(&mut self) {
+        let Some(s) = &mut self.state else { return };
+        if s.occluded || !s.ui.next_work().frame || Instant::now() < self.next_frame {
+            return;
+        }
+        let hz = s
+            .window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .unwrap_or(60_000)
+            .max(1_000);
+        self.next_frame = Instant::now() + Duration::from_secs_f64(1000. / hz as f64);
+        s.ui.frame(self.start.elapsed(), 256);
+    }
     fn service(&mut self) {
         let Some(s) = &mut self.state else { return };
         let now = self.start.elapsed();
@@ -529,6 +545,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                 self.state = Some(state);
                 self.service();
                 if let Some(s) = &self.state {
+                    self.redraw_requested = true;
                     s.window.request_redraw()
                 }
             }
@@ -743,6 +760,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     s.ui.window_visible(!occluded);
                     if !occluded {
                         s.ui.repaint();
+                        self.redraw_requested = true;
                         s.window.request_redraw()
                     }
                 }
@@ -752,6 +770,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     if size.width > 0 && size.height > 0 {
                         s.ui.resize(logical_size(size, s.window.scale_factor()));
                         s.resize_at = Some(Instant::now());
+                        self.redraw_requested = true;
                         s.window.request_redraw()
                     }
                 }
@@ -763,6 +782,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     let size = s.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         s.ui.resize(logical_size(size, scale_factor));
+                        self.redraw_requested = true;
                         s.window.request_redraw();
                     }
                 }
@@ -878,26 +898,20 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                 }
             }
             WindowEvent::RedrawRequested => {
+                let internal = std::mem::take(&mut self.redraw_requested);
                 self.service();
-                if let Some(s) = &mut self.state {
-                    if !s.occluded && Instant::now() >= self.next_frame {
-                        let hz = s
-                            .window
-                            .current_monitor()
-                            .and_then(|m| m.refresh_rate_millihertz())
-                            .unwrap_or(60_000)
-                            .max(1_000);
-                        self.next_frame =
-                            Instant::now() + Duration::from_secs_f64(1000. / hz as f64);
-                        s.ui.frame(self.start.elapsed(), 256);
-                    }
-                }
+                self.frame_if_due();
                 self.service();
                 if let Some(s) = &mut self.state {
                     if !s.occluded {
-                        if let Err(error) = render(s, self.options.background, self.profile) {
-                            self.error = Some(error);
-                            event_loop.exit();
+                        let plan = redraw_plan(s.ui.paint_damage(), internal);
+                        if plan != Redraw::Skip {
+                            if let Err(error) =
+                                render(s, self.options.background, plan, self.profile)
+                            {
+                                self.error = Some(error);
+                                event_loop.exit();
+                            }
                         }
                     }
                 }
@@ -907,6 +921,8 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_pointer();
+        self.service();
+        self.frame_if_due();
         self.service();
         if std::mem::take(&mut self.close_requested)
             && self.state.as_mut().is_none_or(|s| s.ui.request_close())
@@ -921,7 +937,8 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             .map(|s| s.ui.next_work())
             .unwrap_or_default();
         let visible = self.state.as_ref().is_some_and(|s| !s.occluded);
-        if visible && (work.paint || (work.frame && Instant::now() >= self.next_frame)) {
+        if visible && work.paint {
+            self.redraw_requested = true;
             self.state.as_ref().unwrap().window.request_redraw()
         }
         let mut deadline = work.deadline.map(|d| self.start + d);
@@ -1054,8 +1071,32 @@ fn create<W: Widget>(
         resize_at: None,
     })
 }
-fn render<W: Widget>(s: &mut State<W>, background: Color, profile: bool) -> Result<(), String> {
-    let damage = s.ui.paint_damage();
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Redraw {
+    Skip,
+    Full,
+    Region(Rect),
+}
+
+fn redraw_plan(damage: Option<Rect>, internal: bool) -> Redraw {
+    if !internal {
+        Redraw::Full
+    } else {
+        damage.map_or(Redraw::Skip, Redraw::Region)
+    }
+}
+
+fn render<W: Widget>(
+    s: &mut State<W>,
+    background: Color,
+    plan: Redraw,
+    profile: bool,
+) -> Result<(), String> {
+    let damage = match plan {
+        Redraw::Full => None,
+        Redraw::Region(region) => Some(region),
+        Redraw::Skip => return Ok(()),
+    };
     s.renderer
         .render(&s.window, background, damage, &mut |painter, region| {
             if let Some(region) = region {
@@ -1118,5 +1159,14 @@ mod tests {
         let physical = winit::dpi::PhysicalSize::new(800, 600);
         assert_eq!(logical_size(physical, 1.), Size::new(800., 600.));
         assert_eq!(logical_size(physical, 2.), Size::new(400., 300.));
+    }
+
+    #[test]
+    fn frame_only_redraw_skips_presentation_but_os_redraw_paints_full() {
+        let region = Rect::new(1., 2., 3., 4.);
+        assert_eq!(redraw_plan(None, true), Redraw::Skip);
+        assert_eq!(redraw_plan(Some(region), true), Redraw::Region(region));
+        assert_eq!(redraw_plan(None, false), Redraw::Full);
+        assert_eq!(redraw_plan(Some(region), false), Redraw::Full);
     }
 }

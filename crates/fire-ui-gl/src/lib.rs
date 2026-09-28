@@ -196,16 +196,18 @@ impl Renderer for Target {
             }
             let backing = s.backing.unwrap();
             let scale = window.scale_factor() as f32;
-            if let Some(damage) = if full {
-                Some(Rect::new(
-                    0.,
-                    0.,
-                    size.width as f32 / scale,
-                    size.height as f32 / scale,
-                ))
+            let full_damage = Rect::new(
+                0.,
+                0.,
+                size.width as f32 / scale,
+                size.height as f32 / scale,
+            );
+            let damage = if full {
+                full_damage
             } else {
-                damage
-            } {
+                damage.unwrap_or(full_damage)
+            };
+            {
                 // Round outwards and include antialiasing at the damage edge.
                 let x = (damage.x * scale - 2.).floor().max(0.);
                 let y = (damage.y * scale - 2.).floor().max(0.);
