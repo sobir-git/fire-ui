@@ -62,6 +62,7 @@ pub(crate) struct Effects {
     pub damage: Option<Rect>,
     pub layout: bool,
     pub semantics: bool,
+    pub emitted: bool,
     pub stop: bool,
     /// Children inserted by this callback, usable before the insertion commits.
     pub pending: Vec<Id>,
@@ -79,6 +80,7 @@ impl Effects {
             damage: None,
             layout: false,
             semantics: false,
+            emitted: false,
             stop: false,
             pending: vec![],
             split: false,
@@ -289,6 +291,7 @@ impl<W: Widget> Update<'_, W> {
         self.raw
             .mailbox()
             .push_reserved(Delivery::Output(id, payload), bytes);
+        self.raw.effects().emitted = true;
         Ok(())
     }
     pub fn remove<C: Widget>(&mut self, child: Child<C>) -> Result<(), Error> {
@@ -486,9 +489,9 @@ impl<W: Widget> Update<'_, W> {
         self.raw.effects().layout = true;
         self.repaint()
     }
-    /// Publish a changed accessible label, value, selection, state, or child list.
-    /// Paint-only changes do not need this; layout and focus changes are tracked
-    /// by the runtime.
+    /// Publish a semantic change from a timer or frame callback that only repaints.
+    /// Other callbacks automatically publish semantics when they request paint,
+    /// layout, a mutation, or emit an output.
     pub fn semantics_changed(&mut self) {
         self.raw.effects().semantics = true;
     }

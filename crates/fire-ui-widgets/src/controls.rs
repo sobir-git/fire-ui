@@ -220,7 +220,6 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
             ButtonCommand::Label(label) => {
                 if self.label != label {
                     self.label = label;
-                    cx.semantics_changed();
                     cx.repaint()
                 }
             }
@@ -238,7 +237,6 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
                     let _ = cx.release(pointer);
                 }
                 self.publish(cx);
-                cx.semantics_changed();
                 cx.repaint()
             }
         }

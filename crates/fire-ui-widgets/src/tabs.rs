@@ -44,7 +44,6 @@ impl Widget for Tab {
         if self.selected != selected {
             self.selected = selected;
             self.publish(cx);
-            cx.semantics_changed();
             cx.repaint()
         }
     }

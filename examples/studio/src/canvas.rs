@@ -35,7 +35,6 @@ impl Widget for Playground {
             return;
         }
         self.running = running;
-        cx.semantics_changed();
         if running {
             cx.request_frame()
         } else {

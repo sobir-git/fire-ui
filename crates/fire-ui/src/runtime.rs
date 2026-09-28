@@ -410,6 +410,7 @@ impl<W: Widget> Ui<W> {
         id: Id,
         cleanup: bool,
         notifying: bool,
+        passive: bool,
         call: impl FnOnce(&mut dyn Erased, &mut RawUpdate<'_>),
     ) -> bool {
         if !cleanup && !self.tree.live(id) {
@@ -432,7 +433,11 @@ impl<W: Widget> Ui<W> {
         };
         call(widget.as_mut(), &mut cx);
         let effects = cx.effects;
-        if effects.semantics {
+        if effects.semantics
+            || effects.layout
+            || !effects.mutations.is_empty()
+            || (!passive && (effects.repaint || effects.emitted))
+        {
             self.semantic_revision += 1;
         }
         let stop = effects.stop;
@@ -447,7 +452,7 @@ impl<W: Widget> Ui<W> {
     }
     fn notice(&mut self, id: Id, event: Lifecycle) {
         let cleanup = self.tree.get(id).is_some_and(|n| n.retiring);
-        self.invoke(id, cleanup, true, |w, cx| w.lifecycle(cx, event));
+        self.invoke(id, cleanup, true, false, |w, cx| w.lifecycle(cx, event));
     }
     fn apply_effects(&mut self, id: Id, mut effects: Effects) {
         if effects.layout {
@@ -808,7 +813,9 @@ impl<W: Widget> Ui<W> {
         self.reconcile();
         for k in &ids {
             if self.tree.get(*k).is_some_and(|n| n.mounted) {
-                self.invoke(*k, true, false, |w, cx| w.lifecycle(cx, Lifecycle::Unmount));
+                self.invoke(*k, true, false, false, |w, cx| {
+                    w.lifecycle(cx, Lifecycle::Unmount)
+                });
             }
         }
         for k in ids {
@@ -852,7 +859,9 @@ impl<W: Widget> Ui<W> {
                         let n = self.tree.get_mut(id).unwrap();
                         n.published = Some(visible);
                         n.published_anchor = anchor;
-                        self.invoke(id, false, false, |w, cx| w.lifecycle(cx, Lifecycle::Mount));
+                        self.invoke(id, false, false, false, |w, cx| {
+                            w.lifecycle(cx, Lifecycle::Mount)
+                        });
                         self.reconcile()
                     }
                 }
@@ -872,7 +881,7 @@ impl<W: Widget> Ui<W> {
                             .push_reserved(Delivery::Command(id, payload, ticket), bytes);
                         continue;
                     }
-                    self.invoke(id, false, false, |w, cx| w.update(cx, payload));
+                    self.invoke(id, false, false, false, |w, cx| w.update(cx, payload));
                 }
                 Delivery::Output(id, payload) => {
                     // `emit` applied any map along the bubble path and reserved
@@ -943,7 +952,7 @@ impl<W: Widget> Ui<W> {
         if !self.tree.get(self.root).is_some_and(|n| n.mounted) {
             return;
         }
-        self.invoke(self.root, false, false, |w, cx| {
+        self.invoke(self.root, false, false, false, |w, cx| {
             w.lifecycle(cx, Lifecycle::Moved { x, y })
         });
     }
@@ -1068,7 +1077,7 @@ impl<W: Widget> Ui<W> {
             }
             self.cancel_timer(id, timer);
             if self.tree.get(id).is_some_and(|n| n.mounted && !n.retiring) {
-                self.invoke(id, false, false, |w, cx| w.timer(cx, timer));
+                self.invoke(id, false, false, true, |w, cx| w.timer(cx, timer));
             }
         }
     }
@@ -1084,7 +1093,7 @@ impl<W: Widget> Ui<W> {
         let selected: Vec<_> = self.frames.drain(..count).collect();
         for id in selected {
             if self.frame_set.remove(&id) && self.tree.active(id) {
-                self.invoke(id, false, false, |w, cx| w.frame(cx, time));
+                self.invoke(id, false, false, true, |w, cx| w.frame(cx, time));
             }
         }
     }
@@ -1153,7 +1162,7 @@ impl<W: Widget> Ui<W> {
         self.layout(text);
         if matches!(input, Input::FileDropped(_)) {
             if self.tree.get(self.root).is_some_and(|n| n.mounted) {
-                self.invoke(self.root, false, false, |w, cx| {
+                self.invoke(self.root, false, false, false, |w, cx| {
                     w.input(cx, Phase::Target, &input)
                 });
             }
@@ -1283,7 +1292,7 @@ impl<W: Widget> Ui<W> {
                 continue;
             };
             let input = input.local(transform);
-            if self.invoke(id, false, false, |w, cx| w.input(cx, phase, &input)) {
+            if self.invoke(id, false, false, false, |w, cx| w.input(cx, phase, &input)) {
                 return true;
             }
         }
@@ -1319,7 +1328,7 @@ impl<W: Widget> Ui<W> {
             return true;
         }
         let mut allowed = true;
-        self.invoke(self.root, false, false, |w, cx| {
+        self.invoke(self.root, false, false, false, |w, cx| {
             allowed = w.close_requested(cx)
         });
         allowed
@@ -1554,7 +1563,7 @@ impl<W: Widget> Ui<W> {
                 | SemanticAction::SetSelection { .. }
         );
         let mut result = Err(SemanticError::Unavailable);
-        self.invoke(id, false, false, |w, cx| {
+        self.invoke(id, false, false, false, |w, cx| {
             result = w.accessibility(cx, action)
         });
         if result.is_ok() && restart_ime && self.focus == Some(id) {
@@ -1602,7 +1611,7 @@ impl<W: Widget> Ui<W> {
         };
         let key = child.key.clone().ok_or(SemanticError::Unsupported)?;
         let mut result = Err(SemanticError::Unavailable);
-        self.invoke(parent, false, false, |w, cx| {
+        self.invoke(parent, false, false, false, |w, cx| {
             result = w.accessibility(cx, SemanticAction::ActivateChild { key })
         });
         result

@@ -11,15 +11,12 @@ impl Widget for SemanticProbe {
     fn update(&mut self, cx: &mut Update<'_, Self>, change: bool) {
         if change {
             self.label = "changed";
-            cx.semantics_changed();
-        } else {
-            cx.repaint();
         }
+        cx.repaint();
     }
-    fn input(&mut self, cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
+    fn input(&mut self, _cx: &mut Update<'_, Self>, phase: Phase, input: &Input) {
         if phase == Phase::Target && matches!(input, Input::Pointer { .. }) {
             self.moves += 1;
-            cx.repaint();
         }
     }
     fn semantics(&self) -> Semantics {
@@ -32,7 +29,7 @@ impl Widget for SemanticProbe {
 }
 
 #[test]
-fn pointer_and_paint_only_callbacks_do_not_rebuild_semantics() {
+fn inert_pointer_moves_do_not_rebuild_semantics_but_updates_do() {
     let mut ui = Ui::new(
         Element::leaf(SemanticProbe {
             label: "same",
@@ -58,11 +55,41 @@ fn pointer_and_paint_only_callbacks_do_not_rebuild_semantics() {
     assert_eq!(ui.semantic_revision(), revision);
     ui.send(false).unwrap();
     ui.pump(100, |v| match v {}, |_| {});
-    assert_eq!(ui.semantic_revision(), revision);
+    assert!(ui.semantic_revision() > revision);
+    let revision = ui.semantic_revision();
     ui.send(true).unwrap();
     ui.pump(100, |v| match v {}, |_| {});
     assert!(ui.semantic_revision() > revision);
     assert_eq!(ui.semantics()[0].semantics.label, "changed");
+}
+
+struct FramePaint;
+impl Widget for FramePaint {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            cx.request_frame();
+        }
+    }
+    fn frame(&mut self, cx: &mut Update<'_, Self>, _: FrameTime) {
+        cx.repaint();
+    }
+}
+
+#[test]
+fn frame_repaint_does_not_rebuild_semantics() {
+    let mut ui = Ui::new(
+        Element::leaf(FramePaint),
+        Size::new(100., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+    let revision = ui.semantic_revision();
+    ui.frame(std::time::Duration::from_millis(16), 100);
+    assert_eq!(ui.semantic_revision(), revision);
 }
 
 struct OrderLeaf(&'static str);

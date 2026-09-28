@@ -1177,7 +1177,6 @@ impl<D: Document> Editor<D> {
     fn changed(&mut self, cx: &mut Update<'_, Self>, before: u64, reveal: bool) {
         // This path can edit the document, move the caret or change selection.
         // Hover and blink paths never reach it.
-        cx.semantics_changed();
         if std::mem::take(&mut self.limit_reached) {
             let _ = cx.emit(EditorOutput::LimitReached);
         }
@@ -1204,12 +1203,8 @@ impl<D: Document> Editor<D> {
     fn drag_scrollbar(&mut self, cx: &mut Update<'_, Self>, position: Point, grab: f32) {
         if let (Some(bar), Some(p)) = (self.scrollbar(cx.bounds()), &self.paragraph) {
             let max = (p.size.height + 2. * self.insets().y - cx.bounds().height).max(0.);
-            let before = self.scroll.y;
             self.scroll.y = bar.offset_for(position.y - grab, max);
             self.report_state(cx);
-            if self.scroll.y != before {
-                cx.semantics_changed();
-            }
             cx.repaint();
         }
     }
@@ -1861,7 +1856,6 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Scroll { delta, .. } if self.multiline => {
                 if let Some(p) = &self.paragraph {
-                    let before = self.scroll;
                     let max = (p.size.height + 2. * self.insets().y - cx.bounds().height).max(0.);
                     self.scroll.y = (self.scroll.y - delta.y).clamp(0., max);
                     if !self.wrap {
@@ -1872,9 +1866,6 @@ impl<D: Document> Widget for Editor<D> {
                         )
                     }
                     self.report_state(cx);
-                    if self.scroll != before {
-                        cx.semantics_changed();
-                    }
                     cx.repaint();
                     cx.stop();
                 }

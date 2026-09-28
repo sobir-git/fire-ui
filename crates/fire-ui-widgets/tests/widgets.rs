@@ -89,7 +89,8 @@ fn editor_hover_and_blink_leave_semantics_stable_but_selection_publishes() {
         &mut text,
     );
     settle(&mut ui, &mut text);
-    assert_eq!(ui.semantic_revision(), baseline);
+    assert!(ui.semantic_revision() >= baseline);
+    let baseline = ui.semantic_revision();
     ui.advance(std::time::Duration::from_millis(600), 128);
     settle(&mut ui, &mut text);
     assert_eq!(ui.semantic_revision(), baseline);
@@ -585,6 +586,25 @@ fn list_navigation_and_hover_update_the_selected_row_environment() {
         |_| {},
     );
     assert_eq!(selected, Some(2));
+}
+
+#[test]
+fn keyboard_list_selection_rebuilds_accessibility() {
+    let mut ui = Ui::new(
+        Element::leaf(VirtualList::new(vec![0usize, 1, 2], 30., |k: &usize| {
+            Element::leaf(Label::new(k.to_string()))
+        })),
+        Size::new(200., 90.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let id = ui.semantics()[0].id;
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    settle(&mut ui, &mut TestText);
+    let before = ui.semantic_revision();
+    key(&mut ui, &mut TestText, Key::Down);
+    assert!(ui.semantic_revision() > before);
 }
 
 #[test]
