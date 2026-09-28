@@ -92,7 +92,7 @@ pub(crate) struct RawUpdate<'a> {
     pub focused: bool,
     pub cleanup: bool,
     pub notifying: bool,
-    pub max_nodes: usize,
+    pub limits: Limits,
     pub inserted: usize,
 }
 impl RawUpdate<'_> {
@@ -117,6 +117,7 @@ trait UpdateAccess {
     fn focused(&self) -> bool;
     fn cleanup(&self) -> bool;
     fn pending(&self, id: Id) -> bool;
+    fn limits(&self) -> Limits;
     fn mutate(&mut self, mutation: Mutation) -> Result<(), (Error, Mutation)>;
 }
 impl UpdateAccess for RawUpdate<'_> {
@@ -144,11 +145,14 @@ impl UpdateAccess for RawUpdate<'_> {
     fn pending(&self, id: Id) -> bool {
         self.effects.pending.contains(&id)
     }
+    fn limits(&self) -> Limits {
+        self.limits
+    }
     fn mutate(&mut self, mutation: Mutation) -> Result<(), (Error, Mutation)> {
         if self.cleanup {
             return Err((Error::Stale, mutation));
         }
-        if self.effects.mutations.len() >= 64 {
+        if self.effects.mutations.len() >= self.limits.mutations_per_callback {
             return Err((Error::Full, mutation));
         }
         let (mounts, bytes) = match &mutation {
@@ -156,7 +160,7 @@ impl UpdateAccess for RawUpdate<'_> {
             Mutation::Send(_, _, bytes) => (0, *bytes),
             _ => (0, 0),
         };
-        if self.tree.len() + self.mailbox.reserved_nodes + mounts > self.max_nodes {
+        if self.tree.len() + self.mailbox.reserved_nodes + mounts > self.limits.nodes {
             return Err((Error::Full, mutation));
         }
         let deferred = usize::from(self.notifying && self.effects.mutations.is_empty());
@@ -253,29 +257,36 @@ impl<W: Widget> Update<'_, W> {
         if self.raw.cleanup() {
             return Err((Error::Stale, output));
         }
-        let me = self.raw.me();
-        let mapped = self
-            .raw
-            .tree()
-            .get(me)
-            .and_then(|n| n.output.as_ref())
-            .and_then(|map| match map {
-                OutputMap::Map(map) => Some(map(&output)),
-                OutputMap::Forward | OutputMap::Bubble => None,
-            });
-        let bytes = mapped
-            .as_ref()
-            .map_or_else(|| output.bytes(), |(_, bytes)| *bytes);
+        let mut id = self.raw.me();
+        let mut bytes = output.bytes();
+        let mut mapped = None;
+        // A bubble can pass through decorators before its owner's map expands
+        // the payload. Reserve that final cost while the original is still owned.
+        loop {
+            let Some(node) = self.raw.tree().get(id) else {
+                break;
+            };
+            match node.output.as_ref() {
+                Some(OutputMap::Map(map)) => {
+                    let (payload, cost) = map(&output);
+                    mapped = Some(payload);
+                    bytes = cost;
+                    break;
+                }
+                Some(OutputMap::Bubble) => {
+                    let Some(parent) = node.parent else { break };
+                    id = parent;
+                }
+                Some(OutputMap::Forward) | None => break,
+            }
+        }
         if !self.raw.mailbox().reserve(1, bytes) {
             return Err((Error::Full, output));
         }
-        let payload = mapped.map_or_else(
-            || Box::new(output) as crate::widget::Payload,
-            |(payload, _)| payload,
-        );
+        let payload = mapped.unwrap_or_else(|| Box::new(output) as crate::widget::Payload);
         self.raw
             .mailbox()
-            .push_reserved(Delivery::Output(me, payload), bytes);
+            .push_reserved(Delivery::Output(id, payload), bytes);
         Ok(())
     }
     pub fn remove<C: Widget>(&mut self, child: Child<C>) -> Result<(), Error> {
@@ -429,7 +440,9 @@ impl<W: Widget> Update<'_, W> {
                 live.remove(slot);
             }
         }
-        if self.raw.effects().tasks.len() >= 128 || (live.len() >= 64 && !live.contains_key(&slot))
+        let limits = self.raw.limits();
+        if self.raw.effects().tasks.len() >= limits.task_changes_per_callback
+            || (live.len() >= limits.tasks_per_node && !live.contains_key(&slot))
         {
             return Err(Error::Full);
         }
@@ -502,7 +515,10 @@ impl<W: Widget> Update<'_, W> {
                 live.remove(t);
             }
         }
-        if self.raw.effects().timers.len() >= 128 || (live.len() >= 64 && !live.contains(&timer)) {
+        let limits = self.raw.limits();
+        if self.raw.effects().timers.len() >= limits.timer_changes_per_callback
+            || (live.len() >= limits.timers_per_node && !live.contains(&timer))
+        {
             return Err(Error::Full);
         }
         let at = self.now().saturating_add(delay);

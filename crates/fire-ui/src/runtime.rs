@@ -18,6 +18,11 @@ pub struct Limits {
     pub nodes: usize,
     pub messages: usize,
     pub message_bytes: usize,
+    pub mutations_per_callback: usize,
+    pub timers_per_node: usize,
+    pub tasks_per_node: usize,
+    pub timer_changes_per_callback: usize,
+    pub task_changes_per_callback: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -25,6 +30,11 @@ impl Default for Limits {
             nodes: 8192,
             messages: 16384,
             message_bytes: 4 * 1024 * 1024,
+            mutations_per_callback: 64,
+            timers_per_node: 64,
+            tasks_per_node: 64,
+            timer_changes_per_callback: 128,
+            task_changes_per_callback: 128,
         }
     }
 }
@@ -49,6 +59,7 @@ pub struct Stats {
     pub geometries: u64,
     pub painted: u64,
     pub stale: u64,
+    pub overloaded: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct PasteToken {
@@ -175,6 +186,7 @@ pub struct Ui<W: Widget> {
     semantic_revision: u64,
     painted: u64,
     stale: u64,
+    overloaded: u64,
     marker: PhantomData<fn(W) -> W>,
 }
 impl<W: Widget> Ui<W> {
@@ -232,6 +244,7 @@ impl<W: Widget> Ui<W> {
             semantic_revision: 0,
             painted: 0,
             stale: 0,
+            overloaded: 0,
             marker: PhantomData,
         })
     }
@@ -306,6 +319,7 @@ impl<W: Widget> Ui<W> {
             geometries: self.tree.geometry_count,
             painted: self.painted,
             stale: self.stale,
+            overloaded: self.overloaded,
         }
     }
     pub fn session(&self) -> u64 {
@@ -413,7 +427,7 @@ impl<W: Widget> Ui<W> {
             focused: self.focus == Some(id),
             cleanup,
             notifying,
-            max_nodes: self.limits.nodes,
+            limits: self.limits,
             inserted: 0,
         };
         call(widget.as_mut(), &mut cx);
@@ -858,30 +872,20 @@ impl<W: Widget> Ui<W> {
                     self.invoke(id, false, false, |w, cx| w.update(cx, payload));
                 }
                 Delivery::Output(id, payload) => {
-                    // `emit` already applied the emitting node's map. A bubbling
-                    // decorator has no map of its own, so the payload becomes its
-                    // owner's output and climbs one more level, where that owner's
-                    // map still has to be applied.
+                    // `emit` applied any map along the bubble path and reserved
+                    // the final command's cost before enqueuing this output.
                     let mut id = id;
-                    let mut payload = payload;
-                    let mut bytes = bytes;
-                    // `emit` mapped the first hop; each bubbled hop still needs its own.
-                    let mut mapped = true;
+                    let mut payload = Some(payload);
                     loop {
                         let Some(n) = self.tree.get(id).filter(|n| !n.retiring) else {
                             self.stale += 1;
                             break;
                         };
-                        if !mapped {
-                            if let Some(OutputMap::Map(map)) = n.output.as_ref() {
-                                let (remapped, cost) = map(&*payload);
-                                payload = remapped;
-                                bytes = cost;
-                            }
-                        }
                         let Some(parent) = n.parent else {
                             output(
                                 *payload
+                                    .take()
+                                    .unwrap()
                                     .downcast::<W::Output>()
                                     .expect("private root output type invariant"),
                             );
@@ -891,15 +895,16 @@ impl<W: Widget> Ui<W> {
                             None => break,
                             Some(OutputMap::Bubble) => {
                                 id = parent;
-                                mapped = false;
                             }
                             Some(_) => {
                                 if !self.mailbox.reserve(1, bytes) {
-                                    self.stale += 1;
+                                    self.overloaded += 1;
                                     break;
                                 }
-                                self.mailbox
-                                    .push_reserved(Delivery::Command(parent, payload, None), bytes);
+                                self.mailbox.push_reserved(
+                                    Delivery::Command(parent, payload.take().unwrap(), None),
+                                    bytes,
+                                );
                                 break;
                             }
                         }
@@ -932,6 +937,9 @@ impl<W: Widget> Ui<W> {
         }
     }
     pub fn window_position(&mut self, x: i32, y: i32) {
+        if !self.tree.get(self.root).is_some_and(|n| n.mounted) {
+            return;
+        }
         self.invoke(self.root, false, false, |w, cx| {
             w.lifecycle(cx, Lifecycle::Moved { x, y })
         });
@@ -1141,9 +1149,11 @@ impl<W: Widget> Ui<W> {
     pub fn dispatch(&mut self, input: Input, text: &mut dyn TextEngine) {
         self.layout(text);
         if matches!(input, Input::FileDropped(_)) {
-            self.invoke(self.root, false, false, |w, cx| {
-                w.input(cx, Phase::Target, &input)
-            });
+            if self.tree.get(self.root).is_some_and(|n| n.mounted) {
+                self.invoke(self.root, false, false, |w, cx| {
+                    w.input(cx, Phase::Target, &input)
+                });
+            }
             return;
         }
         if !self.window_focused {
@@ -1178,12 +1188,11 @@ impl<W: Widget> Ui<W> {
                 _ => None,
             };
             captured.or_else(|| {
-                let mut overlays: Vec<_> = self
+                let overlays: Vec<_> = self
                     .tree
                     .ids()
                     .filter(|id| self.tree.get(*id).is_some_and(|n| n.anchor.is_some()))
                     .collect();
-                overlays.sort();
                 overlays
                     .iter()
                     .rev()
@@ -1278,7 +1287,7 @@ impl<W: Widget> Ui<W> {
         false
     }
     fn cycle_focus(&mut self, reverse: bool) {
-        let mut order: Vec<_> = self
+        let order: Vec<_> = self
             .tree
             .ids()
             .filter(|id| {
@@ -1290,7 +1299,6 @@ impl<W: Widget> Ui<W> {
                         .is_some_and(|w| w.focusable())
             })
             .collect();
-        order.sort();
         if order.is_empty() {
             return;
         }
@@ -1304,6 +1312,9 @@ impl<W: Widget> Ui<W> {
         self.change_focus(Some(order[next]));
     }
     pub fn request_close(&mut self) -> bool {
+        if !self.tree.get(self.root).is_some_and(|n| n.mounted) {
+            return true;
+        }
         let mut allowed = true;
         self.invoke(self.root, false, false, |w, cx| {
             allowed = w.close_requested(cx)
@@ -1386,12 +1397,11 @@ impl<W: Widget> Ui<W> {
             &mut self.painted,
             region,
         );
-        let mut overlays: Vec<_> = self
+        let overlays: Vec<_> = self
             .tree
             .ids()
             .filter(|id| self.tree.get(*id).is_some_and(|n| n.anchor.is_some()))
             .collect();
-        overlays.sort();
         for id in overlays {
             paint(
                 &self.tree,
@@ -1416,8 +1426,7 @@ impl<W: Widget> Ui<W> {
         self.semantic_revision
     }
     pub fn semantics(&self) -> Vec<SemanticNode> {
-        let mut ids: Vec<_> = self.tree.ids().collect();
-        ids.sort();
+        let ids: Vec<_> = self.tree.ids().collect();
         let mut nodes = vec![];
         for id in ids.into_iter().filter(|id| self.eligible(*id)) {
             let Some(n) = self.tree.get(id) else { continue };

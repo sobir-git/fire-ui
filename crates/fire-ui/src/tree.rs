@@ -105,7 +105,21 @@ impl Tree {
         self.get(id).is_some_and(|n| !n.retiring)
     }
     pub fn ids(&self) -> impl Iterator<Item = Id> + '_ {
-        self.index.keys().copied()
+        let mut roots: Vec<_> = self
+            .index
+            .keys()
+            .copied()
+            .filter(|id| self.get(*id).is_some_and(|n| n.parent.is_none()))
+            .collect();
+        roots.sort();
+        let mut stack: Vec<_> = roots.into_iter().rev().collect();
+        let mut order = Vec::with_capacity(self.len());
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.get(id) else { continue };
+            order.push(id);
+            stack.extend(node.children.iter().rev().copied());
+        }
+        order.into_iter()
     }
     pub fn descendant(&self, mut id: Id, parent: Id) -> bool {
         loop {
@@ -308,10 +322,12 @@ pub struct Layout<'a> {
 
 impl Layout<'_> {
     pub fn measure<W: Widget>(&mut self, child: Child<W>, limits: Constraints) -> Metrics {
-        assert!(
-            self.tree
-                .get(child.id)
-                .is_some_and(|n| n.parent == Some(self.me)),
+        let Some(node) = self.tree.get(child.id) else {
+            return Metrics::default();
+        };
+        assert_eq!(
+            node.parent,
+            Some(self.me),
             "Layout can only measure owned children"
         );
         self.tree.measure(child.id, limits, self.text)
@@ -320,11 +336,11 @@ impl Layout<'_> {
         self.transform(child, Transform::translate(position.x, position.y), true)
     }
     pub fn transform<W: Widget>(&mut self, child: Child<W>, transform: Transform, clip: bool) {
-        assert!(self
-            .tree
-            .get(child.id)
-            .is_some_and(|n| n.parent == Some(self.me)));
-        let anchor = self.tree.get(child.id).unwrap().anchor;
+        let Some(node) = self.tree.get(child.id) else {
+            return;
+        };
+        assert_eq!(node.parent, Some(self.me));
+        let anchor = node.anchor;
         self.tree.place(child.id, transform, clip, anchor)
     }
     pub fn paragraph(&mut self, request: TextRequest) -> std::sync::Arc<Paragraph> {
@@ -368,18 +384,17 @@ impl Paint<'_> {
 }
 impl Layout<'_> {
     pub fn measure_child(&mut self, child: LayoutChild, limits: Constraints) -> Metrics {
-        assert!(self
-            .tree
-            .get(child.0)
-            .is_some_and(|n| n.parent == Some(self.me)));
+        let Some(node) = self.tree.get(child.0) else {
+            return Metrics::default();
+        };
+        assert_eq!(node.parent, Some(self.me));
         self.tree.measure(child.0, limits, self.text)
     }
     pub fn place_child(&mut self, child: LayoutChild, position: Point) {
-        assert!(self
-            .tree
-            .get(child.0)
-            .is_some_and(|n| n.parent == Some(self.me)));
-        let n = self.tree.get(child.0).unwrap();
+        let Some(n) = self.tree.get(child.0) else {
+            return;
+        };
+        assert_eq!(n.parent, Some(self.me));
         self.tree.place(
             child.0,
             Transform::translate(position.x, position.y),

@@ -1,6 +1,242 @@
 use fire_ui::*;
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
+struct OrderLeaf(&'static str);
+impl Widget for OrderLeaf {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn focusable(&self) -> bool {
+        true
+    }
+    fn semantics(&self) -> Semantics {
+        Semantics {
+            role: Role::Button,
+            label: self.0.into(),
+            ..Semantics::default()
+        }
+    }
+}
+struct OrderRoot {
+    first: Child<OrderLeaf>,
+    second: Child<OrderLeaf>,
+}
+impl Widget for OrderRoot {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        for child in [self.first, self.second] {
+            cx.measure(child, Constraints::loose(Size::new(20., 20.)));
+        }
+        cx.place(self.first, Point::default());
+        cx.place(self.second, Point::new(30., 0.));
+        Metrics::new(c.max)
+    }
+}
+
+#[test]
+fn semantics_and_tab_order_follow_child_order_not_creation_order() {
+    let created_first = Element::leaf(OrderLeaf("second"));
+    let created_second = Element::leaf(OrderLeaf("first"));
+    let root = Element::build(|c| OrderRoot {
+        first: c.add(created_second),
+        second: c.add(created_first),
+    });
+    let mut ui = Ui::new(root, Size::new(100., 40.), Limits::default()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+    let labels: Vec<_> = ui
+        .semantics()
+        .into_iter()
+        .filter(|n| n.semantics.role == Role::Button)
+        .map(|n| n.semantics.label)
+        .collect();
+    assert_eq!(labels, ["first", "second"]);
+    ui.dispatch(
+        Input::Key {
+            key: Key::Tab,
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        },
+        &mut TestText,
+    );
+    assert!(ui.focused(ui.root().first));
+}
+
+struct OverlayLeaf {
+    name: &'static str,
+    hits: Rc<RefCell<Vec<&'static str>>>,
+}
+impl Widget for OverlayLeaf {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn layout(&mut self, _: &mut Layout<'_>, _: Constraints) -> Metrics {
+        Metrics::new(Size::new(20., 20.))
+    }
+    fn input(&mut self, _: &mut Update<'_, Self>, phase: Phase, input: &Input) {
+        if phase == Phase::Target && matches!(input, Input::Button { down: true, .. }) {
+            self.hits.borrow_mut().push(self.name);
+        }
+    }
+}
+struct OverlayOrderRoot {
+    first: Child<OverlayLeaf>,
+    last: Child<OverlayLeaf>,
+}
+impl Widget for OverlayOrderRoot {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            cx.anchor(self.first, Anchor::<OverlayLeaf>::Window)
+                .unwrap();
+            cx.anchor(self.last, Anchor::<OverlayLeaf>::Window).unwrap();
+        }
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        cx.overlay(c)
+    }
+}
+
+#[test]
+fn overlay_hit_order_follows_tree_order() {
+    let hits: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let created_first = Element::leaf(OverlayLeaf {
+        name: "last",
+        hits: hits.clone(),
+    });
+    let created_second = Element::leaf(OverlayLeaf {
+        name: "first",
+        hits: hits.clone(),
+    });
+    let root = Element::build(|c| OverlayOrderRoot {
+        first: c.add(created_second),
+        last: c.add(created_first),
+    });
+    let mut ui = Ui::new(root, Size::new(100., 40.), Limits::default()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+    ui.dispatch(
+        Input::Button {
+            pointer: 0,
+            button: 1,
+            down: true,
+            position: Point::new(5., 5.),
+        },
+        &mut TestText,
+    );
+    assert_eq!(&*hits.borrow(), &["last"]);
+}
+
+struct RemovedLayoutChild {
+    child: Child<Empty>,
+}
+impl Widget for RemovedLayoutChild {
+    type Command = ();
+    type Output = Infallible;
+    fn update(&mut self, cx: &mut Update<'_, Self>, _: ()) {
+        cx.remove(self.child).unwrap();
+    }
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        let measured = cx.measure(self.child, c);
+        cx.place(self.child, Point::default());
+        assert_eq!(measured.size, Size::ZERO);
+        Metrics::new(c.max)
+    }
+}
+
+#[test]
+fn layout_skips_a_child_handle_after_removal() {
+    let root = Element::build(|c| RemovedLayoutChild {
+        child: c.add(Element::leaf(Empty)),
+    });
+    let mut ui = Ui::new(root, Size::new(100., 40.), Limits::default()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.send(()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.layout(&mut TestText);
+}
+
+struct EarlyRoot(Rc<RefCell<Vec<&'static str>>>);
+impl Widget for EarlyRoot {
+    type Command = Infallible;
+    type Output = Infallible;
+    fn close_requested(&mut self, _: &mut Update<'_, Self>) -> bool {
+        self.0.borrow_mut().push("close");
+        true
+    }
+    fn lifecycle(&mut self, _: &mut Update<'_, Self>, event: Lifecycle) {
+        if matches!(event, Lifecycle::Moved { .. }) {
+            self.0.borrow_mut().push("moved");
+        }
+    }
+    fn input(&mut self, _: &mut Update<'_, Self>, _: Phase, input: &Input) {
+        if matches!(input, Input::FileDropped(_)) {
+            self.0.borrow_mut().push("file");
+        }
+    }
+}
+
+#[test]
+fn root_callbacks_wait_until_mount() {
+    let calls: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let mut ui = Ui::new(
+        Element::leaf(EarlyRoot(calls.clone())),
+        Size::new(100., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(ui.request_close());
+    ui.window_position(1, 2);
+    ui.dispatch(Input::FileDropped("file.txt".into()), &mut TestText);
+    assert!(calls.borrow().is_empty());
+    ui.pump(100, |v| match v {}, |_| {});
+    assert!(ui.request_close());
+    assert_eq!(&*calls.borrow(), &["close"]);
+}
+
+struct LimitProbe(Rc<RefCell<Vec<bool>>>);
+impl Widget for LimitProbe {
+    type Command = ();
+    type Output = Infallible;
+    fn update(&mut self, cx: &mut Update<'_, Self>, _: ()) {
+        let mut result = self.0.borrow_mut();
+        result.push(cx.insert(Element::leaf(Empty), |v| match *v {}).is_ok());
+        result.push(cx.insert(Element::leaf(Empty), |v| match *v {}).is_ok());
+        result.push(
+            cx.after(Timer::new(), std::time::Duration::from_secs(1))
+                .is_ok(),
+        );
+        result.push(
+            cx.after(Timer::new(), std::time::Duration::from_secs(1))
+                .is_ok(),
+        );
+        result.push(cx.replace_task(TaskSlot::new()).is_ok());
+        result.push(cx.replace_task(TaskSlot::new()).is_ok());
+    }
+}
+
+#[test]
+fn callback_and_node_limits_are_configurable() {
+    let results: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let mut ui = Ui::new(
+        Element::leaf(LimitProbe(results.clone())),
+        Size::new(100., 40.),
+        Limits {
+            mutations_per_callback: 1,
+            timers_per_node: 1,
+            tasks_per_node: 1,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    ui.send(()).unwrap();
+    ui.pump(100, |v| match v {}, |_| {});
+    assert_eq!(&*results.borrow(), &[true, false, true, false, true, false]);
+}
+
 type Log = Rc<RefCell<Vec<(usize, Lifecycle)>>>;
 
 struct Probe {

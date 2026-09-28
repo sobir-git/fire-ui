@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use ownership-tree order for focus, semantics, overlays, and lifecycle notices;
+  ignore removed children during layout and defer root callbacks until mount.
+  Reserve mapped bubbled-output bytes up front, report overload separately from
+  stale delivery, and expose callback, timer, and task caps through `Limits`.
 - Clamp AT-SPI delete, cut, and copy ranges to Unicode text length; negative end
   offsets select through the end.
 - Deliver synthetic key releases on focus loss and read keyboard paste off the UI

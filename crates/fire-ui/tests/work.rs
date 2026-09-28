@@ -224,6 +224,49 @@ impl Widget for Source {
 struct Sink {
     received: Vec<String>,
 }
+
+struct BubbleSource {
+    child: Child<Source>,
+}
+impl Widget for BubbleSource {
+    type Command = Infallible;
+    type Output = Original;
+    fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
+        cx.measure(self.child, c)
+    }
+}
+
+#[test]
+fn bubbled_output_reserves_its_eventual_mapped_cost() {
+    let rejected: Rc<RefCell<Option<(Error, Original)>>> = Rc::default();
+    let source = Element::build(|children| BubbleSource {
+        child: children.bubble(Element::leaf(Source {
+            original: Some(Original("x".into())),
+            rejected: rejected.clone(),
+        })),
+    });
+    let element = Element::build(|children| {
+        children.connect(source, |value| value.0.repeat(100));
+        Sink { received: vec![] }
+    });
+    let mut ui = Ui::new(
+        element,
+        Size::new(20., 20.),
+        Limits {
+            message_bytes: 64,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    drain(&mut ui);
+    assert_eq!(
+        rejected.borrow().as_ref().map(|(error, _)| *error),
+        Some(Error::Full)
+    );
+    assert!(ui.root().received.is_empty());
+    assert_eq!(ui.stats().stale, 0);
+    assert_eq!(ui.stats().overloaded, 0);
+}
 impl Widget for Sink {
     type Command = String;
     type Output = Infallible;
