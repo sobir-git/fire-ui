@@ -946,6 +946,13 @@ impl<W: Widget> Ui<W> {
                             Some(OutputMap::Bubble) => {
                                 id = parent;
                             }
+                            Some(OutputMap::Handle(handle)) => {
+                                let handle = handle.clone();
+                                self.invoke(parent, false, false, false, |widget, cx| {
+                                    handle(widget, cx, payload.take().unwrap())
+                                });
+                                break;
+                            }
                             Some(_) => {
                                 if !self.mailbox.reserve(1, bytes) {
                                     self.overloaded += 1;

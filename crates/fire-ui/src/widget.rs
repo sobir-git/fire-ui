@@ -2,6 +2,7 @@ use crate::*;
 use std::{
     any::Any,
     marker::PhantomData,
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -276,15 +277,19 @@ pub trait Widget: Any + Sized {
 }
 pub(crate) type Payload = Box<dyn Any>;
 type Mapper = dyn Fn(&dyn Any) -> (Payload, usize);
+pub(crate) type OutputHandler =
+    dyn Fn(&mut dyn Erased, &mut crate::context::RawUpdate<'_>, Payload);
 pub(crate) enum OutputMap {
     Forward,
     /// A transparent decorator: the child's output is its owner's output, and is
     /// delivered past the owner without invoking its `update`.
     Bubble,
     Map(Box<Mapper>),
+    Handle(Rc<OutputHandler>),
 }
 pub(crate) trait Erased {
     fn state(&self) -> &dyn Any;
+    fn state_mut(&mut self) -> &mut dyn Any;
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
     fn close_requested(&mut self, cx: &mut crate::context::RawUpdate<'_>) -> bool;
     fn update(&mut self, cx: &mut crate::context::RawUpdate<'_>, payload: Payload);
@@ -305,6 +310,9 @@ pub(crate) trait Erased {
     ) -> Result<(), SemanticError>;
 }
 impl<W: Widget> Erased for W {
+    fn state_mut(&mut self) -> &mut dyn Any {
+        self
+    }
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }

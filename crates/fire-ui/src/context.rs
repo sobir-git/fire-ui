@@ -290,7 +290,7 @@ impl<W: Widget> Update<'_, W> {
                     let Some(parent) = node.parent else { break };
                     id = parent;
                 }
-                Some(OutputMap::Forward) | None => break,
+                Some(OutputMap::Forward | OutputMap::Handle(_)) | None => break,
             }
         }
         if !self.raw.mailbox().reserve(1, bytes) {
@@ -337,6 +337,55 @@ impl<W: Widget> Update<'_, W> {
         anchor: Anchor,
         map: impl Fn(&C::Output) -> W::Command + 'static,
     ) -> Result<Child<C>, (Error, Element<C>)> {
+        self.insert_mapped_at(
+            element,
+            anchor,
+            OutputMap::Map(Box::new(move |p| {
+                let command = map(p
+                    .downcast_ref::<C::Output>()
+                    .expect("private inserted output invariant"));
+                let bytes = command.bytes();
+                (Box::new(command), bytes)
+            })),
+        )
+    }
+    /// Insert a child and handle its owned output in the owner's callback.
+    /// The owner's public command type need not include an internal routing case.
+    pub fn insert_handled<C: Widget>(
+        &mut self,
+        element: Element<C>,
+        handle: impl Fn(&mut W, &mut Update<'_, W>, C::Output) + 'static,
+    ) -> Result<Child<C>, (Error, Element<C>)> {
+        self.insert_handled_at(element, Anchor::None, handle)
+    }
+    /// As [`Update::insert_handled`], with an overlay anchor.
+    pub fn insert_handled_at<C: Widget>(
+        &mut self,
+        element: Element<C>,
+        anchor: Anchor,
+        handle: impl Fn(&mut W, &mut Update<'_, W>, C::Output) + 'static,
+    ) -> Result<Child<C>, (Error, Element<C>)> {
+        self.insert_mapped_at(
+            element,
+            anchor,
+            OutputMap::Handle(Rc::new(move |widget, cx, payload| {
+                let widget = widget
+                    .state_mut()
+                    .downcast_mut::<W>()
+                    .expect("private inserted owner invariant");
+                let output = *payload
+                    .downcast::<C::Output>()
+                    .expect("private handled output invariant");
+                handle(widget, &mut cx.typed(), output);
+            })),
+        )
+    }
+    fn insert_mapped_at<C: Widget>(
+        &mut self,
+        element: Element<C>,
+        anchor: Anchor,
+        output: OutputMap,
+    ) -> Result<Child<C>, (Error, Element<C>)> {
         let anchor = match anchor {
             Anchor::None => None,
             Anchor::Window => Some(None),
@@ -350,13 +399,7 @@ impl<W: Widget> Update<'_, W> {
         let child = Child::new(element.prepared.id);
         let mut prepared = element.prepared;
         prepared.anchor = anchor;
-        prepared.output = Some(OutputMap::Map(Box::new(move |p| {
-            let command = map(p
-                .downcast_ref::<C::Output>()
-                .expect("private inserted output invariant"));
-            let bytes = command.bytes();
-            (Box::new(command), bytes)
-        })));
+        prepared.output = Some(output);
         match self.raw.mutate(Mutation::Insert(prepared)) {
             Ok(()) => {
                 self.raw.effects().pending.push(child.id);

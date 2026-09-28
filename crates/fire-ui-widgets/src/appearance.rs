@@ -352,7 +352,8 @@ impl<C: Widget> AppearanceScope<C> {
     }
 }
 pub enum ScopeCommand<C: Data> {
-    Child(C),
+    /// Send a command to the scoped content.
+    Content(C),
     /// Boxed: a whole theme dwarfs a typical child command, and every message in
     /// the mailbox would otherwise be sized for it.
     Theme(Box<Theme>),
@@ -360,7 +361,7 @@ pub enum ScopeCommand<C: Data> {
 impl<C: Data> Data for ScopeCommand<C> {
     fn bytes(&self) -> usize {
         match self {
-            Self::Child(c) => c.bytes(),
+            Self::Content(c) => c.bytes(),
             Self::Theme(_) => std::mem::size_of::<Theme>(),
         }
     }
@@ -375,7 +376,7 @@ impl<C: Widget> Widget for AppearanceScope<C> {
     }
     fn update(&mut self, cx: &mut Update<'_, Self>, command: Self::Command) {
         match command {
-            ScopeCommand::Child(command) => {
+            ScopeCommand::Content(command) => {
                 let _ = cx.send(self.child, command);
             }
             ScopeCommand::Theme(theme) => {

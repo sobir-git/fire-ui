@@ -112,3 +112,40 @@ fn a_child_removed_in_its_inserting_callback_mounts_then_retires() {
     assert_eq!(ui.stats().nodes, 1);
     assert_eq!(ui.stats().queued, 0);
 }
+
+struct ReportingLeaf;
+impl Widget for ReportingLeaf {
+    type Command = Infallible;
+    type Output = usize;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            assert!(cx.emit(7).is_ok());
+        }
+    }
+}
+struct ReportingOwner;
+impl Widget for ReportingOwner {
+    type Command = Infallible;
+    type Output = usize;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            cx.insert_handled(Element::leaf(ReportingLeaf), |_, cx, value| {
+                assert!(cx.emit(value + 1).is_ok());
+            })
+            .ok()
+            .unwrap();
+        }
+    }
+}
+#[test]
+fn inserted_child_output_can_be_handled_without_an_owner_command_variant() {
+    let mut ui = Ui::new(
+        Element::leaf(ReportingOwner),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut outputs = Vec::new();
+    ui.pump(100, |value| outputs.push(value), |_| {});
+    assert_eq!(outputs, [8]);
+}

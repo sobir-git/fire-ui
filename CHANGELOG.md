@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Handle inserted child outputs in the owning widget without exposing private
+  delivery cases in list, dropdown, or appearance-scope commands.
 - Use one widget constructor per input shape and fluent element configuration for
   appearance, step size, orientation, padding and single-line editing.
 - Return mountable elements from all widget constructors, with fluent configuration

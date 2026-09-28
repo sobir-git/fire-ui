@@ -53,9 +53,33 @@ fn appearance_scope_bubbles_non_clone_child_output() {
     let mut seen = Vec::new();
     ui.pump(100, |output| seen.push(output.0), |_| {});
     assert_eq!(seen, [7]);
-    assert!(ui.send(ScopeCommand::Child(9)).is_ok());
+    assert!(ui.send(ScopeCommand::Content(9)).is_ok());
     ui.pump(100, |output| seen.push(output.0), |_| {});
     assert_eq!(seen, [7, 9]);
+}
+
+#[test]
+fn inserted_list_row_output_reaches_owner_without_a_routing_command() {
+    let mut ui = Ui::new(
+        VirtualList::new(vec![4usize], 20., |_: &usize| Element::leaf(MountOutput)),
+        Size::new(100., 40.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        ui.pump(
+            100,
+            |output| {
+                if let ListOutput::Row(key, value) = output {
+                    seen.push((key, value.0));
+                }
+            },
+            |_| {},
+        );
+        ui.layout(&mut TestText);
+    }
+    assert_eq!(seen, [(4, 7)]);
 }
 
 fn settle<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine) {
@@ -1462,7 +1486,7 @@ fn dropdown_arrows_start_from_its_selection() {
     .unwrap();
     let mut text = TestText;
     settle(&mut ui, &mut text);
-    assert!(ui.send(Routed::Command(DropdownCommand::Select(1))).is_ok());
+    assert!(ui.send(DropdownCommand::Select(1)).is_ok());
     settle(&mut ui, &mut text);
     let field = node(&ui, Role::Menu, "Palette").unwrap();
     click(&mut ui, &mut text, center(field.bounds));

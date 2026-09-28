@@ -19,20 +19,6 @@ impl Data for DropdownCommand {
             }
     }
 }
-/// Routed internally: the list's own result, or a row the owner never sees.
-pub enum Routed {
-    Command(DropdownCommand),
-    Chosen(MenuOutput<usize>),
-}
-impl Data for Routed {
-    fn bytes(&self) -> usize {
-        match self {
-            Self::Command(c) => c.bytes(),
-            Self::Chosen(c) => c.bytes(),
-        }
-    }
-}
-
 /// A field showing one of several options, with a list that opens on demand.
 ///
 /// The list is the ordinary `Menu`, opened as a modal overlay and positioned under
@@ -85,10 +71,16 @@ impl Dropdown {
         let at = Point::new(field.x, field.y + field.height + 4.);
         // Born an overlay against the window, so the list is neither positioned nor
         // clipped by whatever panel the field happens to sit in.
-        match cx.insert_at(
+        match cx.insert_handled_at(
             Menu::new(items, at, Some(self.selected)),
             Anchor::Window,
-            |o| Routed::Chosen(o.clone()),
+            |dropdown, cx, output| match output {
+                MenuOutput::Selected(index) => {
+                    dropdown.close(cx);
+                    dropdown.choose(cx, index);
+                }
+                MenuOutput::Dismissed => dropdown.close(cx),
+            },
         ) {
             Ok(list) => {
                 // A list that cannot trap input would leave the page usable under it.
@@ -140,24 +132,19 @@ impl Dropdown {
     }
 }
 impl Widget for Dropdown {
-    type Command = Routed;
+    type Command = DropdownCommand;
     /// The index of the newly chosen option.
     type Output = usize;
-    fn update(&mut self, cx: &mut Update<'_, Self>, command: Routed) {
+    fn update(&mut self, cx: &mut Update<'_, Self>, command: DropdownCommand) {
         match command {
-            Routed::Chosen(MenuOutput::Selected(index)) => {
-                self.close(cx);
-                self.choose(cx, index)
-            }
-            Routed::Chosen(MenuOutput::Dismissed) => self.close(cx),
-            Routed::Command(DropdownCommand::Select(index)) => {
+            DropdownCommand::Select(index) => {
                 if index < self.options.len() && index != self.selected {
                     self.selected = index;
                     let _ = cx.send(self.caption, self.options[index].to_string());
                     cx.repaint()
                 }
             }
-            Routed::Command(DropdownCommand::Disabled(value)) => {
+            DropdownCommand::Disabled(value) => {
                 if self.disabled == value {
                     return;
                 }
@@ -168,7 +155,7 @@ impl Widget for Dropdown {
                 self.publish(cx);
                 cx.repaint()
             }
-            Routed::Command(DropdownCommand::Options(options)) => {
+            DropdownCommand::Options(options) => {
                 self.close(cx);
                 self.options = options;
                 self.selected = 0;

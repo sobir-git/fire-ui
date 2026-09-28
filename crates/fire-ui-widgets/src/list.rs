@@ -7,21 +7,19 @@ pub struct ListRowState {
     pub selected: bool,
 }
 #[derive(Clone, Debug)]
-pub enum ListCommand<K, O> {
+pub enum ListCommand<K> {
     Keys(Vec<K>),
     Navigate(i32),
     Activate,
     ScrollTo(K),
-    Row(K, O),
 }
-impl<K: Data, O: Data> Data for ListCommand<K, O> {
+impl<K: Data> Data for ListCommand<K> {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
                 Self::Keys(keys) => keys.iter().map(Data::bytes).sum(),
                 Self::Navigate(_) | Self::Activate => 0,
                 Self::ScrollTo(k) => k.bytes(),
-                Self::Row(k, o) => k.bytes() + o.bytes(),
             }
     }
 }
@@ -73,7 +71,7 @@ impl From<f32> for RowHeight {
 pub struct VirtualList<K, R, F>
 where
     K: Data + Clone + Eq + Hash,
-    R: Widget<Output: Clone>,
+    R: Widget,
     F: Fn(&K) -> Element<R> + 'static,
 {
     keys: Vec<K>,
@@ -102,7 +100,7 @@ where
 impl<K, R, F> VirtualList<K, R, F>
 where
     K: Data + Clone + Eq + Hash,
-    R: Widget<Output: Clone>,
+    R: Widget,
     F: Fn(&K) -> Element<R> + 'static,
 {
     /// A list whose rows are `height` tall: a number, or a rule read from the theme.
@@ -230,8 +228,8 @@ where
                 continue;
             }
             let output_key = key.clone();
-            match cx.insert((self.factory)(key), move |output| {
-                ListCommand::Row(output_key.clone(), output.clone())
+            match cx.insert_handled((self.factory)(key), move |_, cx, output| {
+                let _ = cx.emit(ListOutput::Row(output_key.clone(), output));
             }) {
                 Ok(child) => self.rows.push((key.clone(), child)),
                 Err(_) => {
@@ -266,7 +264,7 @@ pub trait VirtualListElementExt: Sized {
 impl<K, R, F> VirtualListElementExt for Element<VirtualList<K, R, F>>
 where
     K: Data + Clone + Eq + Hash,
-    R: Widget<Output: Clone>,
+    R: Widget,
     F: Fn(&K) -> Element<R> + 'static,
 {
     fn select_on_hover(self, enabled: bool) -> Self {
@@ -276,10 +274,10 @@ where
 impl<K, R, F> Widget for VirtualList<K, R, F>
 where
     K: Data + Clone + Eq + Hash,
-    R: Widget<Output: Clone>,
+    R: Widget,
     F: Fn(&K) -> Element<R> + 'static,
 {
-    type Command = ListCommand<K, R::Output>;
+    type Command = ListCommand<K>;
     type Output = ListOutput<K, R::Output>;
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
         match event {
@@ -339,9 +337,6 @@ where
                     self.selected = Some(key);
                     self.sync(cx)
                 }
-            }
-            ListCommand::Row(key, output) => {
-                let _ = cx.emit(ListOutput::Row(key, output));
             }
         }
     }
