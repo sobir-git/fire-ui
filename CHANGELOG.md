@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep nonbreaking spaces with their adjacent words when wrapping text, and
+  derive paragraph line height and baseline from the selected font's metrics.
 - Use ownership-tree order for focus, semantics, overlays, and lifecycle notices;
   ignore removed children during layout and defer root callbacks until mount.
   Reserve mapped bubbled-output bytes up front, report overload separately from

@@ -3,6 +3,10 @@ use fire_ui_fonts::Fonts;
 use std::sync::Arc;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
+
+fn break_space(ch: char) -> bool {
+    ch.is_whitespace() && !matches!(ch, '\u{00a0}' | '\u{2007}' | '\u{202f}')
+}
 // Scratch resources belong to one layout. Plans depend on face and segment
 // properties, not text contents; buffer storage can be reused after extracting glyphs.
 struct Shaping<'a> {
@@ -274,7 +278,18 @@ impl TextEngine for Text {
     fn layout(&mut self, r: TextRequest) -> Arc<Paragraph> {
         let started = std::time::Instant::now();
         self.layouts += 1;
-        let height = r.style.size * 1.5;
+        let mut shaping = Shaping::new(&self.fonts);
+        let (height, baseline) = shaping
+            .faces
+            .get((r.style.font as usize).min(shaping.faces.len().saturating_sub(1)))
+            .map(|face| {
+                let scale = r.style.size / face.units_per_em() as f32;
+                (
+                    (face.ascender() - face.descender() + face.line_gap()) as f32 * scale,
+                    face.ascender() as f32 * scale,
+                )
+            })
+            .unwrap_or((r.style.size, r.style.size));
         let mut lines = vec![];
         let mut base = 0;
         let previous = r
@@ -309,7 +324,6 @@ impl TextEngine for Text {
                 .map_or(0, |i| common - i - 1);
             (prefix, suffix)
         });
-        let mut shaping = Shaping::new(&self.fonts);
         for logical in r.text.split('\n') {
             if let Some(p) = previous {
                 let old_base = if base + logical.len() <= prefix {
@@ -376,7 +390,7 @@ impl TextEngine for Text {
                             logical[..full.cells[*i - 1].end]
                                 .chars()
                                 .next_back()
-                                .is_some_and(char::is_whitespace)
+                                .is_some_and(break_space)
                         }) {
                             end = word;
                         }
@@ -445,7 +459,7 @@ impl TextEngine for Text {
             service_revision: self.revision,
             width: r.width,
             size,
-            baseline: r.style.size * 1.1,
+            baseline,
             line_height: height,
             lines,
         })

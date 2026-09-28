@@ -79,6 +79,66 @@ fn wrapping_prefers_words_and_keeps_every_byte() {
 }
 
 #[test]
+fn nonbreaking_spaces_keep_adjacent_words_together() {
+    let mut engine = text().unwrap();
+    for space in ['\u{00a0}', '\u{2007}', '\u{202f}'] {
+        let source = format!("x a{space}b");
+        let prefix = format!("x a{space}");
+        let width = engine
+            .layout(TextRequest {
+                previous: None,
+                text: Arc::from(prefix),
+                style: TextStyle::default(),
+                width: None,
+                revision: 0,
+            })
+            .size
+            .width
+            + 0.1;
+        let paragraph = engine.layout(TextRequest {
+            previous: None,
+            text: Arc::from(source.as_str()),
+            style: TextStyle::default(),
+            width: Some(width),
+            revision: 1,
+        });
+        assert_eq!(
+            &source[paragraph.lines[0].range.clone()],
+            "x ",
+            "U+{:04X}",
+            space as u32
+        );
+        assert_eq!(
+            &source[paragraph.lines[1].range.clone()],
+            &format!("a{space}b")
+        );
+    }
+}
+
+#[test]
+fn paragraph_line_metrics_come_from_the_selected_font() {
+    let font = fire_ui_fonts::system_font().unwrap();
+    let fonts = Fonts::load(&[font]).unwrap();
+    let entry = fonts.get(0).unwrap();
+    let face = rustybuzz::Face::from_slice(entry.bytes.as_ref(), entry.face_index).unwrap();
+    let size = 22.;
+    let scale = size / face.units_per_em() as f32;
+    let expected_baseline = face.ascender() as f32 * scale;
+    let expected_height = (face.ascender() - face.descender() + face.line_gap()) as f32 * scale;
+    let mut engine = Text::new(fonts).unwrap();
+    let paragraph = engine.layout(TextRequest {
+        previous: None,
+        text: Arc::from("first\nsecond"),
+        style: TextStyle { size, font: 0 },
+        width: None,
+        revision: 0,
+    });
+    assert!((paragraph.baseline - expected_baseline).abs() < 0.01);
+    assert!((paragraph.line_height - expected_height).abs() < 0.01);
+    assert!((paragraph.lines[1].y - expected_height).abs() < 0.01);
+}
+
+#[test]
 fn tabs_keep_source_bytes_and_publish_their_full_visual_advance() {
     let mut text = text().unwrap();
     let mut layout = |s: &str| {
