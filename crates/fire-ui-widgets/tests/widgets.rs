@@ -2,6 +2,46 @@ use fire_ui::*;
 use fire_ui_widgets::*;
 use std::{rc::Rc, sync::Arc};
 
+#[derive(Debug)]
+struct NonCloneOutput(usize);
+impl Data for NonCloneOutput {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+struct MountOutput;
+impl Widget for MountOutput {
+    type Command = usize;
+    type Output = NonCloneOutput;
+    fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
+        if event == Lifecycle::Mount {
+            cx.emit(NonCloneOutput(7)).unwrap();
+        }
+    }
+    fn update(&mut self, cx: &mut Update<'_, Self>, value: usize) {
+        cx.emit(NonCloneOutput(value)).unwrap();
+    }
+    fn layout(&mut self, _: &mut Layout<'_>, _: Constraints) -> Metrics {
+        Metrics::new(Size::new(1., 1.))
+    }
+}
+
+#[test]
+fn appearance_scope_bubbles_non_clone_child_output() {
+    let mut ui = Ui::new(
+        AppearanceScope::new(Element::leaf(MountOutput), Theme::dark()),
+        Size::new(10., 10.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    ui.pump(100, |output| seen.push(output.0), |_| {});
+    assert_eq!(seen, [7]);
+    assert!(ui.send(ScopeCommand::Child(9)).is_ok());
+    ui.pump(100, |output| seen.push(output.0), |_| {});
+    assert_eq!(seen, [7, 9]);
+}
+
 fn settle<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine) {
     for _ in 0..20 {
         ui.pump(4096, |_| {}, |_| {});

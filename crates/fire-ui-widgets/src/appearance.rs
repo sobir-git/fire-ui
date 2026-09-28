@@ -343,10 +343,10 @@ pub struct AppearanceScope<C: Widget> {
     child: Child<C>,
     theme: Rc<Theme>,
 }
-impl<C: Widget<Output: Clone>> AppearanceScope<C> {
+impl<C: Widget> AppearanceScope<C> {
     pub fn new(content: Element<C>, theme: Theme) -> Element<Self> {
         Element::build(|children| Self {
-            child: children.connect(content, |o| ScopeCommand::Child(o.clone())),
+            child: children.bubble(content),
             theme: Rc::new(theme),
         })
     }
@@ -366,7 +366,7 @@ impl<C: Data> Data for ScopeCommand<C> {
     }
 }
 impl<C: Widget> Widget for AppearanceScope<C> {
-    type Command = ScopeCommand<C::Output>;
+    type Command = ScopeCommand<C::Command>;
     type Output = C::Output;
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, e: Lifecycle) {
         if e == Lifecycle::Mount {
@@ -375,8 +375,8 @@ impl<C: Widget> Widget for AppearanceScope<C> {
     }
     fn update(&mut self, cx: &mut Update<'_, Self>, command: Self::Command) {
         match command {
-            ScopeCommand::Child(o) => {
-                let _ = cx.emit(o);
+            ScopeCommand::Child(command) => {
+                let _ = cx.send(self.child, command);
             }
             ScopeCommand::Theme(theme) => {
                 let layout = theme.metrics_changed(&self.theme);

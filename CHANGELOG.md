@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bubble appearance-scoped content output directly, without cloning it or routing
+  it through a command; forward content commands into the child.
 - Make window anchors independent of child type inference, while keeping typed
   handles for anchors to other children.
 - Read the Studio version from its package metadata and resolve shared page
