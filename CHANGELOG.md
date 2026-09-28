@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cache parsed OpenGL outline faces and reset the optional raster text atlas
+  after eight glyph textures instead of retaining unbounded glyph masks.
 - Find editor grapheme boundaries near the requested byte; retain IME display
   text and reuse prior composition layout across preedit updates.
 - Maintain overlays in ownership-tree order as nodes are inserted, anchored, or

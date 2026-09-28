@@ -11,7 +11,7 @@ readme = "README.md"
 default = ["x11"]
 x11 = ["fire-ui-native/x11", "glutin-winit/x11", "glutin-winit/glx"]
 bitmap-fonts = ["femtovg/image-loading", "dep:image"]
-raster-text = ["femtovg/swash"]
+raster-text = ["femtovg/swash", "femtovg/debug_inspector"]
 [dependencies]
 ttf-parser = "0.25"
 image = { version="0.25", default-features=false, features=["png"], optional=true }

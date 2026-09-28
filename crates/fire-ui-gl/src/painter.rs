@@ -2,10 +2,44 @@ use femtovg::{renderer::OpenGl, Canvas};
 use fire_ui::*;
 #[cfg(not(feature = "raster-text"))]
 use fire_ui_fonts::Fonts;
+#[cfg(not(feature = "raster-text"))]
+pub(crate) struct ParsedFonts {
+    // Drop faces before the immutable byte owners they borrow.
+    faces: Vec<Option<ttf_parser::Face<'static>>>,
+    _fonts: Fonts,
+}
+#[cfg(not(feature = "raster-text"))]
+impl ParsedFonts {
+    pub(crate) fn new(fonts: Fonts) -> Self {
+        let faces = fonts
+            .iter()
+            .map(|font| {
+                ttf_parser::Face::parse(font.bytes.as_ref(), font.face_index)
+                    .ok()
+                    .map(|face| {
+                        // SAFETY: FontBytes keeps its allocation behind an Arc. This
+                        // struct owns every FontBytes until after faces are dropped.
+                        unsafe {
+                            std::mem::transmute::<ttf_parser::Face<'_>, ttf_parser::Face<'static>>(
+                                face,
+                            )
+                        }
+                    })
+            })
+            .collect();
+        Self {
+            faces,
+            _fonts: fonts,
+        }
+    }
+    pub(crate) fn get(&self, index: usize) -> Option<&ttf_parser::Face<'_>> {
+        self.faces.get(index)?.as_ref()
+    }
+}
 pub(crate) struct GlPainter<'a> {
     pub(crate) canvas: &'a mut Canvas<OpenGl>,
     #[cfg(not(feature = "raster-text"))]
-    pub(crate) fonts: &'a Fonts,
+    pub(crate) fonts: &'a ParsedFonts,
     #[cfg(feature = "raster-text")]
     pub(crate) font_ids: &'a [femtovg::FontId],
     clip: Rect,
@@ -19,7 +53,7 @@ impl<'a> GlPainter<'a> {
     }
     pub(crate) fn new(
         canvas: &'a mut Canvas<OpenGl>,
-        #[cfg(not(feature = "raster-text"))] fonts: &'a Fonts,
+        #[cfg(not(feature = "raster-text"))] fonts: &'a ParsedFonts,
         #[cfg(feature = "raster-text")] font_ids: &'a [femtovg::FontId],
         viewport: Rect,
     ) -> Self {
@@ -172,9 +206,7 @@ impl Painter for GlPainter<'_> {
                 }
                 #[cfg(not(feature = "raster-text"))]
                 {
-                    let Some(face) = self.fonts.get(run.font as usize).and_then(|font| {
-                        ttf_parser::Face::parse(font.bytes.as_ref(), font.face_index).ok()
-                    }) else {
+                    let Some(face) = self.fonts.get(run.font as usize) else {
                         self.error = Some(
                             "Paragraph references a font that this painter does not own".into(),
                         );

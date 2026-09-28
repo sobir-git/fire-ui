@@ -14,6 +14,8 @@ use glutin::{
 };
 use glutin_winit::finalize_window;
 use painter::GlPainter;
+#[cfg(not(feature = "raster-text"))]
+use painter::ParsedFonts;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::num::NonZeroU32;
 use winit::{
@@ -25,6 +27,30 @@ fn select_config(configs: impl Iterator<Item = Config>) -> Result<Config, String
     configs
         .min_by_key(|config| (config.num_samples(), config.depth_size()))
         .ok_or_else(|| "No compatible GL config".into())
+}
+#[cfg(feature = "raster-text")]
+const MAX_GLYPH_ATLASES: usize = 8;
+#[cfg(feature = "raster-text")]
+fn atlas_needs_reset(textures: usize) -> bool {
+    textures > MAX_GLYPH_ATLASES
+}
+#[cfg(feature = "raster-text")]
+fn raster_canvas(
+    renderer: Gl,
+    fonts: &Fonts,
+) -> Result<(Canvas<Gl>, Vec<femtovg::FontId>), String> {
+    let text = femtovg::TextContext::default();
+    let font_ids = fonts
+        .iter()
+        .map(|font| {
+            text.add_shared_font_with_index(font.bytes.clone(), font.face_index)
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((
+        Canvas::new_with_text_context(renderer, text).map_err(|error| error.to_string())?,
+        font_ids,
+    ))
 }
 /// GPU resources are selected explicitly and share their font context with the text engine.
 pub struct OpenGl {
@@ -95,21 +121,7 @@ impl RendererFactory for OpenGl {
         let renderer = unsafe { Gl::new_from_function_cstr(|name| display.get_proc_address(name)) }
             .map_err(|e| e.to_string())?;
         #[cfg(feature = "raster-text")]
-        let (canvas, font_ids) = {
-            let text = femtovg::TextContext::default();
-            let font_ids = self
-                .fonts
-                .iter()
-                .map(|font| {
-                    text.add_shared_font_with_index(font.bytes.clone(), font.face_index)
-                        .map_err(|error| error.to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            (
-                Canvas::new_with_text_context(renderer, text).map_err(|e| e.to_string())?,
-                font_ids,
-            )
-        };
+        let (canvas, font_ids) = raster_canvas(renderer, &self.fonts)?;
         #[cfg(not(feature = "raster-text"))]
         let canvas = Canvas::new(renderer).map_err(|e| e.to_string())?;
         let presenter = if self.partial_repaint {
@@ -126,9 +138,13 @@ impl RendererFactory for OpenGl {
                 backing: None,
                 presenter,
                 #[cfg(not(feature = "raster-text"))]
-                fonts: self.fonts,
+                fonts: ParsedFonts::new(self.fonts),
                 #[cfg(feature = "raster-text")]
                 font_ids,
+                #[cfg(feature = "raster-text")]
+                fonts: self.fonts,
+                #[cfg(feature = "raster-text")]
+                display,
                 surface,
                 context,
                 partial_repaint: self.partial_repaint,
@@ -142,14 +158,34 @@ struct Target {
     backing: Option<femtovg::ImageId>,
     presenter: Option<present::Presenter>,
     #[cfg(not(feature = "raster-text"))]
-    fonts: Fonts,
+    fonts: ParsedFonts,
     #[cfg(feature = "raster-text")]
     font_ids: Vec<femtovg::FontId>,
+    #[cfg(feature = "raster-text")]
+    fonts: Fonts,
+    #[cfg(feature = "raster-text")]
+    display: Display,
     surface: Surface<WindowSurface>,
     context: PossiblyCurrentContext,
     partial_repaint: bool,
     surface_size: (u32, u32),
     _window: std::sync::Arc<Window>,
+}
+#[cfg(feature = "raster-text")]
+impl Target {
+    fn reset_raster_cache(&mut self) -> Result<(), String> {
+        // A new canvas owns a fresh glyph atlas. Dropping the old canvas releases
+        // every cached glyph texture and its CPU metadata; the next paint rebuilds
+        // the backing image from full UI damage.
+        let renderer =
+            unsafe { Gl::new_from_function_cstr(|name| self.display.get_proc_address(name)) }
+                .map_err(|error| error.to_string())?;
+        let (canvas, font_ids) = raster_canvas(renderer, &self.fonts)?;
+        self.backing = None;
+        self.canvas = canvas;
+        self.font_ids = font_ids;
+        Ok(())
+    }
 }
 impl Renderer for Target {
     fn render(
@@ -322,6 +358,10 @@ impl Renderer for Target {
         s.surface
             .swap_buffers(&s.context)
             .map_err(|e| e.to_string())?;
+        #[cfg(feature = "raster-text")]
+        if atlas_needs_reset(s.canvas.debug_inspector_get_font_textures().len()) {
+            s.reset_raster_cache()?;
+        }
         Ok(())
     }
 }
@@ -334,5 +374,22 @@ mod tests {
             super::select_config(std::iter::empty()).err().as_deref(),
             Some("No compatible GL config")
         );
+    }
+
+    #[cfg(feature = "raster-text")]
+    #[test]
+    fn raster_atlas_resets_only_after_the_texture_bound() {
+        assert!(!super::atlas_needs_reset(8));
+        assert!(super::atlas_needs_reset(9));
+    }
+
+    #[cfg(not(feature = "raster-text"))]
+    #[test]
+    fn parsed_faces_are_retained_for_repeated_runs() {
+        let path = fire_ui_fonts::system_font().expect("system test font");
+        let fonts = fire_ui_fonts::Fonts::load(&[path]).unwrap();
+        let cache = super::painter::ParsedFonts::new(fonts);
+        let first = cache.get(0).unwrap() as *const _;
+        assert_eq!(first, cache.get(0).unwrap() as *const _);
     }
 }
