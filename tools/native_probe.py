@@ -362,6 +362,16 @@ sys.stdin.read()
                                             raise RuntimeError("Unresponsive clipboard paste reported success")
                                         expect_text("changed during clipboard wait")
                                         results["clipboard_wait_ui_reply_ms"] = round(latency * 1000, 3)
+                                        # Ctrl+V uses the widget's paste request, not AT-SPI's
+                                        # EditableText method. It must keep the UI responsive too.
+                                        x("key", "ctrl+v")
+                                        time.sleep(.2)
+                                        started = time.monotonic()
+                                        reply = inspect_request(Path(directory) / "ui.sock", {})
+                                        latency = time.monotonic() - started
+                                        if "error" in reply or latency > 1:
+                                            raise RuntimeError("Keyboard clipboard wait blocked UI input")
+                                        results["keyboard_clipboard_wait_ui_reply_ms"] = round(latency * 1000, 3)
                                     finally:
                                         if pending_paste is not None and pending_paste.poll() is None:
                                             pending_paste.terminate()

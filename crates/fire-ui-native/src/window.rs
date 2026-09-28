@@ -61,6 +61,11 @@ enum HostEvent {
     #[cfg(all(unix, feature = "inspection"))]
     Inspect(Box<crate::inspection::Pending>),
     Command(Posted),
+    #[cfg(feature = "clipboard")]
+    ClipboardPaste {
+        token: PasteToken,
+        text: Result<String, String>,
+    },
     #[cfg(feature = "accessibility")]
     Accessibility(accesskit_winit::Event),
     #[cfg(all(target_os = "linux", feature = "accessibility"))]
@@ -160,12 +165,20 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
             Err(error) => {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.bytes.fetch_sub(bytes, Ordering::AcqRel);
-                #[cfg(any(feature = "accessibility", all(unix, feature = "inspection")))]
+                #[cfg(any(
+                    feature = "clipboard",
+                    feature = "accessibility",
+                    all(unix, feature = "inspection")
+                ))]
                 let HostEvent::Command(post) = error.0
                 else {
                     unreachable!()
                 };
-                #[cfg(not(any(feature = "accessibility", all(unix, feature = "inspection"))))]
+                #[cfg(not(any(
+                    feature = "clipboard",
+                    feature = "accessibility",
+                    all(unix, feature = "inspection")
+                )))]
                 let HostEvent::Command(post) = error.0;
                 Err((
                     Error::Stale,
@@ -299,9 +312,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
         );
         for request in requests {
             #[cfg(feature = "clipboard")]
-            if matches!(request, HostRequest::Copy(_) | HostRequest::Paste(_))
-                && self.clipboard.is_none()
-            {
+            if matches!(request, HostRequest::Copy(_)) && self.clipboard.is_none() {
                 self.clipboard = arboard::Clipboard::new().ok()
             }
             match request {
@@ -350,11 +361,13 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
                 }
                 #[cfg(feature = "clipboard")]
                 HostRequest::Paste(token) => {
-                    if let Some(clipboard) = &mut self.clipboard {
-                        if let Ok(text) = clipboard.get_text() {
-                            s.ui.paste(token, text)
-                        }
-                    }
+                    let proxy = self.wake.proxy.clone();
+                    std::thread::spawn(move || {
+                        let text = arboard::Clipboard::new()
+                            .and_then(|mut clipboard| clipboard.get_text())
+                            .map_err(|error| error.to_string());
+                        let _ = proxy.send_event(HostEvent::ClipboardPaste { token, text });
+                    });
                 }
                 #[cfg(not(feature = "clipboard"))]
                 HostRequest::Copy(_) | HostRequest::Paste(_) => {}
@@ -565,6 +578,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                 }),
                 bytes: post.bytes,
             }),
+            #[cfg(feature = "clipboard")]
+            HostEvent::ClipboardPaste { token, text } => {
+                if let (Some(s), Ok(text)) = (&mut self.state, text) {
+                    s.ui.paste(token, text);
+                }
+            }
             #[cfg(all(target_os = "linux", feature = "accessibility"))]
             HostEvent::LinuxEdit(pending) => {
                 self.service();
@@ -741,16 +760,8 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     }
                 }
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(s) = &mut self.state {
-                    let size = s.window.inner_size();
-                    s.ui.resize(Size::new(
-                        size.width as f32 / scale_factor as f32,
-                        size.height as f32 / scale_factor as f32,
-                    ));
-                    s.window.request_redraw()
-                }
-            }
+            // Resized carries the new physical size after winit applies the scale.
+            WindowEvent::ScaleFactorChanged { .. } => {}
             WindowEvent::CursorMoved { position, .. } => {
                 let scale = self
                     .state
@@ -820,16 +831,19 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             }
             WindowEvent::KeyboardInput {
                 event,
-                is_synthetic: false,
+                is_synthetic,
                 ..
             } => {
+                if !accept_key_event(is_synthetic, event.state) {
+                    return;
+                }
                 let modifiers = Modifiers {
                     shift: self.modifiers.shift_key(),
                     control: self.modifiers.control_key(),
                     alt: self.modifiers.alt_key(),
                     meta: self.modifiers.super_key(),
                 };
-                if !self.composing {
+                if !self.composing || is_synthetic {
                     if let Some(key) = key(&event.logical_key) {
                         let physical = match event.physical_key {
                             PhysicalKey::Code(code) => code as u32,
@@ -917,6 +931,9 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             ControlFlow::Wait
         });
     }
+}
+fn accept_key_event(is_synthetic: bool, state: ElementState) -> bool {
+    !is_synthetic || state == ElementState::Released
 }
 fn key(key: &OsKey) -> Option<Key> {
     Some(match key {
@@ -1071,4 +1088,17 @@ fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) -> Result<(), St
         .unwrap()
         .set_text(text)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_releases_clear_held_keys_without_accepting_synthetic_presses() {
+        assert!(accept_key_event(true, ElementState::Released));
+        assert!(!accept_key_event(true, ElementState::Pressed));
+        assert!(accept_key_event(false, ElementState::Released));
+        assert!(accept_key_event(false, ElementState::Pressed));
+    }
 }
