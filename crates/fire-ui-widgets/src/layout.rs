@@ -250,7 +250,10 @@ fn linear(
     // A row shares one baseline; a column reports its first child's.
     let baseline = if vertical {
         measured.first().and_then(|m| m.baseline)
-    } else if flow.align == Align::Baseline {
+    } else if children
+        .iter()
+        .any(|entry| entry.align.unwrap_or(flow.align) == Align::Baseline)
+    {
         measured
             .iter()
             .zip(children)
@@ -261,12 +264,17 @@ fn linear(
         None
     };
 
-    let span = if breadth.is_finite() {
-        breadth
-    } else {
-        measured.iter().map(|m| cross(m.size)).fold(0., f32::max)
-    };
-    let mut widest: f32 = 0.;
+    let mut span = measured
+        .iter()
+        .map(|m| cross(m.size))
+        .fold(cross(c.min), f32::max);
+    if let Some(baseline) = baseline.filter(|_| !vertical) {
+        for (entry, m) in children.iter().zip(&measured) {
+            if entry.align.unwrap_or(flow.align) == Align::Baseline {
+                span = span.max(baseline + (m.size.height - m.baseline.unwrap_or(m.size.height)));
+            }
+        }
+    }
     for (entry, m) in children.iter().zip(&measured) {
         let align = entry.align.unwrap_or(flow.align);
         let offset = if !vertical && align == Align::Baseline {
@@ -283,7 +291,6 @@ fn linear(
             },
         );
         cursor += main(m.size) + spacing;
-        widest = widest.max(cross(m.size) + offset.max(0.))
     }
     Metrics {
         size: c.constrain(size(
@@ -292,7 +299,7 @@ fn linear(
             } else {
                 (cursor - spacing).max(0.)
             },
-            widest,
+            span,
         )),
         baseline,
     }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Size loosely constrained centered flows to their children, and compute row
+  baselines when an individual entry requests baseline alignment.
 - Republish the full derived button theme when its scale or other theme values change.
 - Menu arrow navigation can start at an explicit current item; dropdowns start
   from their selected option and keep its checkmark.

@@ -1409,6 +1409,95 @@ fn a_column_never_measures_a_child_past_the_room_that_is_left() {
     assert!(bounds.height > 0., "and it is still given real room");
 }
 
+struct FixedMetrics {
+    size: Size,
+    baseline: Option<f32>,
+}
+impl Widget for FixedMetrics {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, _: &mut Layout<'_>, c: Constraints) -> Metrics {
+        Metrics {
+            size: c.constrain(self.size),
+            baseline: self.baseline,
+        }
+    }
+}
+
+struct RowProbe {
+    first: Child<FixedMetrics>,
+    second: Child<FixedMetrics>,
+    baseline: bool,
+    measured: Metrics,
+}
+impl RowProbe {
+    fn new(baseline: bool) -> Element<Self> {
+        Element::build(|c| Self {
+            first: c.add(Element::leaf(FixedMetrics {
+                size: Size::new(10., 20.),
+                baseline: Some(15.),
+            })),
+            second: c.add(Element::leaf(FixedMetrics {
+                size: Size::new(10., 10.),
+                baseline: Some(5.),
+            })),
+            baseline,
+            measured: Metrics::default(),
+        })
+    }
+}
+impl Widget for RowProbe {
+    type Command = std::convert::Infallible;
+    type Output = std::convert::Infallible;
+    fn layout(&mut self, cx: &mut Layout<'_>, _: Constraints) -> Metrics {
+        let entries = [
+            Entry::natural(self.first),
+            if self.baseline {
+                Entry::natural(self.second).aligned(Align::Baseline)
+            } else {
+                Entry::natural(self.second)
+            },
+        ];
+        self.measured = row(
+            cx,
+            Constraints::loose(Size::new(100., 100.)),
+            Flow::default().align(if self.baseline {
+                Align::Start
+            } else {
+                Align::Center
+            }),
+            &entries,
+        );
+        self.measured
+    }
+}
+
+#[test]
+fn loose_centered_row_reports_its_actual_cross_extent() {
+    let mut ui = Ui::new(
+        RowProbe::new(false),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().measured.size.height, 20.);
+    assert_eq!(ui.geometry(ui.root().second).unwrap().bounds.y, 5.);
+}
+
+#[test]
+fn baseline_override_uses_a_row_baseline_even_when_flow_starts_at_top() {
+    let mut ui = Ui::new(
+        RowProbe::new(true),
+        Size::new(100., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().measured.baseline, Some(5.));
+    assert_eq!(ui.geometry(ui.root().second).unwrap().bounds.y, 0.);
+}
+
 #[test]
 fn a_scrollbar_takes_its_own_strip_and_the_content_below_it_does_not_claim_the_pointer() {
     // The editor asks for a text caret. If the bar floats over it, the pointer
