@@ -77,16 +77,16 @@ const PAGE_INSET: f32 = 3.5;
 
 /// Wraps a page in the padding every page shares, inside a viewport.
 fn page<W: Widget>(content: Element<W>) -> Element<Scroll<Padding<W>>> {
-    Scroll::new(Padding::new(
-        content,
-        Insets::all(Scale::default().space(PAGE_INSET)),
-    ))
+    Scroll::new(Padding::scaled(content, PAGE_INSET))
 }
 impl Body {
     fn new() -> Element<Self> {
         Element::build(|c| Self {
             wordmark: c.add(text("Fire UI", TextRole::Title)),
-            version: c.add(muted("Studio · 0.8.0", TextRole::Micro)),
+            version: c.add(muted(
+                concat!("Studio · ", env!("CARGO_PKG_VERSION")),
+                TextRole::Micro,
+            )),
             nav: c.connect(Tabs::vertical(SECTIONS), |v| Message::Navigate(*v)),
             rule: c.add(Element::leaf(Divider::horizontal())),
             status: c.add(muted("Ready", TextRole::Small)),
@@ -100,13 +100,9 @@ impl Body {
                 Message::Page(e.clone())
             }),
             // The list owns its own viewport, so it is not put inside another one.
-            lists: c.connect(
-                Padding::new(
-                    lists::Lists::new(),
-                    Insets::all(Scale::default().space(PAGE_INSET)),
-                ),
-                |e| Message::Page(e.clone()),
-            ),
+            lists: c.connect(Padding::scaled(lists::Lists::new(), PAGE_INSET), |e| {
+                Message::Page(e.clone())
+            }),
             canvas: c.connect(page(canvas::Canvas::new()), |e| Message::Page(e.clone())),
             layout: c.connect(page(layout_page::LayoutPage::new()), |e| {
                 Message::Page(e.clone())

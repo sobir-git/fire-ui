@@ -509,14 +509,26 @@ impl From<f32> for Insets {
 /// content and its output passes straight through.
 pub struct Padding<C: Widget> {
     child: Child<C>,
-    insets: Insets,
+    insets: PaddingInsets,
+}
+enum PaddingInsets {
+    Fixed(Insets),
+    Scaled(f32),
 }
 impl<C: Widget> Padding<C> {
     pub fn new(content: Element<C>, insets: impl Into<Insets>) -> Element<Self> {
         let insets = insets.into();
         Element::build(|children| Self {
             child: children.bubble(content),
-            insets,
+            insets: PaddingInsets::Fixed(insets),
+        })
+    }
+    /// Theme rhythm units, resolved again when the inherited theme changes.
+    pub fn scaled(content: Element<C>, steps: f32) -> Element<Self> {
+        assert!(steps.is_finite() && steps >= 0.);
+        Element::build(|children| Self {
+            child: children.bubble(content),
+            insets: PaddingInsets::Scaled(steps),
         })
     }
 }
@@ -527,14 +539,18 @@ impl<C: Widget> Widget for Padding<C> {
         let _ = cx.send(self.child, command);
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
-        let m = cx.measure(self.child, self.insets.shrink(c));
-        cx.place(self.child, Point::new(self.insets.left, self.insets.top));
+        let insets = match self.insets {
+            PaddingInsets::Fixed(insets) => insets,
+            PaddingInsets::Scaled(steps) => Insets::all(theme(cx).scale.space(steps)),
+        };
+        let m = cx.measure(self.child, insets.shrink(c));
+        cx.place(self.child, Point::new(insets.left, insets.top));
         Metrics {
             size: c.constrain(Size::new(
-                m.size.width + self.insets.horizontal(),
-                m.size.height + self.insets.vertical(),
+                m.size.width + insets.horizontal(),
+                m.size.height + insets.vertical(),
             )),
-            baseline: m.baseline.map(|b| b + self.insets.top),
+            baseline: m.baseline.map(|b| b + insets.top),
         }
     }
 }

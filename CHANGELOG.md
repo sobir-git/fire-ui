@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Read the Studio version from its package metadata and resolve shared page
+  padding from the active theme's scale.
 - Cache parsed OpenGL outline faces and reset the optional raster text atlas
   after eight glyph textures instead of retaining unbounded glyph masks.
 - Find editor grapheme boundaries near the requested byte; retain IME display

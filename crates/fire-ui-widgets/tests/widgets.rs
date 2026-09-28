@@ -2239,6 +2239,30 @@ fn theme_is_a_small_value() {
     );
 }
 
+#[test]
+fn scaled_padding_reads_the_active_theme_on_each_layout() {
+    let mut ui = Ui::new(
+        Padding::scaled(Element::leaf(Label::new("content")), 3.5),
+        Size::new(200., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.set_environment(Rc::new(Theme::dark()), true);
+    settle(&mut ui, &mut TestText);
+    let content_x = |ui: &Ui<_>| {
+        ui.semantics()
+            .into_iter()
+            .find(|node| node.semantics.label == "content")
+            .unwrap()
+            .bounds
+            .x
+    };
+    assert_eq!(content_x(&ui), Theme::dark().scale.space(3.5));
+    ui.set_environment(Rc::new(Theme::compact()), true);
+    settle(&mut ui, &mut TestText);
+    assert_eq!(content_x(&ui), Theme::compact().scale.space(3.5));
+}
+
 /// A widget that knows nothing about themes: it draws with the core's `Color` and
 /// `Painter` alone. This is what any consumer can write, and what `fire-ui` on its
 /// own supports — the core has no theme concept at all.
