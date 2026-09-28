@@ -1,8 +1,11 @@
 use fire_ui_fonts::{Font, FontBytes, Fonts};
 use fire_ui_text::Text;
 #[test]
-fn validation_belongs_to_shaper_and_empty_fonts_remain_supported() {
-    assert!(Text::new(Fonts::default()).is_ok());
+fn validation_rejects_empty_and_unshapable_fonts() {
+    assert_eq!(
+        Text::new(Fonts::default()).err().as_deref(),
+        Some("At least one shaping font is required")
+    );
     assert!(Text::new(Fonts::new([Font {
         bytes: FontBytes::from_static(b"not a font"),
         face_index: 0

@@ -42,6 +42,9 @@ pub struct Text {
 }
 impl Text {
     pub fn new(fonts: Fonts) -> Result<Self, String> {
+        if fonts.is_empty() {
+            return Err("At least one shaping font is required".into());
+        }
         for (entry, font) in fonts.iter().enumerate() {
             rustybuzz::Face::from_slice(font.bytes.as_ref(), font.face_index).ok_or_else(|| {
                 format!(
@@ -63,18 +66,6 @@ impl Text {
         rtl: bool,
         shaping: &mut Shaping<'_>,
     ) -> (f32, Vec<(usize, f32, f32)>, Vec<TextRun>) {
-        if self.fonts.is_empty() {
-            return (
-                0.,
-                vec![],
-                vec![TextRun {
-                    x: 0.,
-                    font: u32::MAX,
-                    glyphs: Box::default(),
-                }],
-            );
-        }
-
         let first = (style.font as usize).min(self.fonts.len() - 1);
         let mut pieces: Vec<(usize, usize, usize, Script)> = vec![];
         let strong = |ch: char| {
@@ -279,20 +270,12 @@ impl TextEngine for Text {
         let started = std::time::Instant::now();
         self.layouts += 1;
         let mut shaping = Shaping::new(&self.fonts);
-        let (height, baseline) = shaping
-            .faces
-            .get((r.style.font as usize).min(shaping.faces.len().saturating_sub(1)))
-            .map(|face| {
-                let scale = r.style.size / face.units_per_em() as f32;
-                let glyph_box = (face.ascender() - face.descender()) as f32 * scale;
-                let natural = glyph_box + face.line_gap() as f32 * scale;
-                let height = natural * r.style.line_height;
-                (
-                    height,
-                    face.ascender() as f32 * scale + (height - glyph_box) / 2.,
-                )
-            })
-            .unwrap_or((r.style.size * r.style.line_height, r.style.size));
+        let face = &shaping.faces[(r.style.font as usize).min(shaping.faces.len() - 1)];
+        let scale = r.style.size / face.units_per_em() as f32;
+        let glyph_box = (face.ascender() - face.descender()) as f32 * scale;
+        let natural = glyph_box + face.line_gap() as f32 * scale;
+        let height = natural * r.style.line_height;
+        let baseline = face.ascender() as f32 * scale + (height - glyph_box) / 2.;
         let mut lines = vec![];
         let mut base = 0;
         let previous = r

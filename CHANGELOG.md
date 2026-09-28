@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report missing OpenGL configurations as errors and reject text engines with
+  no shaping font.
 - Let themes choose text leading explicitly while keeping the natural font metrics
   and centering extra leading around the glyph box.
 - Keep nonbreaking spaces with their adjacent words when wrapping text, and

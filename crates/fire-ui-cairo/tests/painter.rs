@@ -68,8 +68,8 @@ fn tiled_box_fills_every_tile_and_preserves_path_and_clip() {
 
 #[test]
 fn missing_font_is_reported_by_status() {
-    let fonts = Fonts::default();
-    let faces = FontFaces::new(&fonts).unwrap();
+    let faces = FontFaces::new(&Fonts::default()).unwrap();
+    let fonts = Fonts::load(&[fire_ui_fonts::system_font().unwrap()]).unwrap();
     let paragraph = Text::new(fonts).unwrap().layout(TextRequest {
         previous: None,
         text: Arc::from("Visible text"),

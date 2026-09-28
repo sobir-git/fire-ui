@@ -6,20 +6,26 @@ use fire_ui::*;
 use fire_ui_fonts::Fonts;
 use fire_ui_native::{Renderer, RendererFactory};
 use glutin::{
-    config::ConfigTemplateBuilder,
+    config::{Config, ConfigTemplateBuilder},
     context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentContext},
-    display::GetGlDisplay,
+    display::{Display, DisplayApiPreference},
     prelude::*,
     surface::{Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface},
 };
-use glutin_winit::DisplayBuilder;
+use glutin_winit::finalize_window;
 use painter::GlPainter;
-use raw_window_handle::HasWindowHandle;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::num::NonZeroU32;
 use winit::{
     event_loop::ActiveEventLoop,
     window::{Window, WindowAttributes},
 };
+
+fn select_config(configs: impl Iterator<Item = Config>) -> Result<Config, String> {
+    configs
+        .min_by_key(|config| (config.num_samples(), config.depth_size()))
+        .ok_or_else(|| "No compatible GL config".into())
+}
 /// GPU resources are selected explicitly and share their font context with the text engine.
 pub struct OpenGl {
     pub fonts: Fonts,
@@ -31,23 +37,38 @@ impl RendererFactory for OpenGl {
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
     ) -> Result<(std::sync::Arc<Window>, Box<dyn Renderer>), String> {
-        let (window, config) = DisplayBuilder::new()
-            .with_window_attributes(Some(attributes))
-            .build(
-                event_loop,
-                ConfigTemplateBuilder::new()
-                    .with_alpha_size(8)
-                    .with_stencil_size(8)
-                    .with_depth_size(0),
-                |configs| {
-                    configs
-                        .min_by_key(|c| (c.num_samples(), c.depth_size()))
-                        .expect("GL config")
-                },
-            )
+        // glutin-winit's picker must return a Config, so it cannot report an
+        // empty iterator. Create the display directly to keep this path fallible.
+        #[cfg(target_os = "windows")]
+        let window = event_loop
+            .create_window(attributes)
             .map_err(|e| e.to_string())?;
-        let window = window.ok_or("Window creation failed")?;
-        let display = config.display();
+        #[cfg(target_os = "windows")]
+        let raw = window.window_handle().map_err(|e| e.to_string())?.as_raw();
+        #[cfg(target_os = "windows")]
+        let preference = DisplayApiPreference::Wgl(Some(raw));
+        #[cfg(target_os = "macos")]
+        let preference = DisplayApiPreference::Cgl;
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        let preference =
+            DisplayApiPreference::Glx(Box::new(winit::platform::x11::register_xlib_error_hook));
+        let handle = event_loop.display_handle().map_err(|e| e.to_string())?;
+        // SAFETY: the event loop owns this live display handle.
+        let display =
+            unsafe { Display::new(handle.as_raw(), preference) }.map_err(|e| e.to_string())?;
+        let template = ConfigTemplateBuilder::new()
+            .with_alpha_size(8)
+            .with_stencil_size(8)
+            .with_depth_size(0);
+        #[cfg(target_os = "windows")]
+        let template = template.compatible_with_native_window(raw);
+        // SAFETY: on WGL the template names the live window above; elsewhere
+        // it contains no window handle.
+        let configs =
+            unsafe { display.find_configs(template.build()) }.map_err(|e| e.to_string())?;
+        let config = select_config(configs)?;
+        #[cfg(not(target_os = "windows"))]
+        let window = finalize_window(event_loop, attributes, &config).map_err(|e| e.to_string())?;
         let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
         let attrs = ContextAttributesBuilder::new().build(Some(handle));
         let fallback = ContextAttributesBuilder::new()
@@ -300,5 +321,16 @@ impl Renderer for Target {
             .swap_buffers(&s.context)
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn empty_gl_config_iterator_returns_an_error() {
+        assert_eq!(
+            super::select_config(std::iter::empty()).err().as_deref(),
+            Some("No compatible GL config")
+        );
     }
 }
