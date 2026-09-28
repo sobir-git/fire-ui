@@ -85,7 +85,8 @@ def main():
                         if app.poll() is not None:
                             raise RuntimeError((artifacts / "native.log").read_text())
                         try:
-                            window = x("search", "--name", "Fire UI Studio").splitlines()[0]
+                            # Only a mapped window can take focus.
+                            window = x("search", "--onlyvisible", "--name", "Fire UI Studio").splitlines()[0]
                             break
                         except subprocess.CalledProcessError:
                             time.sleep(0.1)

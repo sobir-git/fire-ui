@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A handle returned by `insert` is usable in the same callback: commands, focus,
+  modality and other requests naming the new child run after it mounts. Dropdown
+  lists are now modal and take the keyboard when they open.
+- Replace `WindowOptions::{overlay, click_through}` with `WindowKind`.
+- Move `system_font` from `fire-ui-text` to `fire-ui-fonts`.
+
 ## 0.8.0 · 2026-09-09
 
 Text rendering and completed-frame presentation are explicit renderer choices.

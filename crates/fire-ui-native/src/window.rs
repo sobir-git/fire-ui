@@ -20,28 +20,35 @@ use winit::{
 pub struct WindowOptions {
     pub title: String,
     pub decorations: bool,
-    /// Passive, click-through window above normal windows. On Linux this requires X11/XWayland.
-    pub overlay: bool,
+    pub kind: WindowKind,
     /// Request a native window whose pixels preserve alpha transparency.
     /// Support depends on the platform compositor and renderer surface.
     pub transparent: bool,
-    /// Override pointer pass-through. `None` preserves the historical behavior:
-    /// overlays are click-through and ordinary windows are interactive.
-    pub click_through: Option<bool>,
     pub min_size: Size,
     pub position: Option<(i32, i32)>,
     pub size: Size,
     pub background: Color,
     pub limits: Limits,
 }
+/// How the window relates to other windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowKind {
+    /// An ordinary application window.
+    #[default]
+    Normal,
+    /// Undecorated, above normal windows and never activated when shown. A passive
+    /// overlay lets the pointer through to what is beneath; an interactive one
+    /// receives input and can be moved by the window manager. On Linux this
+    /// requires X11/XWayland.
+    Overlay { interactive: bool },
+}
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
             title: "Fire UI".into(),
             decorations: true,
-            overlay: false,
+            kind: WindowKind::Normal,
             transparent: false,
-            click_through: None,
             min_size: Size::new(420., 360.),
             position: None,
             size: Size::new(1100., 780.),
@@ -52,7 +59,7 @@ impl Default for WindowOptions {
 }
 enum HostEvent {
     #[cfg(all(unix, feature = "inspection"))]
-    Inspect(crate::inspection::Pending),
+    Inspect(Box<crate::inspection::Pending>),
     Command(Posted),
     #[cfg(feature = "accessibility")]
     Accessibility(accesskit_winit::Event),
@@ -240,7 +247,11 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         let proxy = wake.proxy.clone();
         Some(crate::inspection::Server::start(
             path.into(),
-            move |request| proxy.send_event(HostEvent::Inspect(request)).is_ok(),
+            move |request| {
+                proxy
+                    .send_event(HostEvent::Inspect(Box::new(request)))
+                    .is_ok()
+            },
         )?)
     } else {
         None
@@ -938,12 +949,14 @@ fn create<W: Widget>(
     factory: impl RendererFactory,
     #[cfg(feature = "accessibility")] proxy: EventLoopProxy<HostEvent>,
 ) -> Result<State<W>, String> {
+    let overlay = matches!(options.kind, WindowKind::Overlay { .. });
+    let interactive = matches!(options.kind, WindowKind::Overlay { interactive: true });
     let attrs = Window::default_attributes()
         .with_visible(false)
         .with_transparent(options.transparent)
-        .with_decorations(options.decorations && !options.overlay)
-        .with_active(!options.overlay)
-        .with_window_level(if options.overlay {
+        .with_decorations(options.decorations && !overlay)
+        .with_active(!overlay)
+        .with_window_level(if overlay {
             winit::window::WindowLevel::AlwaysOnTop
         } else {
             winit::window::WindowLevel::Normal
@@ -955,9 +968,8 @@ fn create<W: Widget>(
             options.min_size.height,
         ));
     #[cfg(all(target_os = "linux", feature = "x11"))]
-    let attrs = if options.overlay {
+    let attrs = if overlay {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
-        let interactive = options.click_through == Some(false);
         attrs
             .with_override_redirect(!interactive)
             .with_x11_window_type(vec![if interactive {
@@ -977,21 +989,21 @@ fn create<W: Widget>(
     #[cfg(feature = "accessibility")]
     let accessibility =
         crate::platform_accessibility::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
-    if options.overlay
+    if overlay
         && matches!(
             window.window_handle().map_err(|e| e.to_string())?.as_raw(),
             raw_window_handle::RawWindowHandle::Wayland(_)
         )
     {
-        return Err("Passive overlays require X11/XWayland on Linux".into());
+        return Err("Overlays require X11/XWayland on Linux".into());
     }
-    if options.click_through.unwrap_or(options.overlay) {
+    if overlay && !interactive {
         window
             .set_cursor_hittest(false)
             .map_err(|e| e.to_string())?;
     }
     window.set_visible(true);
-    if options.overlay && options.click_through == Some(false) {
+    if interactive {
         window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
     }
     let mut ui = Ui::new(root, options.size, options.limits)
@@ -1047,18 +1059,6 @@ fn resize_edge(p: Point, size: Size) -> Option<ResizeEdge> {
         (_, _, true, _) => Some(ResizeEdge::North),
         (_, _, _, true) => Some(ResizeEdge::South),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::WindowOptions;
-
-    #[test]
-    fn window_capability_defaults_preserve_existing_behavior() {
-        let options = WindowOptions::default();
-        assert!(!options.transparent);
-        assert_eq!(options.click_through, None);
     }
 }
 

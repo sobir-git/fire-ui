@@ -12,7 +12,7 @@ mod platform_accessibility;
 mod renderer;
 mod window;
 pub use renderer::{Renderer, RendererFactory};
-pub use window::{run, run_with, WakeHandle, WindowOptions};
+pub use window::{run, run_with, WakeHandle, WindowKind, WindowOptions};
 
 /// Blocking system file chooser. Hosts may call this from their platform's dialog thread.
 #[cfg(feature = "dialogs")]

@@ -445,8 +445,23 @@ impl<W: Widget> Ui<W> {
                 self.invalidate_paint(region);
             }
         }
-        for mutation in effects.mutations.drain(..) {
+        // Inserts commit first. A callback may already have named the new children,
+        // so its other mutations wait in the mailbox behind their mount notices.
+        let (inserts, rest): (Vec<_>, Vec<_>) = effects
+            .mutations
+            .drain(..)
+            .partition(|m| matches!(m, Mutation::Insert(_)));
+        for mutation in inserts {
             self.mutate(id, mutation)
+        }
+        if effects.split {
+            let mut later = Effects::new();
+            later.mutations = rest;
+            self.mailbox.push_reserved(Delivery::Effects(id, later), 0)
+        } else {
+            for mutation in rest {
+                self.mutate(id, mutation)
+            }
         }
         if let Some(n) = self.tree.get_mut(id).filter(|n| !n.retiring) {
             for (slot, epoch) in effects.tasks {
@@ -481,9 +496,13 @@ impl<W: Widget> Ui<W> {
     }
     fn mutate(&mut self, owner: Id, mutation: Mutation) {
         if !self.tree.live(owner) {
-            if let Mutation::Insert(p) = mutation {
-                self.mailbox.release(p.count, 0);
-                self.mailbox.reserved_nodes -= p.count;
+            match mutation {
+                Mutation::Insert(p) => {
+                    self.mailbox.release(p.count, 0);
+                    self.mailbox.reserved_nodes -= p.count;
+                }
+                Mutation::Send(_, _, bytes) => self.mailbox.release(1, bytes),
+                _ => {}
             }
             return;
         }
@@ -591,6 +610,9 @@ impl<W: Widget> Ui<W> {
             Mutation::Environment(id, type_id, value, layout) => {
                 self.environment(id, type_id, value, layout)
             }
+            Mutation::Send(id, payload, bytes) => self
+                .mailbox
+                .push_reserved(Delivery::Command(id, payload, None), bytes),
         }
     }
     fn cancel_timer(&mut self, id: Id, timer: Timer) {

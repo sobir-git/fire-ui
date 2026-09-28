@@ -1092,6 +1092,43 @@ fn dropdown_opens_a_list_below_itself_and_reports_the_chosen_option() {
 }
 
 #[test]
+fn an_open_dropdown_list_is_modal_and_takes_the_keyboard() {
+    let mut ui = Ui::new(
+        Dropdown::new("Palette", ["Ember", "Charcoal", "Paper"]),
+        Size::new(320., 400.),
+        Limits::default(),
+    )
+    .unwrap();
+    let mut text = TestText;
+    settle(&mut ui, &mut text);
+    let field = node(&ui, Role::Menu, "Palette").unwrap();
+    click(&mut ui, &mut text, center(field.bounds));
+    settle(&mut ui, &mut text);
+    let focused = ui.semantics().into_iter().find(|n| n.focused);
+    assert!(
+        focused.is_some_and(|n| n.id != field.id),
+        "the list takes focus in the callback that opened it"
+    );
+    for _ in 0..2 {
+        key(&mut ui, &mut text, Key::Down);
+        settle(&mut ui, &mut text);
+    }
+    key(&mut ui, &mut text, Key::Enter);
+    let mut chosen = vec![];
+    ui.pump(100, |o| chosen.push(o), |_| {});
+    assert_eq!(chosen, vec![1], "the keyboard reached the list");
+    settle(&mut ui, &mut text);
+    assert!(
+        node(&ui, Role::MenuItem, "Paper").is_none(),
+        "the list closed"
+    );
+    assert!(
+        node(&ui, Role::Menu, "Palette").unwrap().focused,
+        "focus returns to the field"
+    );
+}
+
+#[test]
 fn a_dropdown_inside_a_scrolling_panel_still_opens_over_it() {
     // The studio's shape: the field is deep inside a clipping viewport, so the list
     // is only usable if it escapes that clip as a window overlay.

@@ -22,6 +22,19 @@ def setUpModule():
 TOOLS = Path(__file__).resolve().parent
 
 
+
+def group_processes(group):
+    names = []
+    for stat in Path('/proc').glob('[0-9]*/stat'):
+        try:
+            head, tail = stat.read_text().rsplit(')', 1)
+        except OSError:
+            continue
+        # Fields after the final ')' begin at proc stat field 3; field 5 is the group.
+        if int(tail.split()[2]) == group:
+            names.append(head.split('(', 1)[1])
+    return names
+
 class StorageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='fire-ui-storage-test-')
@@ -160,13 +173,20 @@ with tempfile.TemporaryDirectory(prefix="fire-ui-lifetime-test-") as scratch:
                 stderr=subprocess.DEVNULL)
             try:
                 if ending == 'sleep 30':
+                    # Signal once the command runs: before `mktemp` returns, the
+                    # shell has not yet recorded the directory the trap removes.
                     deadline = time.monotonic() + 5
-                    while not list(shell_temp.iterdir()):
+                    while 'sleep' not in group_processes(process.pid):
                         self.assertLess(time.monotonic(), deadline)
                         time.sleep(.01)
                     os.killpg(process.pid, signal.SIGTERM)
                 process.wait(timeout=5)
-                self.assertEqual(list(shell_temp.iterdir()), [])
+                # The signalled outer shell exits before the subshell's trap finishes.
+                deadline = time.monotonic() + 5
+                while group_processes(process.pid):
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.01)
+                self.assertEqual(list(shell_temp.iterdir()), [], ending)
                 self.assertEqual(process.returncode == 0, ending == 'true')
             finally:
                 if process.poll() is None:
@@ -200,7 +220,8 @@ with tempfile.TemporaryDirectory(prefix="fire-ui-lifetime-test-") as scratch:
                 except ValueError as error:
                     assert 'Active Cargo build' in str(error),str(error)
                 second=subprocess.Popen(['cargo','build','--offline','--target-dir',str(root/'a/target')],cwd=root/'b',stdout=log,stderr=log)
-                deadline = time.monotonic() + 5
+                # Shared CI runners can take several seconds to start the second Cargo.
+                deadline = time.monotonic() + 60
                 while True:
                     log.seek(0)
                     if 'Blocking waiting for file lock' in log.read():

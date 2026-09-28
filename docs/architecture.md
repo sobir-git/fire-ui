@@ -37,8 +37,10 @@ output to an owner command; `forward` transfers an owned output unchanged as thi
 widget's command; `bubble` passes it through as this widget's own output, without
 invoking `update`, which is what a transparent decorator needs; `discard` explicitly
 ignores output. Detached subtrees are admitted atomically under node and
-message limits. Mount runs before layout and input. Dynamic handles become usable
-when their admitted structural change is committed after the callback.
+message limits. Mount runs before layout and input. A handle returned by `insert`
+is usable at once: commands and structural requests naming it in the same callback
+run after the new child mounts, so a popover is inserted, made modal and focused in
+one step.
 
 ## Runtime and phases
 
@@ -95,10 +97,9 @@ alignment, constraints, surfaces and viewports are all built this way, so decora
 a widget never severs the owner's ability to command it.
 
 Overlays anchor to the window or to a sibling; both escape ancestor clipping and are
-published against the viewport. An overlay must be born anchored, through
-`insert_at`: a handle returned by `insert` names a child the widget does not yet own
-when the callback runs, so anchoring afterwards is rejected. This is how a dropdown
-list leaves the scrolling panel that opened it.
+published against the viewport. `insert_at` creates a child already anchored; `anchor`
+lifts an existing child out or puts it back. This is how a dropdown list leaves the
+scrolling panel that opened it.
 
 Buttons own arbitrary ordinary content and add activation, capture, focus, semantics
 and appearance. Decorative content leaves activation to the button. A virtual list

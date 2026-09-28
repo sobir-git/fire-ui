@@ -36,7 +36,8 @@ With `inspection`, set `FIRE_UI_INSPECT` to a socket path in a private directory
 No socket exists by default. See the repository's `docs/inspection.md` for its
 semantic query/action protocol.
 
-`WindowOptions::overlay` creates a passive, click-through window. Linux overlays
+`WindowKind::Overlay` creates an undecorated window above normal windows. A passive
+overlay lets the pointer through; an interactive one receives input. Linux overlays
 require X11/XWayland; macOS and Windows overlay interaction remains unverified.
 
 Cargo features are additive across a shared build. `tools/lean_probe.py` builds

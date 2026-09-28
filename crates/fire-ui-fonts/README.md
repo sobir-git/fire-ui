@@ -11,3 +11,6 @@ inside its file; paragraph font indices select entries in the ordered `Fonts` li
 Pass clones of that same list to the text engine and renderer. Each consumer validates
 its supported formats. Cairo supports file face indices through 65535; larger indices
 cannot be represented by FreeType without colliding with its variation-instance bits.
+
+`system_font()` returns one common installed font or the `FIRE_UI_FONT` override.
+It only runs when an application calls it; nothing in Fire UI discovers fonts itself.

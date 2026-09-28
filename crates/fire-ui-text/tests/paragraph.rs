@@ -2,7 +2,7 @@ use fire_ui::*;
 use fire_ui_fonts::Fonts;
 use fire_ui_text::Text;
 fn text() -> Result<Text, String> {
-    let font = fire_ui_text::system_font().ok_or("Install a TrueType font or set FIRE_UI_FONT")?;
+    let font = fire_ui_fonts::system_font().ok_or("Install a TrueType font or set FIRE_UI_FONT")?;
     Text::new(Fonts::load(&[font])?)
 }
 use std::sync::Arc;

@@ -50,6 +50,8 @@ pub(crate) enum Mutation {
     Modal(Option<Id>),
     Anchor(Id, Option<Option<Id>>),
     Environment(Id, std::any::TypeId, Rc<dyn Any>, bool),
+    /// A command for a child inserted by the same callback, kept in callback order.
+    Send(Id, crate::widget::Payload, usize),
 }
 pub(crate) struct Effects {
     pub tasks: BTreeMap<TaskSlot, Option<u64>>,
@@ -60,6 +62,10 @@ pub(crate) struct Effects {
     pub damage: Option<Rect>,
     pub layout: bool,
     pub stop: bool,
+    /// Children inserted by this callback, usable before the insertion commits.
+    pub pending: Vec<Id>,
+    /// A mailbox slot is held to run the non-insert mutations after new mounts.
+    pub split: bool,
 }
 impl Effects {
     pub fn new() -> Self {
@@ -72,6 +78,8 @@ impl Effects {
             damage: None,
             layout: false,
             stop: false,
+            pending: vec![],
+            split: false,
         }
     }
 }
@@ -108,6 +116,7 @@ trait UpdateAccess {
     fn now(&self) -> Duration;
     fn focused(&self) -> bool;
     fn cleanup(&self) -> bool;
+    fn pending(&self, id: Id) -> bool;
     fn mutate(&mut self, mutation: Mutation) -> Result<(), (Error, Mutation)>;
 }
 impl UpdateAccess for RawUpdate<'_> {
@@ -132,6 +141,9 @@ impl UpdateAccess for RawUpdate<'_> {
     fn cleanup(&self) -> bool {
         self.cleanup
     }
+    fn pending(&self, id: Id) -> bool {
+        self.effects.pending.contains(&id)
+    }
     fn mutate(&mut self, mutation: Mutation) -> Result<(), (Error, Mutation)> {
         if self.cleanup {
             return Err((Error::Stale, mutation));
@@ -139,18 +151,31 @@ impl UpdateAccess for RawUpdate<'_> {
         if self.effects.mutations.len() >= 64 {
             return Err((Error::Full, mutation));
         }
-        let mounts = if let Mutation::Insert(p) = &mutation {
-            p.count
-        } else {
-            0
+        let (mounts, bytes) = match &mutation {
+            Mutation::Insert(p) => (p.count, 0),
+            Mutation::Send(_, _, bytes) => (0, *bytes),
+            _ => (0, 0),
         };
         if self.tree.len() + self.mailbox.reserved_nodes + mounts > self.max_nodes {
             return Err((Error::Full, mutation));
         }
         let deferred = usize::from(self.notifying && self.effects.mutations.is_empty());
-        if !self.mailbox.reserve(mounts + deferred, 0) {
+        // Inserts commit first; everything else waits for the new children to mount.
+        let inserting = matches!(mutation, Mutation::Insert(_));
+        let split = !self.effects.split
+            && self
+                .effects
+                .mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::Insert(_)) != inserting);
+        let sends = usize::from(matches!(mutation, Mutation::Send(..)));
+        if !self
+            .mailbox
+            .reserve(mounts + deferred + usize::from(split) + sends, bytes)
+        {
             return Err((Error::Full, mutation));
         }
+        self.effects.split |= split;
         self.inserted += mounts;
         self.mailbox.reserved_nodes += mounts;
         self.effects.mutations.push(mutation);
@@ -185,6 +210,7 @@ impl<W: Widget> Update<'_, W> {
             Some(n) if n.retiring => Err(Error::Stale),
             Some(n) if n.parent == Some(self.raw.me()) => Ok(()),
             Some(_) => Err(Error::NotOwned),
+            None if self.raw.pending(child.id) => Ok(()),
             None => Err(Error::Stale),
         }
     }
@@ -200,6 +226,21 @@ impl<W: Widget> Update<'_, W> {
             return Err((Error::Stale, command));
         }
         let bytes = command.bytes();
+        if self.raw.pending(child.id) {
+            return match self
+                .raw
+                .mutate(Mutation::Send(child.id, Box::new(command), bytes))
+            {
+                Ok(()) => Ok(()),
+                Err((e, Mutation::Send(_, payload, _))) => Err((
+                    e,
+                    *payload
+                        .downcast()
+                        .expect("private pending command type invariant"),
+                )),
+                Err(_) => unreachable!(),
+            };
+        }
         if !self.raw.mailbox().reserve(1, bytes) {
             return Err((Error::Full, command));
         }
@@ -249,6 +290,7 @@ impl<W: Widget> Update<'_, W> {
             .mutate(Mutation::Show(child.id, show))
             .map_err(|(e, _)| e)
     }
+    /// Insert an ordinary child; see [`Update::insert_at`].
     pub fn insert<C: Widget>(
         &mut self,
         element: Element<C>,
@@ -256,11 +298,14 @@ impl<W: Widget> Update<'_, W> {
     ) -> Result<Child<C>, (Error, Element<C>)> {
         self.insert_at(element, Anchor::<C>::None, map)
     }
-    /// Insert a child that is an overlay from the moment it exists.
+    /// Insert a child, returning a handle usable immediately.
     ///
-    /// An overlay cannot be arranged after the fact: a handle returned by `insert`
-    /// names a child this widget does not own until the callback returns, so
-    /// `anchor` would be rejected. A menu, popover or tooltip is inserted this way.
+    /// The insertion commits when the callback returns. Commands and structural
+    /// requests naming the new child in the same callback run after it mounts, so an
+    /// owner can insert a popover, make it modal and focus it in one step.
+    ///
+    /// `anchor` makes the child an overlay from the moment it exists, which is how a
+    /// menu, popover or tooltip escapes the clipping of the panel that opened it.
     pub fn insert_at<C: Widget, A: Widget>(
         &mut self,
         element: Element<C>,
@@ -288,7 +333,10 @@ impl<W: Widget> Update<'_, W> {
             (Box::new(command), bytes)
         })));
         match self.raw.mutate(Mutation::Insert(prepared)) {
-            Ok(()) => Ok(child),
+            Ok(()) => {
+                self.raw.effects().pending.push(child.id);
+                Ok(child)
+            }
             Err((e, Mutation::Insert(p))) => Err((e, Element::from_prepared(p))),
             _ => unreachable!(),
         }

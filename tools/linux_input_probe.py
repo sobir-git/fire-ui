@@ -186,7 +186,7 @@ def main():
             results["app_args"] = app_args
             app = start("studio" if args.target == "studio" else "notes", binary, *app_args)
             title = "^Fire UI Studio$" if args.target == "studio" else "^Fire Notes$"
-            window = wait_for(lambda: run("xdotool", "search", "--all", "--pid", app.pid, "--name", title), "application window").splitlines()[0]
+            window = wait_for(lambda: run("xdotool", "search", "--all", "--onlyvisible", "--pid", app.pid, "--name", title), "application window").splitlines()[0]
             run("xdotool", "windowfocus", window)
             # The studio publishes only the section that is showing, so a widget
             # exists once its own section is selected. Navigating uses the same
@@ -265,7 +265,7 @@ def main():
             key("a")
             wait_for(lambda: node(editor)["text"]["composition"], "native focus-loss preedit")
             focus_window = start("focus-window", "xmessage", "-title", "Probe focus target", "Isolated focus target")
-            focus_id = wait_for(lambda: run("xdotool", "search", "--name", "Probe focus target"), "second native window").splitlines()[0]
+            focus_id = wait_for(lambda: run("xdotool", "search", "--onlyvisible", "--name", "Probe focus target"), "second native window").splitlines()[0]
             run("xdotool", "windowfocus", focus_id)
             wait_for(lambda: not snapshot()["window_focused"], "native focus loss")
             run("xdotool", "windowfocus", window)

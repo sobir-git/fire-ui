@@ -89,9 +89,16 @@ impl Dropdown {
             Routed::Chosen(o.clone())
         }) {
             Ok(list) => {
+                // A list that cannot trap input would leave the page usable under it.
+                if cx
+                    .open_modal(list)
+                    .and_then(|()| cx.focus_child(list))
+                    .is_err()
+                {
+                    let _ = cx.remove(list);
+                    return cx.repaint();
+                }
                 self.list = Some(list);
-                let _ = cx.open_modal(list);
-                let _ = cx.focus_child(list);
                 cx.relayout();
                 cx.repaint()
             }

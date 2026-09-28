@@ -75,7 +75,7 @@ parity. Browser, mobile, embedded and `no_std` hosts are not provided.
 Supply explicitly selected, licensed font files through `fire-ui-fonts::Fonts`, or provide owned/static bytes.
 `Fonts::load` owns stable bytes; the optional `mmap` feature adds `unsafe Fonts::map`,
 which requires the caller to keep the
-mapped files immutable for every resource's lifetime. `system_font()` is an
+mapped files immutable for every resource's lifetime. `fire_ui_fonts::system_font()` is an
 optional helper, including a `FIRE_UI_FONT` override. There is no font discovery
 in the native host. The same font resources serve shaping and drawing.
 Mixed-direction text shares shaping, selection and visual caret geometry. IME

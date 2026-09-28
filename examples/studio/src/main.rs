@@ -325,7 +325,7 @@ impl Widget for Studio {
 
 fn main() -> Result<(), String> {
     let mut paths =
-        vec![fire_ui_text::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?];
+        vec![fire_ui_fonts::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?];
     paths.extend(fallback_fonts());
     let fonts = fire_ui_fonts::Fonts::load(&paths)?;
     fire_ui_native::run_with(

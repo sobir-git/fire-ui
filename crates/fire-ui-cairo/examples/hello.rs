@@ -4,7 +4,7 @@ use fire_ui_widgets::{Label, Padding};
 
 fn main() -> Result<(), String> {
     let fonts = fire_ui_fonts::Fonts::load(&[
-        fire_ui_text::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?
+        fire_ui_fonts::system_font().ok_or("Set FIRE_UI_FONT to a readable font file")?
     ])?;
     let content = Padding::new(Element::leaf(Label::new("Hello, Fire UI")), 24.0);
     run(

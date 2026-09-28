@@ -107,6 +107,23 @@ impl Fonts {
     }
 }
 
+/// Find one common system font, or the explicit `FIRE_UI_FONT` override.
+/// Called only when an application chooses it; the native host never discovers fonts.
+pub fn system_font() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("FIRE_UI_FONT") {
+        return Some(path.into());
+    }
+    [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .find(|path| path.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

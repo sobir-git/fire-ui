@@ -452,8 +452,10 @@ mod tests {
         ui.pump(100, |_| {}, |_| {});
         ui.layout(
             &mut fire_ui_text::Text::new(
-                fire_ui_fonts::Fonts::load(&["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
-                    .unwrap(),
+                fire_ui_fonts::Fonts::load(&[
+                    fire_ui_fonts::system_font().expect("test requires a system font")
+                ])
+                .unwrap(),
             )
             .unwrap(),
         );
@@ -659,8 +661,10 @@ mod tests {
         ui.pump(100, |_| {}, |_| {});
         ui.layout(
             &mut fire_ui_text::Text::new(
-                fire_ui_fonts::Fonts::load(&["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
-                    .unwrap(),
+                fire_ui_fonts::Fonts::load(&[
+                    fire_ui_fonts::system_font().expect("test requires a system font")
+                ])
+                .unwrap(),
             )
             .unwrap(),
         );
