@@ -180,9 +180,8 @@ impl Widget for OverlayOrderRoot {
     type Output = Infallible;
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
         if event == Lifecycle::Mount {
-            cx.anchor(self.first, Anchor::<OverlayLeaf>::Window)
-                .unwrap();
-            cx.anchor(self.last, Anchor::<OverlayLeaf>::Window).unwrap();
+            cx.anchor(self.first, Anchor::Window).unwrap();
+            cx.anchor(self.last, Anchor::Window).unwrap();
         }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, c: Constraints) -> Metrics {
@@ -240,8 +239,7 @@ impl Widget for ManyNodes {
     type Output = Infallible;
     fn lifecycle(&mut self, cx: &mut Update<'_, Self>, event: Lifecycle) {
         if event == Lifecycle::Mount {
-            cx.anchor(self.overlay, Anchor::<OverlayLeaf>::Window)
-                .unwrap();
+            cx.anchor(self.overlay, Anchor::Window).unwrap();
         }
     }
     fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics {
@@ -447,14 +445,14 @@ impl Widget for Root {
         match command {
             Command::Remove => cx.remove(a).unwrap(),
             Command::Hide => cx.show(a, false).unwrap(),
-            Command::Anchor => cx.anchor(b, Anchor::To(a)).unwrap(),
+            Command::Anchor => cx.anchor(b, Anchor::to(a)).unwrap(),
             Command::Chain => {
-                cx.anchor(b, Anchor::To(a)).unwrap();
-                cx.anchor(c, Anchor::To(b)).unwrap();
+                cx.anchor(b, Anchor::to(a)).unwrap();
+                cx.anchor(c, Anchor::to(b)).unwrap();
             }
             Command::RemoveThenAnchor => {
                 cx.remove(b).unwrap();
-                cx.anchor(b, Anchor::To(a)).unwrap();
+                cx.anchor(b, Anchor::to(a)).unwrap();
             }
         }
     }

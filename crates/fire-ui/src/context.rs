@@ -17,13 +17,19 @@ pub enum Error {
 pub struct Timer(pub(crate) Id);
 
 /// Where an overlay is placed, or `None` for an ordinary child.
-pub enum Anchor<A: Widget> {
+pub enum Anchor {
     /// Not an overlay: laid out and clipped by its owner like any other child.
     None,
     /// Positioned against the window's origin and clipped only by the window.
     Window,
     /// Positioned against another child, and clipped only by the window.
-    To(Child<A>),
+    To(LayoutChild),
+}
+impl Anchor {
+    /// Anchor an overlay to a child owned by the same widget.
+    pub fn to<A: Widget>(child: Child<A>) -> Self {
+        Self::To(child.into())
+    }
 }
 
 impl Default for Timer {
@@ -214,11 +220,14 @@ impl<W: Widget> Update<'_, W> {
         self.raw.tree().get(self.raw.me())?.environment.get::<T>()
     }
     fn owned<C: Widget>(&self, child: Child<C>) -> Result<(), Error> {
-        match self.raw.tree().get(child.id) {
+        self.owned_id(child.id)
+    }
+    fn owned_id(&self, id: Id) -> Result<(), Error> {
+        match self.raw.tree().get(id) {
             Some(n) if n.retiring => Err(Error::Stale),
             Some(n) if n.parent == Some(self.raw.me()) => Ok(()),
             Some(_) => Err(Error::NotOwned),
-            None if self.raw.pending(child.id) => Ok(()),
+            None if self.raw.pending(id) => Ok(()),
             None => Err(Error::Stale),
         }
     }
@@ -312,7 +321,7 @@ impl<W: Widget> Update<'_, W> {
         element: Element<C>,
         map: impl Fn(&C::Output) -> W::Command + 'static,
     ) -> Result<Child<C>, (Error, Element<C>)> {
-        self.insert_at(element, Anchor::<C>::None, map)
+        self.insert_at(element, Anchor::None, map)
     }
     /// Insert a child, returning a handle usable immediately.
     ///
@@ -322,20 +331,20 @@ impl<W: Widget> Update<'_, W> {
     ///
     /// `anchor` makes the child an overlay from the moment it exists, which is how a
     /// menu, popover or tooltip escapes the clipping of the panel that opened it.
-    pub fn insert_at<C: Widget, A: Widget>(
+    pub fn insert_at<C: Widget>(
         &mut self,
         element: Element<C>,
-        anchor: Anchor<A>,
+        anchor: Anchor,
         map: impl Fn(&C::Output) -> W::Command + 'static,
     ) -> Result<Child<C>, (Error, Element<C>)> {
         let anchor = match anchor {
             Anchor::None => None,
             Anchor::Window => Some(None),
             Anchor::To(a) => {
-                if let Err(e) = self.owned(a) {
+                if let Err(e) = self.owned_id(a.0) {
                     return Err((e, element));
                 }
-                Some(Some(a.id))
+                Some(Some(a.0))
             }
         };
         let child = Child::new(element.prepared.id);
@@ -391,21 +400,17 @@ impl<W: Widget> Update<'_, W> {
     /// An overlay is placed against its anchor rather than against this widget, and
     /// is clipped by the window instead of by any ancestor. That is what lets a menu
     /// or a popover leave the scrolling panel that opened it.
-    pub fn anchor<C: Widget, A: Widget>(
-        &mut self,
-        child: Child<C>,
-        anchor: Anchor<A>,
-    ) -> Result<(), Error> {
+    pub fn anchor<C: Widget>(&mut self, child: Child<C>, anchor: Anchor) -> Result<(), Error> {
         self.owned(child)?;
         let anchor = match anchor {
             Anchor::None => None,
             Anchor::Window => Some(None),
             Anchor::To(a) => {
-                self.owned(a)?;
-                if a.id == child.id {
+                self.owned_id(a.0)?;
+                if a.0 == child.id {
                     return Err(Error::InvalidGeometry);
                 }
-                Some(Some(a.id))
+                Some(Some(a.0))
             }
         };
         self.raw

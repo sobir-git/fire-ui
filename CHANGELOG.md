@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make window anchors independent of child type inference, while keeping typed
+  handles for anchors to other children.
 - Read the Studio version from its package metadata and resolve shared page
   padding from the active theme's scale.
 - Cache parsed OpenGL outline faces and reset the optional raster text atlas

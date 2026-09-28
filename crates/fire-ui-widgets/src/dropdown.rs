@@ -87,7 +87,7 @@ impl Dropdown {
         // clipped by whatever panel the field happens to sit in.
         match cx.insert_at(
             Menu::new(items, at, Some(self.selected)),
-            Anchor::<Self>::Window,
+            Anchor::Window,
             |o| Routed::Chosen(o.clone()),
         ) {
             Ok(list) => {
