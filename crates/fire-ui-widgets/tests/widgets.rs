@@ -1146,6 +1146,14 @@ fn dropdown_arrows_start_from_its_selection() {
     let field = node(&ui, Role::Menu, "Palette").unwrap();
     click(&mut ui, &mut text, center(field.bounds));
     settle(&mut ui, &mut text);
+    assert_eq!(
+        node(&ui, Role::MenuItem, "Charcoal")
+            .unwrap()
+            .semantics
+            .checked,
+        Some(true),
+        "the current value keeps its visual and accessibility checkmark"
+    );
     key(&mut ui, &mut text, Key::Down);
     key(&mut ui, &mut text, Key::Enter);
     let mut chosen = vec![];

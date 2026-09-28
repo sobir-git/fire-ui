@@ -79,7 +79,7 @@ impl Dropdown {
             .options
             .iter()
             .enumerate()
-            .map(|(i, option)| MenuItem::new(i, option.clone()))
+            .map(|(i, option)| MenuItem::new(i, option.clone()).checked(i == self.selected))
             .collect();
         let field = cx.window_bounds();
         let at = Point::new(field.x, field.y + field.height + 4.);
