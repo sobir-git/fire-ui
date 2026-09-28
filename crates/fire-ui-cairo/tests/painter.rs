@@ -15,8 +15,10 @@ fn pixels(draw: impl FnOnce(&mut CairoPainter<'_>)) -> Vec<u32> {
     }
     let bytes = surface.data().unwrap();
     bytes
-        .chunks_exact(4)
-        .map(|v| u32::from_ne_bytes(v.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|v| u32::from_ne_bytes(*v))
         .collect()
 }
 
