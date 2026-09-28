@@ -151,6 +151,12 @@ struct UndoEdit {
     removed_len: usize,
     text: String,
 }
+#[derive(Clone, Copy)]
+struct TypingGroup {
+    end: usize,
+    at: Duration,
+    whitespace: bool,
+}
 
 #[cfg(test)]
 mod history_cost_tests {
@@ -171,7 +177,7 @@ mod history_cost_tests {
     fn plain_typing_retains_inline_edits_without_selection_allocations() {
         let mut editor = Editor::new("");
         for _ in 0..1_000 {
-            editor.insert_typed("x");
+            editor.insert_typed("x", Duration::ZERO);
         }
         assert_eq!(editor.undo.len(), 1);
         assert!(editor
@@ -195,13 +201,39 @@ mod history_cost_tests {
     fn consecutive_typed_characters_undo_together() {
         let mut editor = Editor::new("");
         for ch in ["a", "🔥", "b"] {
-            editor.insert_typed(ch);
+            editor.insert_typed(ch, Duration::ZERO);
         }
         assert_eq!(editor.text(), "a🔥b");
         editor.history(false);
         assert_eq!(editor.text(), "");
         editor.history(true);
         assert_eq!(editor.text(), "a🔥b");
+    }
+
+    #[test]
+    fn typing_after_whitespace_starts_a_new_undo_group() {
+        let mut editor = Editor::new("");
+        for ch in "first second".chars() {
+            editor.insert_typed(&ch.to_string(), Duration::ZERO);
+        }
+        editor.history(false);
+        assert_eq!(editor.text(), "first ");
+        editor.history(false);
+        assert_eq!(editor.text(), "");
+    }
+
+    #[test]
+    fn finished_typing_group_releases_spare_string_capacity() {
+        let mut editor = Editor::new("");
+        for ch in "abcdef ".chars() {
+            editor.insert_typed(&ch.to_string(), Duration::ZERO);
+        }
+        editor.insert_typed("x", Duration::ZERO);
+        assert_eq!(editor.undo.len(), 2);
+        let UndoEdits::Single(edit) = &editor.undo[0].edits else {
+            panic!("typing should make one inline edit per group")
+        };
+        assert_eq!(edit.text.capacity(), edit.text.len());
     }
 
     #[test]
@@ -473,7 +505,7 @@ pub struct Editor<D: Document = StringDocument> {
     placeholder_layout: Option<Arc<Paragraph>>,
     undo: Vec<Undo>,
     redo: Vec<Undo>,
-    typing_end: Option<usize>,
+    typing_group: Option<TypingGroup>,
     blink: Timer,
     caret_on: bool,
     caret_blink: bool,
@@ -541,7 +573,7 @@ impl<D: Document> Editor<D> {
             placeholder_layout: None,
             undo: Vec::new(),
             redo: vec![],
-            typing_end: None,
+            typing_group: None,
             blink: Timer::new(),
             caret_on: true,
             caret_blink: true,
@@ -784,7 +816,7 @@ impl<D: Document> Editor<D> {
             .unwrap_or(0)
     }
     fn move_to(&mut self, byte: usize, select: bool) {
-        self.typing_end = None;
+        self.finish_typing_group();
         if select {
             if self.anchor.is_none() {
                 self.anchor = Some(self.caret.byte)
@@ -826,7 +858,7 @@ impl<D: Document> Editor<D> {
         self.apply_inner(transaction, true)
     }
     fn apply_inner(&mut self, transaction: Transaction, normalize: bool) -> bool {
-        self.typing_end = None;
+        self.finish_typing_group();
         let mut edits = transaction.edits;
         if edits.is_empty() {
             return false;
@@ -940,21 +972,47 @@ impl<D: Document> Editor<D> {
         self.inserted |=
             self.document.revision() != before && text.chars().any(|ch| ch != '\n' && ch != '\r');
     }
-    fn insert_typed(&mut self, text: &str) {
+    fn finish_typing_group(&mut self) {
+        if self.typing_group.take().is_some() {
+            self.shrink_last_typing_edit();
+        }
+    }
+    fn shrink_last_typing_edit(&mut self) {
+        if let Some(Undo {
+            edits: UndoEdits::Single(edit),
+            ..
+        }) = self.undo.last_mut()
+        {
+            edit.text.shrink_to_fit();
+        }
+    }
+    fn insert_typed(&mut self, text: &str, now: Duration) {
         let start = self.caret.byte;
         let eligible = self.selection().is_none()
             && text.graphemes(true).count() == 1
             && !text.chars().any(char::is_control);
+        let whitespace = text.chars().all(char::is_whitespace);
+        let previous = self.typing_group.take();
         let merge = eligible
-            && self.typing_end == Some(start)
+            && previous.is_some_and(|group| {
+                group.end == start
+                    && now.saturating_sub(group.at) <= Duration::from_secs(1)
+                    && (!group.whitespace || whitespace)
+            })
             && self.undo.last().is_some_and(|entry| {
                 entry.selection.is_none()
                     && matches!(&entry.edits, UndoEdits::Single(edit)
                         if edit.removed_len == 0 && edit.start + edit.inserted().len() == start)
             });
+        if previous.is_some() && !merge {
+            self.shrink_last_typing_edit();
+        }
         let history_len = self.undo.len();
         self.insert(text);
         if !eligible || self.undo.len() != history_len + 1 {
+            if merge {
+                self.shrink_last_typing_edit();
+            }
             return;
         }
         if merge {
@@ -967,10 +1025,14 @@ impl<D: Document> Editor<D> {
             };
             previous.text.push_str(last_edit.inserted());
         }
-        self.typing_end = Some(self.caret.byte);
+        self.typing_group = Some(TypingGroup {
+            end: self.caret.byte,
+            at: now,
+            whitespace,
+        });
     }
     fn move_lines(&mut self, down: bool) {
-        self.typing_end = None;
+        self.finish_typing_group();
         let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
         let start = self.text()[..range.start].rfind('\n').map_or(0, |i| i + 1);
         let last = if range.end > range.start && self.text().as_bytes()[range.end - 1] == b'\n' {
@@ -1055,7 +1117,7 @@ impl<D: Document> Editor<D> {
         }
     }
     fn history(&mut self, redo: bool) {
-        self.typing_end = None;
+        self.finish_typing_group();
         if redo {
             if let Some(e) = self.redo.pop() {
                 for edit in e.edits.as_slice() {
@@ -1271,7 +1333,7 @@ impl<D: Document> Widget for Editor<D> {
                 return;
             }
             Edit::Set(text) => {
-                self.typing_end = None;
+                self.finish_typing_group();
                 self.document.replace(0..self.text().len(), &text);
                 self.caret = Caret::at(0);
                 self.anchor = None;
@@ -1286,7 +1348,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Edit::Insert(text) => self.insert(&text),
             Edit::Select { anchor, caret } => {
-                self.typing_end = None;
+                self.finish_typing_group();
                 self.anchor = Some(self.boundary(anchor));
                 self.caret = Caret::at(self.boundary(caret));
             }
@@ -1404,7 +1466,7 @@ impl<D: Document> Widget for Editor<D> {
                 }
             }
             Lifecycle::Focus(false) | Lifecycle::Visibility(false) | Lifecycle::Unmount => {
-                self.typing_end = None;
+                self.finish_typing_group();
                 if event == Lifecycle::Focus(false) {
                     self.focused = false;
                     let _ = cx.emit(EditorOutput::FocusChanged(false));
@@ -1694,7 +1756,7 @@ impl<D: Document> Widget for Editor<D> {
                 down: true,
                 position,
             } => {
-                self.typing_end = None;
+                self.finish_typing_group();
                 // A target that claims the press arms for activation on release
                 // inside; the press is consumed either way.
                 if self.arm_target(*position, *pointer, cx.focused()) {
@@ -1776,13 +1838,13 @@ impl<D: Document> Widget for Editor<D> {
                 let _ = cx.release(*pointer);
             }
             Input::Text { text, .. } => {
-                self.insert_typed(text);
+                self.insert_typed(text, cx.now());
                 self.clear_preedit();
             }
             Input::Preedit {
                 text, selection, ..
             } => {
-                self.typing_end = None;
+                self.finish_typing_group();
                 self.preedit = text.clone();
                 self.preedit_selection = selection
                     .filter(|(a, b)| text.is_char_boundary(*a) && text.is_char_boundary(*b));

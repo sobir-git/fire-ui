@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Typed undo groups end at word boundaries and after a one-second pause; completed
+  groups release spare text capacity.
 - Keep slider and progress state finite when supplied non-finite values or bounds.
 - Preserve CRLF and caret boundaries when moving editor lines; clamp horizontal
   wheel scrolling, use shared scrollbar geometry, and reshape placeholders on

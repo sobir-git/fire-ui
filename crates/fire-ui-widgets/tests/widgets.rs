@@ -107,6 +107,39 @@ fn typed_text_events_coalesce_but_caret_movement_starts_a_new_undo_step() {
     settle(&mut ui, &mut TestText);
     assert_eq!(ui.root().text(), "");
 }
+
+#[test]
+fn typed_text_after_a_pause_starts_a_new_undo_step() {
+    let mut ui = Ui::new(
+        Element::leaf(Editor::new("")),
+        Size::new(300., 100.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    ui.accessibility(ui.semantics()[0].id, SemanticAction::Focus)
+        .unwrap();
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "a".into(),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    ui.advance(std::time::Duration::from_millis(1_100), 100);
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "b".into(),
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    ui.send(Edit::Undo).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.root().text(), "a");
+}
 #[test]
 fn paragraph_is_shared_across_paint_only_theme_and_height_resize() {
     let mut ui = Ui::new(
