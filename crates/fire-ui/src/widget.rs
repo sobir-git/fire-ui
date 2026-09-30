@@ -251,6 +251,15 @@ pub trait Widget: Any + Sized {
         cx.overlay(limits)
     }
     fn paint(&self, _cx: &mut Paint<'_>) {}
+    /// How opaque this widget and its whole subtree draw, from 0 to 1.
+    ///
+    /// The runtime applies it around `paint` and every descendant through
+    /// [`Painter::opacity`], so fading a panel needs no cooperation from its
+    /// content. Zero skips painting the subtree. Input, focus and semantics are
+    /// unaffected. Request a repaint after changing it.
+    fn opacity(&self) -> f32 {
+        1.
+    }
     fn focusable(&self) -> bool {
         false
     }
@@ -299,6 +308,7 @@ pub(crate) trait Erased {
     fn timer(&mut self, cx: &mut crate::context::RawUpdate<'_>, timer: Timer);
     fn layout(&mut self, cx: &mut Layout<'_>, limits: Constraints) -> Metrics;
     fn paint(&self, cx: &mut Paint<'_>);
+    fn opacity(&self) -> f32;
     fn focusable(&self) -> bool;
     fn cursor(&self, position: Point) -> Option<CursorIcon>;
     fn ime_cursor(&self) -> Option<Rect>;
@@ -347,6 +357,9 @@ impl<W: Widget> Erased for W {
     }
     fn paint(&self, cx: &mut Paint<'_>) {
         self.paint(cx)
+    }
+    fn opacity(&self) -> f32 {
+        self.opacity()
     }
     fn focusable(&self) -> bool {
         self.focusable()

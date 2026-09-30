@@ -11,8 +11,10 @@ mod linux_edit;
 mod platform_accessibility;
 mod renderer;
 mod window;
+#[cfg(feature = "x11")]
+mod x11;
 pub use renderer::{Renderer, RendererFactory};
-pub use window::{run, run_with, WakeHandle, WindowKind, WindowOptions};
+pub use window::{run, run_with, PointerPlacement, WakeHandle, WindowKind, WindowOptions};
 
 /// Blocking system file chooser. Hosts may call this from their platform's dialog thread.
 #[cfg(feature = "dialogs")]

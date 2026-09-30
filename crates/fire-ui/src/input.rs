@@ -100,6 +100,12 @@ pub enum Lifecycle {
     Unmount,
     Visibility(bool),
     Focus(bool),
+    /// Native window activation changed; delivered to the root.
+    WindowFocus(bool),
+    /// Whether transparent pixels show what lies beneath the window: it was
+    /// created transparent and a compositor blends it. Delivered to the root
+    /// when it changes. Draw rounded or translucent edges only while true.
+    WindowTransparent(bool),
     CaptureLost(u32),
     CancelKeys,
     Hover(bool),

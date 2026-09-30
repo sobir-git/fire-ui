@@ -33,10 +33,12 @@ commands with `connect`, or pass straight through with `bubble`, which is what
 makes a decorator transparent in both directions. Use `Update` for state changes,
 `Layout` for measuring and placing children, and `Paint` for drawing. Overlays —
 menus, popovers — are inserted already anchored to the window or a sibling, and
-escape ancestor clipping. The host sleeps unless input, queued work, a
-deadline or an explicit frame request needs attention.
+escape ancestor clipping. A widget's `opacity` fades it and its whole subtree.
+The host sleeps unless input, queued work, a deadline or an explicit frame request
+needs attention.
 
-Custom hosts implement `Painter` and `TextEngine` and drive `Ui`. Clipboard requests
+Custom hosts implement `Painter` (including multiplicative `opacity` restored with
+`restore`) and `TextEngine` and drive `Ui`. Clipboard requests
 are disabled by default. Hosts that handle `HostRequest::Copy` and `HostRequest::Paste`
 call `Ui::set_clipboard_enabled(true)` before delivering input; unsupported requests
 return `Error::Unsupported` before widgets mutate a cut selection.

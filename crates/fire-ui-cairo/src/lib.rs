@@ -5,6 +5,9 @@ pub struct CairoPainter<'a> {
     pub context: cairo::Context,
     fonts: &'a FontFaces,
     error: std::cell::RefCell<Option<String>>,
+    /// Current opacity, and the values saved by each unmatched `save`.
+    alpha: f32,
+    alphas: Vec<f32>,
 }
 /// Cairo font objects own the selected byte storage and remain independent of windows.
 pub struct FontFaces(Vec<cairo::FontFace>);
@@ -19,6 +22,8 @@ impl<'a> CairoPainter<'a> {
             context,
             fonts,
             error: Default::default(),
+            alpha: 1.,
+            alphas: vec![],
         }
     }
     pub fn status(&self) -> Result<(), String> {
@@ -85,6 +90,11 @@ impl<'a> CairoPainter<'a> {
         bounds: impl FnOnce(&cairo::Context) -> Result<(f64, f64, f64, f64), cairo::Error>,
         draw: impl Fn(&cairo::Context) -> Result<(), cairo::Error>,
     ) {
+        let b = if self.alpha < 1. {
+            b.faded(self.alpha)
+        } else {
+            b
+        };
         let result = (|| -> Result<(), String> {
             let c = &self.context;
             let Brush::Box {
@@ -223,10 +233,17 @@ impl<'a> CairoPainter<'a> {
 }
 impl Painter for CairoPainter<'_> {
     fn save(&mut self) {
+        self.alphas.push(self.alpha);
         let _ = self.context.save();
     }
     fn restore(&mut self) {
+        if let Some(alpha) = self.alphas.pop() {
+            self.alpha = alpha;
+        }
         let _ = self.context.restore();
+    }
+    fn opacity(&mut self, alpha: f32) {
+        self.alpha *= alpha.clamp(0., 1.);
     }
     fn transform(&mut self, t: Transform) {
         let a = t.0;

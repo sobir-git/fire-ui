@@ -19,6 +19,12 @@ use winit::{
 #[derive(Clone)]
 pub struct WindowOptions {
     pub title: String,
+    /// Map the window on startup. Hidden windows retain their UI and sleep.
+    pub visible: bool,
+    /// Bound intrinsic root height while keeping the configured width fixed.
+    pub content_height: Option<f32>,
+    /// Reapply placement before each show, using the monitor under the pointer.
+    pub placement: Option<PointerPlacement>,
     pub decorations: bool,
     pub kind: WindowKind,
     /// Request a native window whose pixels preserve alpha transparency.
@@ -33,6 +39,8 @@ pub struct WindowOptions {
 /// How the window relates to other windows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WindowKind {
+    /// Activated, undecorated launcher above other windows, absent from taskbar/pager.
+    Launcher,
     /// An ordinary application window.
     #[default]
     Normal,
@@ -42,10 +50,18 @@ pub enum WindowKind {
     /// requires X11/XWayland.
     Overlay { interactive: bool },
 }
+/// Horizontal center and fractional top edge within the pointer's monitor.
+#[derive(Clone, Copy, Debug)]
+pub struct PointerPlacement {
+    pub top_fraction: f32,
+}
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
             title: "Fire UI".into(),
+            visible: true,
+            content_height: None,
+            placement: None,
             decorations: true,
             kind: WindowKind::Normal,
             transparent: false,
@@ -204,6 +220,8 @@ struct State<W: Widget> {
     ui: Ui<W>,
     window: Arc<Window>,
     occluded: bool,
+    visible: bool,
+    show_at: Option<Instant>,
     resize_at: Option<Instant>,
 }
 struct Host<W: Widget, F, R> {
@@ -306,7 +324,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
 impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W, F, R> {
     fn frame_if_due(&mut self) {
         let Some(s) = &mut self.state else { return };
-        if s.occluded || !s.ui.next_work().frame || Instant::now() < self.next_frame {
+        if !s.visible || s.occluded || !s.ui.next_work().frame || Instant::now() < self.next_frame {
             return;
         }
         let hz = s
@@ -336,7 +354,32 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
             match request {
                 HostRequest::Close => self.close_requested = true,
                 HostRequest::Window(action) => match action {
-                    WindowAction::Focus => s.window.focus_window(),
+                    WindowAction::Focus => {
+                        activate(&s.window, self.options.kind == WindowKind::Launcher)
+                    }
+                    WindowAction::Show => {
+                        s.show_at = Some(Instant::now());
+                        // A compositor may have started or stopped while hidden.
+                        s.ui.set_window_transparent(transparent(&s.window, &self.options));
+                        place(&s.window, self.options.placement);
+                        s.visible = true;
+                        s.occluded = false;
+                        s.ui.window_visible(true);
+                        s.window.set_visible(true);
+                        if !matches!(self.options.kind, WindowKind::Overlay { .. }) {
+                            activate(&s.window, self.options.kind == WindowKind::Launcher);
+                        }
+                        s.ui.repaint();
+                        self.needs_full_redraw = true;
+                    }
+                    WindowAction::Hide => {
+                        s.visible = false;
+                        s.ui.window_visible(false);
+                        s.window.set_visible(false);
+                    }
+                    WindowAction::MoveTo { x, y } => s
+                        .window
+                        .set_outer_position(winit::dpi::PhysicalPosition::new(x, y)),
                     WindowAction::Restore => {
                         s.window.set_minimized(false);
                         s.window.set_maximized(false);
@@ -414,6 +457,15 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
                     self.wake.count.fetch_sub(1, Ordering::AcqRel);
                     self.wake.bytes.fetch_sub(post.bytes, Ordering::AcqRel);
                 }
+            }
+        }
+        if let Some(max) = self.options.content_height {
+            s.ui.layout_content_height(s.text.as_mut(), self.options.min_size.height, max);
+            let size = s.ui.size();
+            let physical = LogicalSize::new(size.width, size.height)
+                .to_physical::<u32>(s.window.scale_factor());
+            if s.window.inner_size() != physical {
+                let _ = s.window.request_inner_size(physical);
             }
         }
         #[cfg(feature = "accessibility")]
@@ -741,7 +793,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             WindowEvent::Occluded(occluded) => {
                 if let Some(s) = &mut self.state {
                     s.occluded = occluded;
-                    s.ui.window_visible(!occluded);
+                    s.ui.window_visible(s.visible && !occluded);
                     if !occluded {
                         s.ui.repaint();
                         self.needs_full_redraw = true;
@@ -893,7 +945,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                 self.frame_if_due();
                 self.service();
                 if let Some(s) = &mut self.state {
-                    if !s.occluded {
+                    if s.visible && !s.occluded {
                         let full = std::mem::take(&mut self.needs_full_redraw);
                         let plan = redraw_plan(s.ui.paint_damage(), internal, full);
                         if let Err(error) = render(s, self.options.background, plan, self.profile) {
@@ -923,7 +975,10 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             .as_ref()
             .map(|s| s.ui.next_work())
             .unwrap_or_default();
-        let visible = self.state.as_ref().is_some_and(|s| !s.occluded);
+        let visible = self
+            .state
+            .as_ref()
+            .is_some_and(|s| s.visible && !s.occluded);
         if should_request_redraw(work, visible) {
             self.redraw_requested = true;
             self.state.as_ref().unwrap().window.request_redraw()
@@ -983,14 +1038,22 @@ fn create<W: Widget>(
     factory: impl RendererFactory,
     #[cfg(feature = "accessibility")] proxy: EventLoopProxy<HostEvent>,
 ) -> Result<State<W>, String> {
+    if options
+        .content_height
+        .is_some_and(|max| !max.is_finite() || max < options.min_size.height)
+    {
+        return Err("content_height must be finite and at least min_size.height".into());
+    }
     let overlay = matches!(options.kind, WindowKind::Overlay { .. });
+    let launcher = options.kind == WindowKind::Launcher;
     let interactive = matches!(options.kind, WindowKind::Overlay { interactive: true });
     let attrs = Window::default_attributes()
         .with_visible(false)
+        .with_resizable(!launcher)
         .with_transparent(options.transparent)
-        .with_decorations(options.decorations && !overlay)
+        .with_decorations(options.decorations && !overlay && !launcher)
         .with_active(!overlay)
-        .with_window_level(if overlay {
+        .with_window_level(if overlay || launcher {
             winit::window::WindowLevel::AlwaysOnTop
         } else {
             winit::window::WindowLevel::Normal
@@ -1002,11 +1065,11 @@ fn create<W: Widget>(
             options.min_size.height,
         ));
     #[cfg(feature = "x11")]
-    let attrs = if overlay {
+    let attrs = if overlay || launcher {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
         attrs
-            .with_override_redirect(!interactive)
-            .with_x11_window_type(vec![if interactive {
+            .with_override_redirect(overlay && !interactive)
+            .with_x11_window_type(vec![if interactive || launcher {
                 WindowType::Utility
             } else {
                 WindowType::Notification
@@ -1036,12 +1099,25 @@ fn create<W: Widget>(
             .set_cursor_hittest(false)
             .map_err(|e| e.to_string())?;
     }
-    window.set_visible(true);
+    #[cfg(feature = "x11")]
+    if launcher {
+        crate::x11::launcher(&window)?;
+    }
+    place(&window, options.placement);
+    window.set_visible(options.visible);
+    if options.visible && launcher {
+        activate(&window, true);
+    }
     if interactive {
         window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
     }
     let mut ui = Ui::new(root, options.size, options.limits)
         .map_err(|e| format!("UI admission failed: {e:?}"))?;
+    if !options.visible {
+        ui.window_focus(false);
+    }
+    ui.window_visible(options.visible);
+    ui.set_window_transparent(transparent(&window, options));
     ui.set_clipboard_enabled(cfg!(feature = "clipboard"));
     Ok(State {
         #[cfg(feature = "accessibility")]
@@ -1055,6 +1131,8 @@ fn create<W: Widget>(
         ui,
         window,
         occluded: false,
+        visible: options.visible,
+        show_at: None,
         resize_at: None,
     })
 }
@@ -1109,6 +1187,11 @@ fn render<W: Widget>(
                 s.ui.paint(painter);
             }
         })?;
+    if let Some(start) = s.show_at.take() {
+        if profile {
+            eprintln!("show_frame_us={}", start.elapsed().as_micros());
+        }
+    }
     if let Some(start) = s.resize_at.take() {
         if profile {
             eprintln!("resize_frame_us={}", start.elapsed().as_micros());
@@ -1144,6 +1227,47 @@ fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) -> Result<(), St
         .unwrap()
         .set_text(text)
         .map_err(|e| e.to_string())
+}
+
+fn activate(window: &Window, launcher: bool) {
+    #[cfg(feature = "x11")]
+    if crate::x11::activate(window, launcher).is_ok() {
+        return;
+    }
+    #[cfg(not(feature = "x11"))]
+    let _ = launcher;
+    window.focus_window();
+}
+fn transparent(window: &Window, options: &WindowOptions) -> bool {
+    #[cfg(feature = "x11")]
+    return options.transparent && crate::x11::composited(window).unwrap_or(false);
+    #[cfg(not(feature = "x11"))]
+    {
+        let _ = window;
+        options.transparent
+    }
+}
+fn place(window: &Window, placement: Option<PointerPlacement>) {
+    let Some(placement) = placement else {
+        return;
+    };
+    #[cfg(feature = "x11")]
+    if let Ok((x, y)) = crate::x11::pointer() {
+        if let Some(m) = window.available_monitors().find(|m| {
+            let p = m.position();
+            let s = m.size();
+            x >= p.x && y >= p.y && x < p.x + s.width as i32 && y < p.y + s.height as i32
+        }) {
+            let p = m.position();
+            let s = m.size();
+            window.set_outer_position(winit::dpi::PhysicalPosition::new(
+                p.x + (s.width as i32 - window.inner_size().width as i32) / 2,
+                p.y + (s.height as f32 * placement.top_fraction.clamp(0., 1.)) as i32,
+            ));
+        }
+    }
+    #[cfg(not(feature = "x11"))]
+    let _ = (window, placement);
 }
 
 #[cfg(test)]

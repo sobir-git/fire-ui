@@ -524,6 +524,7 @@ pub struct Editor<D: Document = StringDocument> {
     click_count: u8,
     modifiers: Modifiers,
     chrome: bool,
+    read_only: bool,
     padding: Option<Point>,
     extensions: Vec<Box<dyn EditorExtension>>,
     /// Source ranges currently presented as extension visuals, collected at
@@ -593,6 +594,7 @@ impl<D: Document> Editor<D> {
             click_count: 0,
             modifiers: Modifiers::default(),
             chrome: true,
+            read_only: false,
             padding: None,
             extensions: Vec::new(),
             presented: Vec::new(),
@@ -795,6 +797,18 @@ impl<D: Document> Editor<D> {
         self.wrap = false;
         self
     }
+    /// Refuse user edits while keeping selection, copying, scrolling and focus.
+    ///
+    /// Typing, input methods, paste, cut, deletion, history, extension
+    /// transactions and assistive text replacement are rejected; Enter emits
+    /// `Submitted`. No caret is drawn and none blinks. The owner still replaces
+    /// the text with [`Edit`] commands, which is how a streamed answer or a log
+    /// view grows.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self.caret_blink = false;
+        self
+    }
     /// How far the view has scrolled from the top, in pixels.
     pub fn scroll_offset(&self) -> f32 {
         self.scroll.y
@@ -869,7 +883,7 @@ impl<D: Document> Editor<D> {
     /// transaction is rejected: out-of-bounds or overlapping ranges, or the
     /// size limit.
     fn apply(&mut self, transaction: Transaction) -> bool {
-        self.apply_inner(transaction, true)
+        !self.read_only && self.apply_inner(transaction, true)
     }
     fn apply_inner(&mut self, transaction: Transaction, normalize: bool) -> bool {
         self.finish_typing_group();
@@ -1170,6 +1184,25 @@ impl<D: Document> Editor<D> {
     fn composition_start(&self) -> usize {
         self.selection().map_or(self.caret.byte, |r| r.start)
     }
+    /// The caret in widget coordinates, including an active composition's caret.
+    fn caret_rect(&self) -> Option<Rect> {
+        let p = self.paragraph.as_ref()?;
+        let point = if let Some(composition) = &self.composition_layout {
+            let byte = self.composition_start()
+                + self
+                    .preedit_selection
+                    .map_or(self.preedit.len(), |(_, caret)| caret);
+            composition.caret_point(Caret::at(byte))
+        } else {
+            p.caret_point(self.caret)
+        };
+        Some(Rect::new(
+            point.x + self.insets().x - self.scroll.x,
+            point.y + self.insets().y - self.scroll.y,
+            1.5,
+            p.line_height,
+        ))
+    }
     fn reset_blink(&mut self, cx: &mut Update<'_, Self>) {
         self.caret_on = true;
         if cx.focused() && self.caret_blink {
@@ -1338,6 +1371,7 @@ pub trait EditorElementExt: Sized {
     fn max_bytes(self, bytes: usize) -> Self;
     fn chrome(self, chrome: bool) -> Self;
     fn single_line(self) -> Self;
+    fn read_only(self) -> Self;
 }
 impl<D: Document> EditorElementExt for Element<Editor<D>> {
     fn label(self, label: impl Into<String>) -> Self {
@@ -1369,6 +1403,9 @@ impl<D: Document> EditorElementExt for Element<Editor<D>> {
     }
     fn single_line(self) -> Self {
         self.map(Editor::single_line)
+    }
+    fn read_only(self) -> Self {
+        self.map(Editor::read_only)
     }
 }
 
@@ -1433,7 +1470,7 @@ impl<D: Document> Widget for Editor<D> {
                 return;
             }
             Edit::ReportCursor => {
-                if let Some(rect) = self.ime_cursor() {
+                if let Some(rect) = self.caret_rect() {
                     let _ = cx.emit(EditorOutput::Cursor(rect));
                 }
                 return;
@@ -1611,7 +1648,7 @@ impl<D: Document> Widget for Editor<D> {
     fn timer(&mut self, cx: &mut Update<'_, Self>, timer: Timer) {
         if timer == self.blink && cx.focused() && self.caret_blink {
             self.caret_on = !self.caret_on;
-            if let Some(rect) = self.ime_cursor() {
+            if let Some(rect) = self.caret_rect() {
                 cx.repaint_rect(rect.inset(-2.));
             }
             let _ = cx.after(self.blink, Duration::from_millis(530));
@@ -1972,6 +2009,7 @@ impl<D: Document> Widget for Editor<D> {
                 self.drag = None;
                 let _ = cx.release(*pointer);
             }
+            Input::Text { .. } | Input::Preedit { .. } if self.read_only => return,
             Input::Text { text, .. } => {
                 self.insert_typed(text, cx.now());
                 self.clear_preedit();
@@ -2057,6 +2095,19 @@ impl<D: Document> Widget for Editor<D> {
                     }
                 }
                 let ctrl = m.command();
+                if self.read_only {
+                    match key {
+                        Key::Character('x' | 'v' | 'z' | 'y') if ctrl => return,
+                        Key::Backspace | Key::Delete | Key::Tab => return,
+                        Key::Up | Key::Down if m.alt => return,
+                        Key::Enter => {
+                            let _ = cx.emit(EditorOutput::Submitted);
+                            cx.stop();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 match key {
                     Key::Character('a') if ctrl => {
                         self.anchor = Some(0);
@@ -2248,7 +2299,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             if cx.focused {
                 let point = p.caret_point(self.caret);
-                if self.caret_on && self.preedit.is_empty() {
+                if self.caret_on && self.preedit.is_empty() && !self.read_only {
                     cx.painter.rect(
                         Rect::new(point.x, point.y, 1.5, p.line_height),
                         0.,
@@ -2291,22 +2342,11 @@ impl<D: Document> Widget for Editor<D> {
         }
     }
     fn ime_cursor(&self) -> Option<Rect> {
-        let p = self.paragraph.as_ref()?;
-        let point = if let Some(composition) = &self.composition_layout {
-            let byte = self.composition_start()
-                + self
-                    .preedit_selection
-                    .map_or(self.preedit.len(), |(_, caret)| caret);
-            composition.caret_point(Caret::at(byte))
-        } else {
-            p.caret_point(self.caret)
-        };
-        Some(Rect::new(
-            point.x + self.insets().x - self.scroll.x,
-            point.y + self.insets().y - self.scroll.y,
-            1.5,
-            p.line_height,
-        ))
+        // A read-only editor accepts no composition, so it never enables an input method.
+        if self.read_only {
+            return None;
+        }
+        self.caret_rect()
     }
     fn accessibility(
         &mut self,
@@ -2385,6 +2425,16 @@ impl<D: Document> Widget for Editor<D> {
             return Err(SemanticError::Unavailable);
         }
         let before = self.document.revision();
+        if self.read_only
+            && matches!(
+                action,
+                SemanticAction::SetValue(_)
+                    | SemanticAction::ReplaceSelectedText(_)
+                    | SemanticAction::ReplaceText { .. }
+            )
+        {
+            return Err(SemanticError::Unsupported);
+        }
         let replacement = match action {
             SemanticAction::SetValue(text) => Some((0..self.text().len(), text)),
             SemanticAction::ReplaceSelectedText(text) => Some((
@@ -2428,19 +2478,30 @@ impl<D: Document> Widget for Editor<D> {
     }
     fn semantics(&self) -> Semantics {
         let mut semantics = Semantics {
-            role: Role::TextInput,
+            role: if self.read_only {
+                Role::Text
+            } else {
+                Role::TextInput
+            },
             label: self
                 .label
                 .clone()
                 .unwrap_or_else(|| self.placeholder.to_string()),
             key: self.key.clone(),
-            actions: vec![
-                SemanticActionKind::SetValue,
-                SemanticActionKind::ReplaceSelectedText,
-                SemanticActionKind::ReplaceText,
-                SemanticActionKind::SetSelection,
-                SemanticActionKind::ScrollBy,
-            ],
+            actions: if self.read_only {
+                vec![
+                    SemanticActionKind::SetSelection,
+                    SemanticActionKind::ScrollBy,
+                ]
+            } else {
+                vec![
+                    SemanticActionKind::SetValue,
+                    SemanticActionKind::ReplaceSelectedText,
+                    SemanticActionKind::ReplaceText,
+                    SemanticActionKind::SetSelection,
+                    SemanticActionKind::ScrollBy,
+                ]
+            },
             text: Some(TextSemantics {
                 anchor: self.anchor.unwrap_or(self.caret.byte),
                 caret: self.caret,

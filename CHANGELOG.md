@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add hidden startup, activated Show/Hide, physical MoveTo, Launcher window kind,
+  pointer-monitor placement and bounded content-driven height. X11 launcher windows
+  skip taskbar/pager; activation requests use a fresh server timestamp.
+- Notify the root of native activation through `Lifecycle::WindowFocus`.
+- Add `Editor::read_only`: selection, copying, scrolling and focus without user
+  edits, input methods or a caret. Enter emits `Submitted`; owners still set text.
+- Add `Widget::opacity` and `Painter::opacity`: a widget fades its whole subtree,
+  nested opacities multiply, and zero skips painting. `Brush::faded` scales a
+  brush's alpha. Custom painters must implement `opacity`.
+- Report `Lifecycle::WindowTransparent` to the root when a transparent window's
+  alpha actually reaches the screen (32-bit visual and a running X11 compositing
+  manager), rechecked on each Show, so apps draw rounded or translucent edges
+  only when they will be seen.
+
+
 - Linux (X11) is the only supported platform; macOS and Windows support is removed.
 - Handle inserted child outputs in the owning widget without exposing private
   delivery cases in list, dropdown, or appearance-scope commands.

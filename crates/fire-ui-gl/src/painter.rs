@@ -44,6 +44,9 @@ pub(crate) struct GlPainter<'a> {
     pub(crate) font_ids: &'a [femtovg::FontId],
     clip: Rect,
     clips: Vec<Rect>,
+    /// Current opacity, and the values saved by each unmatched `save`.
+    alpha: f32,
+    alphas: Vec<f32>,
     images: Vec<femtovg::ImageId>,
     error: Option<String>,
 }
@@ -65,6 +68,8 @@ impl<'a> GlPainter<'a> {
             font_ids,
             clip: viewport,
             clips: vec![],
+            alpha: 1.,
+            alphas: vec![],
             images: vec![],
             error: None,
         }
@@ -119,13 +124,21 @@ fn brush(b: Brush) -> femtovg::Paint {
 impl Painter for GlPainter<'_> {
     fn save(&mut self) {
         self.clips.push(self.clip);
+        self.alphas.push(self.alpha);
         self.canvas.save()
     }
     fn restore(&mut self) {
         if let Some(clip) = self.clips.pop() {
             self.clip = clip;
         }
+        if let Some(alpha) = self.alphas.pop() {
+            self.alpha = alpha;
+        }
         self.canvas.restore()
+    }
+    fn opacity(&mut self, alpha: f32) {
+        self.alpha *= alpha.clamp(0., 1.);
+        self.canvas.set_global_alpha(self.alpha)
     }
     fn transform(&mut self, t: Transform) {
         self.canvas.set_transform(&femtovg::Transform2D(t.0))

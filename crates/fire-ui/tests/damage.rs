@@ -6,6 +6,7 @@ impl Painter for Sink {
     fn restore(&mut self) {}
     fn transform(&mut self, _: Transform) {}
     fn clip(&mut self, _: Rect) {}
+    fn opacity(&mut self, _: f32) {}
     fn rect(&mut self, _: Rect, _: f32, _: Brush) {}
     fn stroke(&mut self, _: Rect, _: f32, _: f32, _: Color) {}
     fn path(&mut self, _: &[Path], _: Brush, _: Option<f32>) {}

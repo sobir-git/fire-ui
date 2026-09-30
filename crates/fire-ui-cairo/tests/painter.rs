@@ -288,3 +288,52 @@ fn box_glyph_bounds_include_origins_overhangs_and_transforms() {
         assert_eq!(solid, boxed);
     }
 }
+
+#[test]
+fn opacity_multiplies_every_brush_until_restore() {
+    let image = pixels(|p| {
+        p.save();
+        p.opacity(0.5);
+        p.rect(Rect::new(0., 0., 10., 10.), 0., Color::hex(0xff0000).into());
+        p.save();
+        p.opacity(0.5);
+        p.rect(
+            Rect::new(20., 0., 10., 10.),
+            0.,
+            Brush::Linear {
+                start: Point::new(20., 0.),
+                end: Point::new(30., 0.),
+                from: Color::hex(0x00ff00),
+                to: Color::hex(0x00ff00),
+            },
+        );
+        p.restore();
+        p.rect(
+            Rect::new(40., 0., 10., 10.),
+            0.,
+            Color::hex(0x0000ff).into(),
+        );
+        p.restore();
+        p.rect(
+            Rect::new(60., 0., 10., 10.),
+            0.,
+            Color::hex(0xffffff).into(),
+        );
+    });
+    let alpha = |x: usize| image[5 * 160 + x] >> 24;
+    assert!(
+        (alpha(5) as i32 - 128).abs() <= 1,
+        "{:x}",
+        image[5 * 160 + 5]
+    );
+    assert!(
+        (alpha(25) as i32 - 64).abs() <= 1,
+        "{:x}",
+        image[5 * 160 + 25]
+    );
+    assert!(
+        (alpha(45) as i32 - 128).abs() <= 1,
+        "restore returns to the outer opacity"
+    );
+    assert_eq!(image[5 * 160 + 65], 0xffffffff);
+}

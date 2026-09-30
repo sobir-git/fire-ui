@@ -40,6 +40,52 @@ pub enum Brush {
         to: Color,
     },
 }
+impl Brush {
+    /// The same brush with every colour's alpha multiplied by `alpha`.
+    pub fn faded(self, alpha: f32) -> Self {
+        let f = |c: Color| Color(c.0, c.1, c.2, c.3 * alpha);
+        match self {
+            Self::Solid(c) => Self::Solid(f(c)),
+            Self::Linear {
+                start,
+                end,
+                from,
+                to,
+            } => Self::Linear {
+                start,
+                end,
+                from: f(from),
+                to: f(to),
+            },
+            Self::Radial {
+                center,
+                inner,
+                outer,
+                from,
+                to,
+            } => Self::Radial {
+                center,
+                inner,
+                outer,
+                from: f(from),
+                to: f(to),
+            },
+            Self::Box {
+                rect,
+                radius,
+                feather,
+                from,
+                to,
+            } => Self::Box {
+                rect,
+                radius,
+                feather,
+                from: f(from),
+                to: f(to),
+            },
+        }
+    }
+}
 impl From<Color> for Brush {
     fn from(c: Color) -> Self {
         Self::Solid(c)
@@ -58,6 +104,10 @@ pub trait Painter {
     fn restore(&mut self);
     fn transform(&mut self, transform: Transform);
     fn clip(&mut self, rect: Rect);
+    /// Multiply the alpha of everything drawn until the matching `restore`.
+    /// Nested calls compose multiplicatively. Each draw is faded on its own, so
+    /// overlapping shapes inside a faded group show through one another.
+    fn opacity(&mut self, alpha: f32);
     fn rect(&mut self, rect: Rect, radius: f32, brush: Brush);
     fn stroke(&mut self, rect: Rect, radius: f32, width: f32, color: Color);
     fn path(&mut self, path: &[Path], brush: Brush, width: Option<f32>);

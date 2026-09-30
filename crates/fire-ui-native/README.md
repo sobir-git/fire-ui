@@ -41,3 +41,29 @@ require X11/XWayland.
 
 Cargo features are additive across a shared build. `tools/lean_probe.py` builds
 independent consumers to expose the actual cost of optional integrations.
+
+## Launcher windows
+
+Use `WindowKind::Launcher` for an undecorated, above-normal, activated window
+that skips the X11 taskbar and pager. Unlike `Overlay`, it accepts keyboard focus.
+`visible: false` starts unmapped with visible timers/frames suspended. The root
+requests `WindowAction::Show` / `Hide`; Show maps and requests EWMH activation
+with a current X server timestamp and desktop-launcher source indication. A real
+window manager retains control of focus policy; bare X servers use direct focus.
+
+`placement: Some(PointerPlacement { top_fraction: 0.24 })` horizontally centers
+the window on the monitor containing the pointer before each Show. Physical
+coordinates include the monitor origin; resizing preserves the top-left corner.
+`content_height: Some(600.)` measures the root at the configured width with height
+between `min_size.height` and that maximum, then resizes the native window. The
+root must return intrinsic height rather than always consuming the maximum.
+`WindowAction::MoveTo { x, y }` provides explicit physical placement instead.
+
+With `transparent: true` the root receives `Lifecycle::WindowTransparent(bool)`:
+true only when the window got a 32-bit visual and an X11 compositing manager owns
+the screen, rechecked before each Show. Without one, draw square opaque edges.
+
+The root receives `Lifecycle::WindowFocus(bool)` even when an editor owns keyboard
+focus. Hide suspends visible work but still accepts worker posts and mounted work.
+`FIRE_UI_PROFILE=1` logs `show_frame_us` from Show handling to first presentation;
+this excludes IPC delivery time and physical display/compositor latency.

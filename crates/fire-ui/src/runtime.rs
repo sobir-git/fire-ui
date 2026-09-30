@@ -84,6 +84,15 @@ pub enum ResizeEdge {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowAction {
     Focus,
+    /// Map the native window and activate it unless its kind is a passive overlay.
+    Show,
+    /// Unmap the native window and suspend visible work.
+    Hide,
+    /// Move the top-left corner in physical desktop coordinates.
+    MoveTo {
+        x: i32,
+        y: i32,
+    },
     Restore,
     Fullscreen(bool),
     AlwaysOnTop(bool),
@@ -178,6 +187,7 @@ pub struct Ui<W: Widget> {
     pressed: BTreeSet<u32>,
     session: u64,
     window_focused: bool,
+    window_transparent: bool,
     window_saved_focus: Option<Id>,
     modals: Vec<(Id, Option<Id>)>,
     frames: VecDeque<Id>,
@@ -243,6 +253,7 @@ impl<W: Widget> Ui<W> {
             pressed: BTreeSet::new(),
             session: 0,
             window_focused: true,
+            window_transparent: false,
             window_saved_focus: None,
             modals: vec![],
             frames: VecDeque::new(),
@@ -1028,6 +1039,26 @@ impl<W: Widget> Ui<W> {
         })
     }
 
+    /// Measure the root at fixed window width and bounded intrinsic height.
+    /// Native hosts resize their surface to `size()` after this pass.
+    pub fn layout_content_height(&mut self, text: &mut dyn TextEngine, min: f32, max: f32) {
+        if self.layout_pending(text) {
+            let metrics = self.tree.measure(
+                self.root,
+                Constraints {
+                    min: Size::new(self.size.width, min),
+                    max: Size::new(self.size.width, max),
+                },
+                text,
+            );
+            self.resize(Size::new(
+                self.size.width,
+                metrics.size.height.clamp(min, max),
+            ));
+        }
+        self.layout(text);
+    }
+
     pub fn layout(&mut self, text: &mut dyn TextEngine) {
         // Clean input and paint passes do not traverse the ownership tree.
         if !self.layout_pending(text) {
@@ -1163,8 +1194,24 @@ impl<W: Widget> Ui<W> {
     pub fn window_focused(&self) -> bool {
         self.window_focused
     }
+    pub fn window_transparent(&self) -> bool {
+        self.window_transparent
+    }
+    /// Report whether the host's window currently shows its alpha channel.
+    pub fn set_window_transparent(&mut self, transparent: bool) {
+        if self.window_transparent == transparent {
+            return;
+        }
+        self.window_transparent = transparent;
+        self.notice(self.root, Lifecycle::WindowTransparent(transparent));
+        self.repaint();
+    }
     pub fn window_focus(&mut self, focused: bool) {
+        if self.window_focused == focused {
+            return;
+        }
         self.window_focused = focused;
+        self.notice(self.root, Lifecycle::WindowFocus(focused));
         if focused {
             let saved = self.window_saved_focus.take();
             self.change_focus(saved.or(self.focus));
@@ -1411,7 +1458,14 @@ impl<W: Widget> Ui<W> {
             if !n.geometry.visible || visible.width <= 0. || visible.height <= 0. {
                 return;
             }
+            let opacity = n.widget.as_ref().map_or(1., |w| w.opacity().clamp(0., 1.));
+            if opacity <= 0. {
+                return;
+            }
             painter.save();
+            if opacity < 1. {
+                painter.opacity(opacity);
+            }
             painter.transform(if absolute {
                 n.geometry.transform
             } else {

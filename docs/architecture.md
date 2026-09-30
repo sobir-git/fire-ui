@@ -154,6 +154,8 @@ be disabled without losing the visible caret, allowing a focused notes editor to
 caret back into view. Selection and scrolling emit state updates separately from
 text edits. Focus changes are also observable by consumers such as inline rename.
 The editor supports word/line clicks, Shift-click, line movement and scrollbar drag.
+A read-only editor keeps selection, copying, scrolling and focus but refuses typing,
+input methods, clipboard edits, history and assistive replacement, and draws no caret.
 
 `EditorDecoration` receives the editor's shared paragraph, selection, caret and
 visible rectangle. It paints behind or above text through the ordinary `Painter`.
@@ -193,7 +195,10 @@ closing while a save completes, then request another close with `Update::close_w
 The host pumps outputs from that final hook before exiting and closes worker wake
 handles before dropping output handlers, so writer shutdown cannot wait forever on
 a full event queue. Only the root can request window closure or native window actions.
-`WindowAction` exposes minimize, maximize, drag and edge resize. `WindowOptions`
+`WindowAction` exposes Show/Hide, physical MoveTo, focus, minimize, maximize, drag and edge resize.
+`Lifecycle::WindowFocus` notifies the root independently of child keyboard focus.
+`Lifecycle::WindowTransparent` tells it whether a transparent window's alpha reaches
+the screen, so rounded or translucent edges are drawn only when a compositor shows them. `WindowOptions`
 controls native decorations, font and initial placement. Move events reach the root
 as lifecycle data. Widget cursor choices inherit through ownership; native pointer
 shapes update without relayout. File drops reach the root, and blocking system file
@@ -228,7 +233,10 @@ pointer moves coalesce before edge events or rendering; paddle position is assig
 directly. Resize reconfigures the surface at paint time. Frame requests are paced to
 the monitor refresh rate even when software GL does not enforce swap interval.
 
-Drawing streams through a portable `Painter` on one UI thread. The native host
+Drawing streams through a portable `Painter` on one UI thread. A widget's
+`opacity` wraps its own paint and every descendant in `Painter::opacity`; nested
+values multiply and zero skips the subtree. Backends fade each draw rather than
+compositing an offscreen group, which keeps fades free of extra surfaces. The native host
 accepts separate text and rendering implementations. `fire-ui-fonts` shares immutable
 bytes and selected file faces without initializing a shaper or renderer. `fire-ui-text` produces
 positioned glyphs and editing geometry from explicitly selected font resources.

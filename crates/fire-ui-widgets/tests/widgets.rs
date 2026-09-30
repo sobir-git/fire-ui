@@ -1165,6 +1165,91 @@ fn clipboard_requires_host_opt_in_before_cut_can_mutate_text() {
     assert_eq!(ui.root().text(), "aé🔥z");
 }
 
+#[test]
+fn read_only_editor_selects_copies_and_submits_but_refuses_every_edit() {
+    let mut ui = Ui::new(
+        Editor::new("first line\nsecond").read_only(),
+        Size::new(300., 140.),
+        Limits::default(),
+    )
+    .unwrap();
+    ui.set_clipboard_enabled(true);
+    settle(&mut ui, &mut TestText);
+    let id = ui.semantics()[0].id;
+    assert_eq!(ui.semantics()[0].semantics.role, Role::Text);
+    ui.accessibility(id, SemanticAction::Focus).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(ui.ime_cursor(), None, "no input method is offered");
+    let ctrl = Modifiers {
+        control: true,
+        ..Modifiers::default()
+    };
+    ui.dispatch(
+        Input::Text {
+            session: ui.session(),
+            text: "typed".into(),
+        },
+        &mut TestText,
+    );
+    for pressed in [Key::Backspace, Key::Delete, Key::Tab] {
+        modified_key(&mut ui, pressed, Modifiers::default());
+    }
+    modified_key(&mut ui, Key::Character('a'), ctrl);
+    let mut copied = vec![];
+    for ch in ['x', 'v', 'z', 'c'] {
+        ui.dispatch(
+            Input::Key {
+                key: Key::Character(ch),
+                physical: 1,
+                down: true,
+                repeat: false,
+                modifiers: ctrl,
+            },
+            &mut TestText,
+        );
+        ui.pump(
+            100,
+            |_| {},
+            |request| match request {
+                HostRequest::Copy(value) => copied.push(value),
+                _ => panic!("a read-only editor asked for {ch}"),
+            },
+        );
+    }
+    assert_eq!(copied, ["first line\nsecond"], "only Ctrl+C copies");
+    assert_eq!(ui.root().text(), "first line\nsecond");
+    assert_eq!(ui.root().selection(), Some(0..17));
+    for action in [
+        SemanticAction::SetValue("x".into()),
+        SemanticAction::ReplaceSelectedText("x".into()),
+    ] {
+        assert_eq!(
+            ui.accessibility(id, action),
+            Err(SemanticError::Unsupported)
+        );
+    }
+    let mut outputs = vec![];
+    ui.dispatch(
+        Input::Key {
+            key: Key::Enter,
+            physical: 1,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        },
+        &mut TestText,
+    );
+    ui.pump(100, |o| outputs.push(o), |_| {});
+    assert!(outputs.iter().any(|o| matches!(o, EditorOutput::Submitted)));
+    ui.send(Edit::Set("streamed answer".into())).unwrap();
+    settle(&mut ui, &mut TestText);
+    assert_eq!(
+        ui.root().text(),
+        "streamed answer",
+        "the owner still sets text"
+    );
+}
+
 fn click<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
     for down in [true, false] {
         ui.dispatch(
@@ -1562,6 +1647,7 @@ impl Painter for Recorder {
     fn clip(&mut self, rect: Rect) {
         self.clips.push(rect)
     }
+    fn opacity(&mut self, _: f32) {}
     fn rect(&mut self, rect: Rect, _: f32, brush: Brush) {
         self.rects.push((rect, brush))
     }

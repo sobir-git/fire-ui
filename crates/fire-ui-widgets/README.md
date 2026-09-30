@@ -5,8 +5,8 @@ Fire UI's public widget protocol. Nothing here is privileged: a custom widget us
 exactly the same interfaces.
 
 **Controls.** `Label`, `Button` in four emphasis levels, `Checkbox`, `Switch`,
-`Slider`, `Progress`, `Dropdown`, `Tabs`, `Divider`, a Unicode `Editor` with undo
-and IME support, a modal `Menu`, and a fixed-height `VirtualList`. Each one carries
+`Slider`, `Progress`, `Dropdown`, `Tabs`, `Divider`, a Unicode `Editor` with undo,
+IME support and a selectable `read_only` mode, a modal `Menu`, and a fixed-height `VirtualList`. Each one carries
 its own keyboard handling, focus ring, pointer cursor and accessible semantics.
 
 **Layout.** `row` and `column` take a `Flow` — a gap, a `Justify` for leftover

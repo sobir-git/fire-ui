@@ -16,13 +16,14 @@ all-features = true
 
 [features]
 default = ["x11"]
-x11 = ["winit/x11"]
+x11 = ["winit/x11", "dep:x11rb"]
 accessibility = ["dep:async-lock", "dep:unicode-segmentation", "dep:serde", "dep:accesskit", "dep:accesskit_atspi_common", "dep:atspi", "dep:zbus", "dep:async-channel", "dep:async-executor", "dep:async-task", "dep:async-io", "dep:futures-lite", "dep:futures-util"]
 inspection = ["dep:serde", "dep:serde_json"]
 clipboard = ["dep:arboard"]
 dialogs = ["dep:native-dialog"]
 
 [dependencies]
+x11rb = { version = "0.13", optional = true }
 unicode-segmentation = { version = "1.12", optional = true }
 fire-ui.workspace = true
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }

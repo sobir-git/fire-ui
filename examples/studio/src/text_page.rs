@@ -12,6 +12,7 @@ Café · Привет · Καλημέρα · 你好";
 pub struct TextPage {
     editor: Child<Section<Surface<Editor>>>,
     field: Child<Field<Editor>>,
+    quote: Child<Field<Editor>>,
     counter: Child<Label>,
     note: Child<Label>,
 }
@@ -51,6 +52,12 @@ impl TextPage {
                 ),
                 |v| Signal::Field(v.clone()),
             ),
+            quote: children.discard(Field::new(
+                "Read-only: select and copy, but not edit",
+                Editor::new("Answers, logs and messages can be selected without being changed.")
+                    .single_line()
+                    .read_only(),
+            )),
             counter: children.add(muted(
                 format!("{} characters", SAMPLE.chars().count()),
                 TextRole::Small,
@@ -91,6 +98,7 @@ impl Widget for TextPage {
                 Entry::fixed(self.editor, 300.),
                 Entry::natural(self.counter),
                 Entry::natural(self.field),
+                Entry::natural(self.quote),
                 Entry::natural(self.note),
             ],
         )

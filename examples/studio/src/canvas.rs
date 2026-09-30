@@ -97,6 +97,14 @@ impl Widget for Playground {
         }
         Metrics::new(c.constrain(Size::new(c.max.width, 300.)))
     }
+    /// A paused canvas rests dimmed; the runtime fades everything it draws.
+    fn opacity(&self) -> f32 {
+        if self.running {
+            1.
+        } else {
+            0.6
+        }
+    }
     fn paint(&self, cx: &mut Paint<'_>) {
         let t = painted_theme(cx);
         let b = cx.bounds;
