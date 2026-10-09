@@ -101,7 +101,7 @@ impl Toggle {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } if cx.bounds().contains(*position) => {
@@ -113,7 +113,7 @@ impl Toggle {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 position,
             } if self.pressed == Some(*pointer) => {

@@ -171,7 +171,7 @@ impl Widget for Slider {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } => {
@@ -189,7 +189,7 @@ impl Widget for Slider {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 ..
             } if self.dragging == Some(*pointer) => {

@@ -34,6 +34,19 @@ pub enum Phase {
     Target,
     Bubble,
 }
+/// A pointer button, named by role rather than by platform button number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PointerButton {
+    /// Usually the left mouse button.
+    Primary,
+    /// Usually the right mouse button.
+    Secondary,
+    Middle,
+    Back,
+    Forward,
+    /// Further buttons, numbered from 0 in platform order.
+    Other(u16),
+}
 #[derive(Clone, Debug)]
 pub enum Input {
     Modifiers(Modifiers),
@@ -44,7 +57,7 @@ pub enum Input {
     },
     Button {
         pointer: u32,
-        button: u16,
+        button: PointerButton,
         down: bool,
         position: Point,
     },

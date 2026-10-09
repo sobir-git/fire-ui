@@ -210,7 +210,7 @@ fn overlay_hit_order_follows_tree_order() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(5., 5.),
         },
@@ -496,7 +496,7 @@ fn retirement_delivers_input_cancellation_before_unmount() {
     ui.dispatch(
         Input::Button {
             pointer: 1,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(12., 2.),
         },
@@ -538,6 +538,21 @@ fn hiding_hovered_child_clears_hover_without_pointer_motion() {
     log.borrow_mut().clear();
     ui.send(Command::Hide).unwrap();
     pump(&mut ui);
+    assert!(log.borrow().contains(&(0, Lifecycle::Hover(false))));
+}
+
+#[test]
+fn pointer_leaving_window_clears_hover() {
+    let (mut ui, log) = setup(false);
+    ui.dispatch(
+        Input::Pointer {
+            pointer: 1,
+            position: Point::new(12., 2.),
+        },
+        &mut TestText,
+    );
+    log.borrow_mut().clear();
+    ui.pointer_left();
     assert!(log.borrow().contains(&(0, Lifecycle::Hover(false))));
 }
 

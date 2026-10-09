@@ -288,7 +288,7 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 ..
             } => {
@@ -300,7 +300,7 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 position,
             } if self.pressed == Some(*pointer) => {

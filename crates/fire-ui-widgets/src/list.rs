@@ -413,7 +413,7 @@ where
                 cx.stop()
             }
             Input::Button {
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 pointer,
                 position,
@@ -436,7 +436,7 @@ where
                 cx.stop()
             }
             Input::Button {
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 pointer,
                 ..
@@ -447,7 +447,7 @@ where
                 cx.stop()
             }
             Input::Button {
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 pointer,
                 ..
@@ -458,7 +458,7 @@ where
                 cx.stop()
             }
             Input::Button {
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 pointer,
                 position,

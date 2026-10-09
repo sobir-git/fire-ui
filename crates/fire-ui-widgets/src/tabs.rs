@@ -66,7 +66,7 @@ impl Widget for Tab {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } if cx.bounds().contains(*position) => {
@@ -76,7 +76,7 @@ impl Widget for Tab {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 position,
             } if self.pressed == Some(*pointer) => {

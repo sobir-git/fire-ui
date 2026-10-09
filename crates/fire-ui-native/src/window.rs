@@ -752,6 +752,17 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
         self.service();
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // winit also reports grab-induced FocusOut. Filter before accessibility and
+        // input cleanup so a global shortcut does not deactivate the application.
+        #[cfg(feature = "x11")]
+        if matches!(event, WindowEvent::Focused(false))
+            && self
+                .state
+                .as_ref()
+                .is_some_and(|s| crate::x11::has_input_focus(&s.window).unwrap_or(false))
+        {
+            return;
+        }
         #[cfg(feature = "accessibility")]
         if let Some(s) = &mut self.state {
             s.accessibility.process_event(&s.window, &event);
@@ -783,6 +794,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     alt: self.modifiers.alt_key(),
                     meta: self.modifiers.super_key(),
                 }));
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if let Some(s) = &mut self.state {
+                    s.ui.pointer_left()
+                }
+                self.service()
             }
             WindowEvent::Focused(focus) => {
                 if let Some(s) = &mut self.state {
@@ -836,12 +853,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let button = match button {
-                    MouseButton::Left => 1,
-                    MouseButton::Right => 2,
-                    MouseButton::Middle => 3,
-                    MouseButton::Back => 4,
-                    MouseButton::Forward => 5,
-                    MouseButton::Other(n) => n + 6,
+                    MouseButton::Left => PointerButton::Primary,
+                    MouseButton::Right => PointerButton::Secondary,
+                    MouseButton::Middle => PointerButton::Middle,
+                    MouseButton::Back => PointerButton::Back,
+                    MouseButton::Forward => PointerButton::Forward,
+                    MouseButton::Other(n) => PointerButton::Other(n),
                 };
                 self.input(Input::Button {
                     pointer: 0,

@@ -816,7 +816,7 @@ impl<C: Widget> Widget for Scroll<C> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } => {
@@ -859,7 +859,7 @@ impl<C: Widget> Widget for Scroll<C> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 ..
             } if self.dragging.map(|(p, _)| p) == Some(*pointer) => {

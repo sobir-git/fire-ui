@@ -193,7 +193,7 @@ impl Widget for Dropdown {
         }
         match input {
             Input::Button {
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
                 ..

@@ -275,7 +275,7 @@ impl Widget for MenuRow {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 ..
             } => {
@@ -286,7 +286,7 @@ impl Widget for MenuRow {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 position,
             } if self.pressed == Some(*pointer) => {

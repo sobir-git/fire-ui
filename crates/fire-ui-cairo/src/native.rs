@@ -10,7 +10,8 @@ pub struct Cairo {
     retained: bool,
 }
 impl Cairo {
-    /// Lowest-memory X11 presentation. Damage is painted directly into the window.
+    /// Lowest-memory X11 presentation. Each damage region is composed in a temporary
+    /// server-side group and copied to the window once, without a client image.
     pub fn direct(fonts: Fonts) -> Self {
         Self {
             fonts,
@@ -167,6 +168,13 @@ impl Renderer for Target {
             );
             c.clip();
         }
+        // Direct mode composes the damage in a temporary group, which Xlib backs with a
+        // server-side pixmap the size of the clip. The window then receives one finished
+        // copy, so the cleared background is never visible on its own.
+        let grouped = self.backing.is_none();
+        if grouped {
+            c.push_group();
+        }
         c.set_source_rgba(
             background.0 as f64,
             background.1 as f64,
@@ -177,9 +185,16 @@ impl Renderer for Target {
         c.paint().map_err(|e| e.to_string())?;
         c.set_operator(cairo::Operator::Over);
         c.scale(scale, scale);
-        let mut painter = CairoPainter::new(c, &self.fonts);
+        let mut painter = CairoPainter::new(c.clone(), &self.fonts);
         paint(&mut painter, region);
         painter.status()?;
+        drop(painter);
+        if grouped {
+            c.identity_matrix();
+            c.pop_group_to_source().map_err(|e| e.to_string())?;
+            c.set_operator(cairo::Operator::Source);
+            c.paint().map_err(|e| e.to_string())?;
+        }
 
         if let Some(backing) = &self.backing {
             // The visible X11 window receives one completed image operation. Painting

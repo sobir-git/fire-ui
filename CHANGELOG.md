@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.9.0 · 2026-10-10
+
+Linux X11 only, launcher windows, subtree opacity, typed pointer buttons and
+flicker-free direct Cairo drawing.
+
+- End hover when the pointer leaves the window (`Ui::pointer_left`), so tooltips
+  and hover highlights no longer stick after the cursor exits.
+- Breaking: `Input::Button` carries a `PointerButton` (`Primary`, `Secondary`,
+  `Middle`, `Back`, `Forward`, `Other`) instead of a raw `u16`, so a wrong button
+  number no longer compiles into a handler that never matches.
+- Compose direct Cairo X11 damage in a temporary group and present it in one copy,
+  removing hover flicker without keeping a retained window image.
+- Restore X11 launcher ABOVE and SKIP_TASKBAR/SKIP_PAGER states through EWMH
+  client messages after mapping, before activation, with a stacking fallback.
+- Ignore grab-induced X11 focus loss when server input focus remains in the window
+  or a descendant, preserving lifecycle, input and accessibility focus.
 - Add hidden startup, activated Show/Hide, physical MoveTo, Launcher window kind,
   pointer-monitor placement and bounded content-driven height. X11 launcher windows
   skip taskbar/pager; activation requests use a fresh server timestamp.
@@ -15,8 +31,6 @@
   alpha actually reaches the screen (32-bit visual and a running X11 compositing
   manager), rechecked on each Show, so apps draw rounded or translucent edges
   only when they will be seen.
-
-
 - Linux (X11) is the only supported platform; macOS and Windows support is removed.
 - Handle inserted child outputs in the owning widget without exposing private
   delivery cases in list, dropdown, or appearance-scope commands.
@@ -76,6 +90,7 @@
   lists are now modal and take the keyboard when they open.
 - Replace `WindowOptions::{overlay, click_through}` with `WindowKind`.
 - Move `system_font` from `fire-ui-text` to `fire-ui-fonts`.
+- Development builds omit debug info and build incrementally.
 
 ## 0.8.0 · 2026-09-09
 

@@ -183,7 +183,7 @@ pub struct Ui<W: Widget> {
     hover: Option<Id>,
     hover_path: Vec<Id>,
     captures: BTreeMap<u32, Id>,
-    buttons: BTreeSet<(u32, u16)>,
+    buttons: BTreeSet<(u32, PointerButton)>,
     pressed: BTreeSet<u32>,
     session: u64,
     window_focused: bool,
@@ -1205,6 +1205,13 @@ impl<W: Widget> Ui<W> {
         self.window_transparent = transparent;
         self.notice(self.root, Lifecycle::WindowTransparent(transparent));
         self.repaint();
+    }
+    /// The pointer left the window. Hover ends unless a widget holds a capture,
+    /// which keeps receiving the pointer until release.
+    pub fn pointer_left(&mut self) {
+        if self.captures.is_empty() {
+            self.change_hover(None);
+        }
     }
     pub fn window_focus(&mut self, focused: bool) {
         if self.window_focused == focused {

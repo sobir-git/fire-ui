@@ -514,7 +514,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(317., 210.),
         },
@@ -530,7 +530,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(317., 235.),
         },
@@ -556,7 +556,7 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
         ui.dispatch(
             Input::Button {
                 pointer: 0,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             },
@@ -565,7 +565,7 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
         ui.dispatch(
             Input::Button {
                 pointer: 0,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 position,
             },
@@ -595,7 +595,7 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position,
         },
@@ -756,7 +756,7 @@ fn menu_outside_click_dismisses_without_activating_an_action() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(390., 290.),
         },
@@ -1255,7 +1255,7 @@ fn click<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
         ui.dispatch(
             Input::Button {
                 pointer: 0,
-                button: 1,
+                button: PointerButton::Primary,
                 down,
                 position: at,
             },
@@ -1269,7 +1269,7 @@ fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: P
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: from,
         },
@@ -1285,7 +1285,7 @@ fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: P
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: to,
         },
@@ -1374,7 +1374,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
     checkbox.dispatch(
         Input::Button {
             pointer: 1,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(20., 20.),
         },
@@ -1395,7 +1395,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
     switch.dispatch(
         Input::Button {
             pointer: 1,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(20., 20.),
         },
@@ -1421,7 +1421,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
     tabs.dispatch(
         Input::Button {
             pointer: 1,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: center(second.bounds),
         },
@@ -2131,7 +2131,7 @@ fn a_list_scrollbar_can_be_dragged() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(x, 20.),
         },
@@ -2154,7 +2154,7 @@ fn a_list_scrollbar_can_be_dragged() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(x, 200.),
         },
@@ -2786,7 +2786,7 @@ fn selection_drag_requests_paint_before_release() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(100., 15.),
         },
@@ -2823,7 +2823,7 @@ fn extension_drag_selects_instead_of_activating() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(20., 15.),
         },
@@ -2839,7 +2839,7 @@ fn extension_drag_selects_instead_of_activating() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(200., 100.),
         },
@@ -3189,7 +3189,7 @@ fn an_armed_release_notifies_exactly_once() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: true,
             position: Point::new(20., 15.),
         },
@@ -3211,7 +3211,7 @@ fn an_armed_release_notifies_exactly_once() {
     ui.dispatch(
         Input::Button {
             pointer: 0,
-            button: 1,
+            button: PointerButton::Primary,
             down: false,
             position: Point::new(22., 16.),
         },

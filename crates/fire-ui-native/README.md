@@ -50,6 +50,8 @@ that skips the X11 taskbar and pager. Unlike `Overlay`, it accepts keyboard focu
 requests `WindowAction::Show` / `Hide`; Show maps and requests EWMH activation
 with a current X server timestamp and desktop-launcher source indication. A real
 window manager retains control of focus policy; bare X servers use direct focus.
+Each Show restores launcher ABOVE and taskbar/pager exclusions with post-map EWMH
+requests before activation, then requests an Above stack position as a fallback.
 
 `placement: Some(PointerPlacement { top_fraction: 0.24 })` horizontally centers
 the window on the monitor containing the pointer before each Show. Physical
@@ -64,6 +66,8 @@ true only when the window got a 32-bit visual and an X11 compositing manager own
 the screen, rechecked before each Show. Without one, draw square opaque edges.
 
 The root receives `Lifecycle::WindowFocus(bool)` even when an editor owns keyboard
-focus. Hide suspends visible work but still accepts worker posts and mounted work.
+focus. X11 keyboard grabs do not report focus loss while server input focus remains
+in the window or a descendant. Hide suspends visible work but still accepts worker
+posts and mounted work.
 `FIRE_UI_PROFILE=1` logs `show_frame_us` from Show handling to first presentation;
 this excludes IPC delivery time and physical display/compositor latency.

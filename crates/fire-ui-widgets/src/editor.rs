@@ -286,7 +286,7 @@ mod history_cost_tests {
         ui.dispatch(
             Input::Button {
                 pointer: 1,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             },
@@ -1835,7 +1835,7 @@ impl<D: Document> Widget for Editor<D> {
         match input {
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } if self
@@ -1909,7 +1909,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 ..
             } if self.scrollbar_drag.is_some_and(|(p, _)| p == *pointer) => {
@@ -1924,7 +1924,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: true,
                 position,
             } => {
@@ -1981,7 +1981,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 ..
             } if self.armed.as_ref().is_some_and(|a| a.pointer == *pointer) => {
@@ -2002,7 +2002,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Input::Button {
                 pointer,
-                button: 1,
+                button: PointerButton::Primary,
                 down: false,
                 ..
             } if self.drag == Some(*pointer) => {
