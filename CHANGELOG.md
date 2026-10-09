@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add the `fire-ui-tray` crate: a dependency-free StatusNotifierItem tray icon
+  with a `com.canonical.dbusmenu` menu over a hand-written session D-Bus client.
+  `Tray::set` announces only what changed; `Tray::next` waits for clicks, scrolls
+  and menu activations, so an app can serve it between its own work without a thread.
+- Add `WindowKind::Popup`: a launcher window that asks to close when it loses
+  focus after having had it, for tray popups and transient panels.
+- Breaking: `PointerPlacement` becomes `Placement` with `Monitor`, `Pointer` and
+  `Anchor { x, y }`. Anchored windows open beside a point (such as a tray click)
+  and stay inside that point's monitor.
+
 ## 0.9.0 · 2026-10-10
 
 Linux X11 only, launcher windows, subtree opacity, typed pointer buttons and

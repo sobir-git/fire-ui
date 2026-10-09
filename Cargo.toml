@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fire-ui-fonts", "crates/fire-ui", "crates/fire-ui-widgets", "crates/fire-ui-native", "examples/studio", "crates/fire-ui-gl", "crates/fire-ui-cairo", "crates/fire-ui-text"]
+members = ["crates/fire-ui-fonts", "crates/fire-ui", "crates/fire-ui-widgets", "crates/fire-ui-native", "examples/studio", "crates/fire-ui-gl", "crates/fire-ui-cairo", "crates/fire-ui-text", "crates/fire-ui-tray"]
 
 [workspace.package]
 version = "0.9.0"
@@ -20,6 +20,7 @@ fire-ui-gl = { version = "0.9.0", path = "crates/fire-ui-gl" }
 fire-ui-cairo = { version = "0.9.0", path = "crates/fire-ui-cairo" }
 
 fire-ui-text = { version = "0.9.0", path = "crates/fire-ui-text" }
+fire-ui-tray = { version = "0.9.0", path = "crates/fire-ui-tray" }
 
 [profile.release]
 opt-level = 3

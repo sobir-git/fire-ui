@@ -23,8 +23,8 @@ pub struct WindowOptions {
     pub visible: bool,
     /// Bound intrinsic root height while keeping the configured width fixed.
     pub content_height: Option<f32>,
-    /// Reapply placement before each show, using the monitor under the pointer.
-    pub placement: Option<PointerPlacement>,
+    /// Reapply placement before each show.
+    pub placement: Option<Placement>,
     pub decorations: bool,
     pub kind: WindowKind,
     /// Request a native window whose pixels preserve alpha transparency.
@@ -41,6 +41,10 @@ pub struct WindowOptions {
 pub enum WindowKind {
     /// Activated, undecorated launcher above other windows, absent from taskbar/pager.
     Launcher,
+    /// A launcher that dismisses itself: losing focus requests a close, exactly
+    /// like the user closing the window. Pair it with [`Placement::Anchor`] for a
+    /// tray popup.
+    Popup,
     /// An ordinary application window.
     #[default]
     Normal,
@@ -50,10 +54,22 @@ pub enum WindowKind {
     /// requires X11/XWayland.
     Overlay { interactive: bool },
 }
-/// Horizontal center and fractional top edge within the pointer's monitor.
+impl WindowKind {
+    fn launcher(self) -> bool {
+        matches!(self, Self::Launcher | Self::Popup)
+    }
+}
+/// Where the window appears each time it is shown.
 #[derive(Clone, Copy, Debug)]
-pub struct PointerPlacement {
-    pub top_fraction: f32,
+pub enum Placement {
+    /// Horizontally centered on the pointer's monitor, top edge at a fraction of
+    /// its height.
+    Monitor { top_fraction: f32 },
+    /// Beside the pointer, as [`Placement::Anchor`] at its position.
+    Pointer,
+    /// Beside a screen point in physical pixels, such as a tray icon click:
+    /// below it when it fits, otherwise above, always inside that point's monitor.
+    Anchor { x: i32, y: i32 },
 }
 impl Default for WindowOptions {
     fn default() -> Self {
@@ -223,6 +239,8 @@ struct State<W: Widget> {
     visible: bool,
     show_at: Option<Instant>,
     resize_at: Option<Instant>,
+    /// The window has had focus since it was shown (popup dismissal).
+    focused: bool,
 }
 struct Host<W: Widget, F, R> {
     factory: Option<R>,
@@ -354,9 +372,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
             match request {
                 HostRequest::Close => self.close_requested = true,
                 HostRequest::Window(action) => match action {
-                    WindowAction::Focus => {
-                        activate(&s.window, self.options.kind == WindowKind::Launcher)
-                    }
+                    WindowAction::Focus => activate(&s.window, self.options.kind.launcher()),
                     WindowAction::Show => {
                         s.show_at = Some(Instant::now());
                         // A compositor may have started or stopped while hidden.
@@ -367,13 +383,14 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W,
                         s.ui.window_visible(true);
                         s.window.set_visible(true);
                         if !matches!(self.options.kind, WindowKind::Overlay { .. }) {
-                            activate(&s.window, self.options.kind == WindowKind::Launcher);
+                            activate(&s.window, self.options.kind.launcher());
                         }
                         s.ui.repaint();
                         self.needs_full_redraw = true;
                     }
                     WindowAction::Hide => {
                         s.visible = false;
+                        s.focused = false;
                         s.ui.window_visible(false);
                         s.window.set_visible(false);
                     }
@@ -803,7 +820,14 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             }
             WindowEvent::Focused(focus) => {
                 if let Some(s) = &mut self.state {
-                    s.ui.window_focus(focus)
+                    s.ui.window_focus(focus);
+                    if self.options.kind == WindowKind::Popup {
+                        // Only a popup that had focus dismisses; mapping races the WM.
+                        if !focus && std::mem::take(&mut s.focused) {
+                            return self.window_event(event_loop, _id, WindowEvent::CloseRequested);
+                        }
+                        s.focused = focus;
+                    }
                 }
                 self.service()
             }
@@ -1062,7 +1086,7 @@ fn create<W: Widget>(
         return Err("content_height must be finite and at least min_size.height".into());
     }
     let overlay = matches!(options.kind, WindowKind::Overlay { .. });
-    let launcher = options.kind == WindowKind::Launcher;
+    let launcher = options.kind.launcher();
     let interactive = matches!(options.kind, WindowKind::Overlay { interactive: true });
     let attrs = Window::default_attributes()
         .with_visible(false)
@@ -1150,6 +1174,7 @@ fn create<W: Widget>(
         occluded: false,
         visible: options.visible,
         show_at: None,
+        focused: false,
         resize_at: None,
     })
 }
@@ -1264,32 +1289,79 @@ fn transparent(window: &Window, options: &WindowOptions) -> bool {
         options.transparent
     }
 }
-fn place(window: &Window, placement: Option<PointerPlacement>) {
-    let Some(placement) = placement else {
-        return;
-    };
-    #[cfg(feature = "x11")]
-    if let Ok((x, y)) = crate::x11::pointer() {
-        if let Some(m) = window.available_monitors().find(|m| {
-            let p = m.position();
-            let s = m.size();
+fn place(window: &Window, placement: Option<Placement>) {
+    let monitor = |x: i32, y: i32| {
+        window.available_monitors().find(|m| {
+            let (p, s) = (m.position(), m.size());
             x >= p.x && y >= p.y && x < p.x + s.width as i32 && y < p.y + s.height as i32
-        }) {
-            let p = m.position();
-            let s = m.size();
-            window.set_outer_position(winit::dpi::PhysicalPosition::new(
-                p.x + (s.width as i32 - window.inner_size().width as i32) / 2,
-                p.y + (s.height as f32 * placement.top_fraction.clamp(0., 1.)) as i32,
-            ));
+        })
+    };
+    let size = window.outer_size();
+    let position = match placement {
+        None => return,
+        Some(Placement::Anchor { x, y }) => {
+            let Some(m) = monitor(x, y) else { return };
+            anchored(m.position().into(), m.size().into(), size.into(), (x, y))
         }
-    }
-    #[cfg(not(feature = "x11"))]
-    let _ = (window, placement);
+        #[cfg(feature = "x11")]
+        Some(Placement::Pointer) => {
+            let Ok((x, y)) = crate::x11::pointer() else {
+                return;
+            };
+            let Some(m) = monitor(x, y) else { return };
+            anchored(m.position().into(), m.size().into(), size.into(), (x, y))
+        }
+        #[cfg(feature = "x11")]
+        Some(Placement::Monitor { top_fraction }) => {
+            let Ok((x, y)) = crate::x11::pointer() else {
+                return;
+            };
+            let Some(m) = monitor(x, y) else { return };
+            let (p, s) = (m.position(), m.size());
+            (
+                p.x + (s.width as i32 - size.width as i32) / 2,
+                p.y + (s.height as f32 * top_fraction.clamp(0., 1.)) as i32,
+            )
+        }
+        #[cfg(not(feature = "x11"))]
+        Some(Placement::Monitor { .. } | Placement::Pointer) => return,
+    };
+    window.set_outer_position(winit::dpi::PhysicalPosition::new(position.0, position.1));
+}
+
+/// Top-left corner for a window of `size` beside `point` on a monitor.
+fn anchored(
+    origin: (i32, i32),
+    monitor: (u32, u32),
+    size: (u32, u32),
+    point: (i32, i32),
+) -> (i32, i32) {
+    const GAP: i32 = 8;
+    let (w, h) = (size.0 as i32, size.1 as i32);
+    let (right, bottom) = (origin.0 + monitor.0 as i32, origin.1 + monitor.1 as i32);
+    let x = (point.0 - w / 2).min(right - w - GAP).max(origin.0 + GAP);
+    let y = if point.1 + GAP + h <= bottom {
+        point.1 + GAP
+    } else {
+        point.1 - GAP - h
+    };
+    (x, y.max(origin.1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anchored_popups_stay_on_the_anchor_monitor() {
+        let (origin, monitor, size) = ((1920, 0), (2560, 1440), (400, 300));
+        // A tray click near the top-right corner opens below, inside the edge.
+        assert_eq!(anchored(origin, monitor, size, (4400, 20)), (4072, 28));
+        // Centered under a point with room on both sides.
+        assert_eq!(anchored(origin, monitor, size, (3000, 20)), (2800, 28));
+        // A bottom panel opens above the point.
+        assert_eq!(anchored(origin, monitor, size, (2000, 1430)), (1928, 1122));
+    }
 
     #[test]
     fn synthetic_releases_clear_held_keys_without_accepting_synthetic_presses() {

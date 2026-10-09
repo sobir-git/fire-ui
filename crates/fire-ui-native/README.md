@@ -53,8 +53,12 @@ window manager retains control of focus policy; bare X servers use direct focus.
 Each Show restores launcher ABOVE and taskbar/pager exclusions with post-map EWMH
 requests before activation, then requests an Above stack position as a fallback.
 
-`placement: Some(PointerPlacement { top_fraction: 0.24 })` horizontally centers
-the window on the monitor containing the pointer before each Show. Physical
+`placement: Some(Placement::Monitor { top_fraction: 0.24 })` horizontally centers
+the window on the monitor containing the pointer before each Show.
+`Placement::Anchor { x, y }` opens beside a physical screen point, such as a
+tray icon click: below it when it fits, otherwise above, clamped to that point's
+monitor; `Placement::Pointer` does the same at the pointer (X11). `WindowKind::Popup` is a launcher that requests a close when it loses
+focus after having had it, so a tray popup dismisses itself on an outside click. Physical
 coordinates include the monitor origin; resizing preserves the top-left corner.
 `content_height: Some(600.)` measures the root at the configured width with height
 between `min_size.height` and that maximum, then resizes the native window. The

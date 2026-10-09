@@ -14,7 +14,7 @@ mod window;
 #[cfg(feature = "x11")]
 mod x11;
 pub use renderer::{Renderer, RendererFactory};
-pub use window::{run, run_with, PointerPlacement, WakeHandle, WindowKind, WindowOptions};
+pub use window::{run, run_with, Placement, WakeHandle, WindowKind, WindowOptions};
 
 /// Blocking system file chooser. Hosts may call this from their platform's dialog thread.
 #[cfg(feature = "dialogs")]
