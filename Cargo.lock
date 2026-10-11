@@ -792,6 +792,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "native-dialog",
+ "polling",
  "raw-window-handle 0.6.2",
  "serde",
  "serde_json",

@@ -9,6 +9,8 @@ use x11rb::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+mod focus;
+pub(crate) use focus::Focus;
 fn connection(window: &Window) -> Result<(RustConnection, usize, u32)> {
     let id = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
         RawWindowHandle::Xlib(h) => h.window as u32,
@@ -167,12 +169,6 @@ pub(crate) fn pointer() -> Result<(i32, i32)> {
         .reply()
         .map_err(|e| e.to_string())?;
     Ok((p.root_x.into(), p.root_y.into()))
-}
-
-/// Grabs can generate FocusOut without changing the server's input focus.
-pub(crate) fn has_input_focus(window: &Window) -> Result<bool> {
-    let (c, _, id) = connection(window)?;
-    input_focus_within(&c, id)
 }
 
 fn input_focus_within(c: &impl Connection, window: u32) -> Result<bool> {

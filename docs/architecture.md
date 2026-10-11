@@ -197,6 +197,12 @@ handles before dropping output handlers, so writer shutdown cannot wait forever 
 a full event queue. Only the root can request window closure or native window actions.
 `WindowAction` exposes Show/Hide, physical MoveTo, focus, minimize, maximize, drag and edge resize.
 `Lifecycle::WindowFocus` notifies the root independently of child keyboard focus.
+On X11, core focus events are the native host's source of focus, including changes
+made during a keyboard grab. A sleeping readiness thread wakes the host to drain
+them in order; temporary grab/ungrab notifications do not change widget focus.
+`tools/focus_probe.py` exercises popup dismissal and input across these transitions
+on a private X server. This does not establish total ordering across winit's
+separate input connection or physical window-manager behavior.
 `Lifecycle::WindowTransparent` tells it whether a transparent window's alpha reaches
 the screen, so rounded or translucent edges are drawn only when a compositor shows them. `WindowOptions`
 controls native decorations, font and initial placement. Move events reach the root

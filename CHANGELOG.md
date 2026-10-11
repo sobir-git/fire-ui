@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Track X11 core focus transitions during keyboard grabs. Switching applications
+  while a shortcut owns the keyboard now clears widget focus and stops focused
+  animations; temporary grabs still preserve focus and keep popups open. The
+  native observer waits for events without periodic polling.
 - Add the `fire-ui-tray` crate: a dependency-free StatusNotifierItem tray icon
   with a `com.canonical.dbusmenu` menu over a hand-written session D-Bus client.
   `Tray::set` announces only what changed; `Tray::next` waits for clicks, scrolls

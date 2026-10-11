@@ -90,6 +90,8 @@ impl Default for WindowOptions {
     }
 }
 enum HostEvent {
+    #[cfg(feature = "x11")]
+    FocusReady(WindowId),
     #[cfg(feature = "inspection")]
     Inspect(Box<crate::inspection::Pending>),
     Command(Posted),
@@ -198,6 +200,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.bytes.fetch_sub(bytes, Ordering::AcqRel);
                 #[cfg(any(
+                    feature = "x11",
                     feature = "clipboard",
                     feature = "accessibility",
                     feature = "inspection"
@@ -207,6 +210,7 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
                     unreachable!()
                 };
                 #[cfg(not(any(
+                    feature = "x11",
                     feature = "clipboard",
                     feature = "accessibility",
                     feature = "inspection"
@@ -225,6 +229,8 @@ impl<W: Widget<Command: Send>> WakeHandle<W> {
 }
 // Drop drawing and text resources before their native window.
 struct State<W: Widget> {
+    #[cfg(feature = "x11")]
+    focus: crate::x11::Focus,
     #[cfg(feature = "accessibility")]
     accessibility: crate::platform_accessibility::Adapter,
     #[cfg(feature = "accessibility")]
@@ -340,6 +346,40 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
     host.error.map_or(Ok(()), Err)
 }
 impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory> Host<W, F, R> {
+    fn focus_changed(&mut self, focus: bool) {
+        self.flush_pointer();
+        if let Some(s) = &mut self.state {
+            #[cfg(feature = "accessibility")]
+            s.accessibility
+                .process_event(&s.window, &WindowEvent::Focused(focus));
+            s.ui.window_focus(focus);
+            if self.options.kind == WindowKind::Popup {
+                if !focus && std::mem::take(&mut s.focused) {
+                    self.close_requested = true;
+                }
+                s.focused = focus;
+            }
+        }
+        // Deliver loss before a queued return; focus/capture cleanup must not be
+        // collapsed just because both events arrived in the same native batch.
+        self.service();
+    }
+    #[cfg(feature = "x11")]
+    fn drain_focus(&mut self, event_loop: &ActiveEventLoop, synchronize: bool) {
+        let Some(s) = &mut self.state else { return };
+        match s.focus.drain(synchronize) {
+            Ok(changes) => {
+                for focused in changes {
+                    self.focus_changed(focused);
+                }
+            }
+            Err(error) => {
+                self.focus_changed(false);
+                self.error = Some(format!("X11 focus connection: {error}"));
+                event_loop.exit();
+            }
+        }
+    }
     fn frame_if_due(&mut self) {
         let Some(s) = &mut self.state else { return };
         if !s.visible || s.occluded || !s.ui.next_work().frame || Instant::now() < self.next_frame {
@@ -591,7 +631,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
             self.root.take().unwrap(),
             self.text.take().unwrap(),
             self.factory.take().unwrap(),
-            #[cfg(feature = "accessibility")]
+            #[cfg(any(feature = "accessibility", feature = "x11"))]
             self.wake.proxy.clone(),
         ) {
             Ok(state) => {
@@ -610,6 +650,12 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
     }
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
+            #[cfg(feature = "x11")]
+            HostEvent::FocusReady(window) => {
+                if self.state.as_ref().is_some_and(|s| s.window.id() == window) {
+                    self.drain_focus(_event_loop, false);
+                }
+            }
             #[cfg(feature = "inspection")]
             HostEvent::Inspect(pending) => {
                 if Instant::now() > pending.deadline {
@@ -769,15 +815,11 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
         self.service();
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        // winit also reports grab-induced FocusOut. Filter before accessibility and
-        // input cleanup so a global shortcut does not deactivate the application.
         #[cfg(feature = "x11")]
-        if matches!(event, WindowEvent::Focused(false))
-            && self
-                .state
-                .as_ref()
-                .is_some_and(|s| crate::x11::has_input_focus(&s.window).unwrap_or(false))
-        {
+        if matches!(event, WindowEvent::Focused(_)) {
+            // Core focus events are authoritative, including WhileGrabbed changes
+            // that winit's XI2 active-window bookkeeping can suppress.
+            self.drain_focus(event_loop, true);
             return;
         }
         #[cfg(feature = "accessibility")]
@@ -818,19 +860,7 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                 }
                 self.service()
             }
-            WindowEvent::Focused(focus) => {
-                if let Some(s) = &mut self.state {
-                    s.ui.window_focus(focus);
-                    if self.options.kind == WindowKind::Popup {
-                        // Only a popup that had focus dismisses; mapping races the WM.
-                        if !focus && std::mem::take(&mut s.focused) {
-                            return self.window_event(event_loop, _id, WindowEvent::CloseRequested);
-                        }
-                        s.focused = focus;
-                    }
-                }
-                self.service()
-            }
+            WindowEvent::Focused(focus) => self.focus_changed(focus),
             WindowEvent::Occluded(occluded) => {
                 if let Some(s) = &mut self.state {
                     s.occluded = occluded;
@@ -1077,7 +1107,7 @@ fn create<W: Widget>(
     root: Element<W>,
     text: Box<dyn TextEngine>,
     factory: impl RendererFactory,
-    #[cfg(feature = "accessibility")] proxy: EventLoopProxy<HostEvent>,
+    #[cfg(any(feature = "accessibility", feature = "x11"))] proxy: EventLoopProxy<HostEvent>,
 ) -> Result<State<W>, String> {
     if options
         .content_height
@@ -1125,8 +1155,11 @@ fn create<W: Widget>(
     };
     let (window, renderer) = factory.create(event_loop, attrs)?;
     #[cfg(feature = "accessibility")]
-    let accessibility =
-        crate::platform_accessibility::Adapter::with_event_loop_proxy(event_loop, &window, proxy);
+    let accessibility = crate::platform_accessibility::Adapter::with_event_loop_proxy(
+        event_loop,
+        &window,
+        proxy.clone(),
+    );
     if overlay
         && matches!(
             window.window_handle().map_err(|e| e.to_string())?.as_raw(),
@@ -1144,6 +1177,14 @@ fn create<W: Widget>(
     if launcher {
         crate::x11::launcher(&window)?;
     }
+    #[cfg(feature = "x11")]
+    let focus = {
+        let proxy = proxy.clone();
+        let id = window.id();
+        crate::x11::Focus::new(&window, move || {
+            proxy.send_event(HostEvent::FocusReady(id)).is_ok()
+        })?
+    };
     place(&window, options.placement);
     window.set_visible(options.visible);
     if options.visible && launcher {
@@ -1154,13 +1195,13 @@ fn create<W: Widget>(
     }
     let mut ui = Ui::new(root, options.size, options.limits)
         .map_err(|e| format!("UI admission failed: {e:?}"))?;
-    if !options.visible {
-        ui.window_focus(false);
-    }
+    ui.window_focus(false);
     ui.window_visible(options.visible);
     ui.set_window_transparent(transparent(&window, options));
     ui.set_clipboard_enabled(cfg!(feature = "clipboard"));
     Ok(State {
+        #[cfg(feature = "x11")]
+        focus,
         #[cfg(feature = "accessibility")]
         accessibility,
         #[cfg(feature = "accessibility")]

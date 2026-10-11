@@ -26,6 +26,11 @@ Linux requires X11 and xkbcommon libraries, including `libxkbcommon-x11-0` on
 Debian/Ubuntu. GPU libraries are required only by the OpenGL renderer. Native
 Native Wayland support is not implemented. X11/XWayland is the supported window path.
 
+X11 focus follows core focus events, including real focus transfers while the
+keyboard is grabbed. Temporary shortcut grabs do not deactivate widgets or dismiss
+popups. A private X connection and sleeping readiness thread wake the host only
+when focus events arrive; there is no periodic focus polling.
+
 Core semantics and IME routing do not require accessibility or inspection.
 Accessibility can be built without clipboard support; AT-SPI clipboard methods
 then report unsupported operations while set, insert and delete remain available.
