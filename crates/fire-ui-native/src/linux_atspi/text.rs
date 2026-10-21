@@ -1,8 +1,7 @@
 //! One current paragraph reference per text node. D-Bus objects own the store,
 //! never a historical paragraph. AccessKit keeps text events and control metadata.
-use fire_ui::{unit_at, Caret, Paragraph, Point, Rect, SemanticNode, TextUnit, Transform};
+use fire_ui::{unit_at, words, Caret, Paragraph, Point, Rect, SemanticNode, TextUnit, Transform};
 use std::{collections::HashMap, ops::Range, sync::Arc};
-use unicode_segmentation::UnicodeSegmentation;
 use zbus::fdo;
 
 pub(crate) type TextSnapshots = HashMap<u64, TextSnapshot>;
@@ -161,11 +160,7 @@ impl TextSnapshot {
                 // whitespace is its own word in each paragraph; a preceding word
                 // includes its newline, not the next paragraph.
                 let paragraph = unit_at(value, byte, TextUnit::Paragraph);
-                let starts = || {
-                    value[paragraph.clone()]
-                        .unicode_word_indices()
-                        .map(|(b, _)| paragraph.start + b)
-                };
+                let starts = || words(&value[paragraph.clone()]).map(|w| paragraph.start + w.start);
                 let start = starts()
                     .take_while(|b| *b <= byte)
                     .last()

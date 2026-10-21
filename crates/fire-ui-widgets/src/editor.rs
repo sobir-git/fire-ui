@@ -237,6 +237,34 @@ mod history_cost_tests {
     }
 
     #[test]
+    fn word_movement_skips_punctuation_and_whitespace() {
+        let mut editor = Editor::bare("one, two  three");
+        let mut steps = |right: bool, from: usize| {
+            editor.caret = Caret::at(from);
+            if right {
+                editor.word_right()
+            } else {
+                editor.word_left()
+            }
+        };
+        let right: Vec<_> = [0, 1, 3, 8].map(|b| steps(true, b)).into();
+        assert_eq!(right, [3, 3, 8, 15]);
+        let left: Vec<_> = [15, 12, 10, 6, 5].map(|b| steps(false, b)).into();
+        assert_eq!(left, [10, 10, 5, 5, 0]);
+    }
+    #[test]
+    fn moving_the_last_line_down_crosses_the_empty_final_line() {
+        let mut editor = Editor::bare("a\nb\n");
+        editor.caret = Caret::at(2);
+        editor.move_lines(true);
+        assert_eq!(editor.text(), "a\n\nb");
+        assert_eq!(editor.caret.byte, 3);
+        editor.move_lines(true);
+        assert_eq!(editor.text(), "a\n\nb");
+        editor.move_lines(false);
+        assert_eq!(editor.text(), "a\nb\n");
+    }
+    #[test]
     fn moving_lines_preserves_crlf_and_caret_boundaries() {
         let mut editor = Editor::bare("a\r\n🔥\r\né");
         editor.caret = Caret::at(3);
@@ -883,17 +911,17 @@ impl<D: Document> Editor<D> {
             .next()
             .map_or(self.text().len(), |s| self.caret.byte + s.len())
     }
+    // Word movement segments only the text on its side of the caret, so it
+    // stays proportional to the distance moved near either end of a long note.
     fn word_left(&self) -> usize {
-        self.text()[..self.caret.byte]
-            .unicode_word_indices()
+        words(&self.text()[..self.caret.byte])
             .next_back()
-            .map_or(0, |(i, _)| i)
+            .map_or(0, |word| word.start)
     }
     fn word_right(&self) -> usize {
-        self.text()[self.caret.byte..]
-            .unicode_word_indices()
+        words(&self.text()[self.caret.byte..])
             .next()
-            .map_or(self.text().len(), |(i, s)| self.caret.byte + i + s.len())
+            .map_or(self.text().len(), |word| self.caret.byte + word.end)
     }
     /// Apply a transaction through the editor's normal path. All edits apply
     /// or none do; the change is one undo step. Returns false when the
@@ -1078,74 +1106,53 @@ impl<D: Document> Editor<D> {
     }
     fn move_lines(&mut self, down: bool) {
         self.finish_typing_group();
+        let text = self.text();
         let range = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
-        let start = self.text()[..range.start].rfind('\n').map_or(0, |i| i + 1);
-        let last = if range.end > range.start && self.text().as_bytes()[range.end - 1] == b'\n' {
+        // A selection ending just after a newline does not take the next line.
+        let last = if range.end > range.start && text.as_bytes()[range.end - 1] == b'\n' {
             range.end - 1
         } else {
             range.end
         };
-        let end = self.text()[last..]
-            .find('\n')
-            .map_or(self.text().len(), |i| last + i);
-        let caret = self.caret.byte - start;
-        let anchor = self.anchor.map(|a| a - start);
-        let (replace_range, moved, destination) = if down && end < self.text().len() {
-            let next_end = self.text()[end + 1..]
-                .find('\n')
-                .map_or(self.text().len(), |i| end + 1 + i);
-            if next_end < self.text().len() {
-                let following = &self.text()[end + 1..next_end + 1];
-                let moved = format!("{}{}", following, &self.text()[start..end + 1]);
-                (start..next_end + 1, moved, start + following.len())
-            } else {
-                let break_start = if end > start && self.text().as_bytes()[end - 1] == b'\r' {
-                    end - 1
-                } else {
-                    end
-                };
-                let following = &self.text()[end + 1..];
-                let ending = &self.text()[break_start..end + 1];
-                let moved = format!(
-                    "{}{}{}",
-                    following,
-                    ending,
-                    &self.text()[start..break_start]
-                );
-                (
-                    start..self.text().len(),
-                    moved,
-                    start + following.len() + ending.len(),
-                )
-            }
-        } else if !down && start > 0 {
-            let previous = self.text()[..start - 1].rfind('\n').map_or(0, |i| i + 1);
-            if end < self.text().len() {
-                let moved = format!(
-                    "{}{}",
-                    &self.text()[start..end + 1],
-                    &self.text()[previous..start]
-                );
-                (previous..end + 1, moved, previous)
-            } else {
-                let break_end = start - 1;
-                let break_start =
-                    if break_end > previous && self.text().as_bytes()[break_end - 1] == b'\r' {
-                        break_end - 1
-                    } else {
-                        break_end
-                    };
-                let moved = format!(
-                    "{}{}{}",
-                    &self.text()[start..],
-                    &self.text()[break_start..start],
-                    &self.text()[previous..break_start]
-                );
-                (previous..self.text().len(), moved, previous)
-            }
+        let line = |byte| unit_at(text, byte, TextUnit::Paragraph);
+        let block = line(range.start).start..line(last).end;
+        // A block ending in a newline always has a line below, though it may
+        // be the empty final line.
+        let (upper, lower) = if down && text[..block.end].ends_with('\n') {
+            (block.clone(), line(block.end))
+        } else if !down && block.start > 0 {
+            (line(block.start - 1), block.clone())
         } else {
             return;
         };
+        // Lines keep their own breaks. When the lower line ends the text
+        // without one, the upper line's break moves between the swapped lines.
+        let split = |r: &Range<usize>| {
+            let line = &text[r.clone()];
+            let content = line
+                .strip_suffix('\n')
+                .map_or(line, |l| l.strip_suffix('\r').unwrap_or(l));
+            (content, &line[content.len()..])
+        };
+        let ((upper_line, upper_break), (lower_line, lower_break)) = (split(&upper), split(&lower));
+        let (moved, destination) = if !lower_break.is_empty() {
+            let moved = format!("{}{}", &text[lower.clone()], &text[upper.clone()]);
+            (
+                moved,
+                if down {
+                    upper.start + lower.len()
+                } else {
+                    upper.start
+                },
+            )
+        } else {
+            let moved = format!("{lower_line}{upper_break}{upper_line}");
+            let after = upper.start + lower_line.len() + upper_break.len();
+            (moved, if down { after } else { upper.start })
+        };
+        let replace_range = upper.start..lower.end;
+        let caret = self.caret.byte - block.start;
+        let anchor = self.anchor.map(|a| a - block.start);
         if !self.apply_inner(Transaction::replace(replace_range, moved), false) {
             return;
         }

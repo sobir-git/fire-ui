@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Add `TextUnit` and `unit_at` to `fire-ui`: one definition of grapheme, word
-  and paragraph boundaries for selection gestures and accessibility, and
+- Add `TextUnit`, `unit_at` and `words` to `fire-ui`: one definition of
+  grapheme, word and paragraph boundaries for selection gestures, word-wise
+  caret movement, line moves and accessibility, and
   `Paragraph::hit_cell` for the character under a point. Editor double- and
   triple-click drags now extend by whole words or paragraphs and keep the
   originally selected unit in either direction. `fire-ui` now depends on

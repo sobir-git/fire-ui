@@ -48,10 +48,16 @@ pub enum TextUnit {
     /// An extended grapheme cluster: one user-perceived character.
     Grapheme,
     /// A Unicode word-boundary segment: a word, a run of whitespace or one
-    /// punctuation mark.
+    /// punctuation mark. Only some segments are [`words`].
     Word,
     /// A line between hard breaks, including its trailing newline.
     Paragraph,
+}
+/// The word segments of `text`: those containing a letter or digit. Word-wise
+/// caret movement steps through these, skipping whitespace and punctuation.
+pub fn words(text: &str) -> impl DoubleEndedIterator<Item = Range<usize>> + '_ {
+    text.unicode_word_indices()
+        .map(|(start, word)| start..start + word.len())
 }
 /// The `unit` containing `byte`. At the end of `text`, graphemes and words
 /// are empty and a paragraph is the final one, empty after a trailing newline.
