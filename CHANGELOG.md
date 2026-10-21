@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 · 2026-10-21
+
+Tray icons, popup and anchored windows, platform click counting and unit-wise
+text selection.
 
 - Breaking: `Input::Button` carries `clicks`, the platform's count of
   consecutive presses; a release repeats its press's count. `ClickCounter`
