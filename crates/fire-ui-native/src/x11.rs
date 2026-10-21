@@ -171,6 +171,72 @@ pub(crate) fn pointer() -> Result<(i32, i32)> {
     Ok((p.root_x.into(), p.root_y.into()))
 }
 
+/// The desktop's double-click interval and distance from XSETTINGS, the
+/// values GTK and Qt read. Settings the desktop does not publish are `None`.
+pub(crate) fn double_click() -> Result<(Option<std::time::Duration>, Option<f32>)> {
+    let (c, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
+    let owner = c
+        .get_selection_owner(atom(&c, format!("_XSETTINGS_S{screen}").as_bytes())?)
+        .map_err(|e| e.to_string())?
+        .reply()
+        .map_err(|e| e.to_string())?
+        .owner;
+    if owner == x11rb::NONE {
+        return Ok((None, None));
+    }
+    let settings = atom(&c, b"_XSETTINGS_SETTINGS")?;
+    let data = c
+        .get_property(false, owner, settings, settings, 0, u32::MAX / 4)
+        .map_err(|e| e.to_string())?
+        .reply()
+        .map_err(|e| e.to_string())?
+        .value;
+    Ok((
+        xsetting_int(&data, b"Net/DoubleClickTime")
+            .and_then(|ms| u64::try_from(ms).ok())
+            .map(std::time::Duration::from_millis),
+        xsetting_int(&data, b"Net/DoubleClickDistance").map(|px| px.max(0) as f32),
+    ))
+}
+/// An integer setting from an `_XSETTINGS_SETTINGS` property, per the
+/// freedesktop XSETTINGS specification.
+fn xsetting_int(data: &[u8], wanted: &[u8]) -> Option<i32> {
+    let big = *data.first()? == 1;
+    let u16_at = |at: usize| {
+        let b: [u8; 2] = data.get(at..at + 2)?.try_into().ok()?;
+        Some(if big {
+            u16::from_be_bytes(b)
+        } else {
+            u16::from_le_bytes(b)
+        })
+    };
+    let u32_at = |at: usize| {
+        let b: [u8; 4] = data.get(at..at + 4)?.try_into().ok()?;
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        })
+    };
+    let padded = |n: usize| n.div_ceil(4) * 4;
+    let mut at = 12;
+    for _ in 0..u32_at(8)? {
+        let kind = *data.get(at)?;
+        let length = usize::from(u16_at(at + 2)?);
+        let name = data.get(at + 4..at + 4 + length)?;
+        // Header, padded name and the last-change serial precede the value.
+        let value = at + 4 + padded(length) + 4;
+        at = match kind {
+            0 if name == wanted => return Some(u32_at(value)? as i32),
+            0 => value + 4,
+            1 => value + 4 + padded(usize::try_from(u32_at(value)?).ok()?),
+            2 => value + 8,
+            _ => return None,
+        };
+    }
+    None
+}
+
 fn input_focus_within(c: &impl Connection, window: u32) -> Result<bool> {
     let mut focus = c
         .get_input_focus()
@@ -196,6 +262,29 @@ fn input_focus_within(c: &impl Connection, window: u32) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xsettings_integers_are_found_past_strings_and_colors() {
+        let mut data = vec![0, 0, 0, 0];
+        data.extend(7u32.to_le_bytes());
+        data.extend(3u32.to_le_bytes());
+        let mut setting = |kind: u8, name: &[u8], value: &[u8]| {
+            data.extend([kind, 0]);
+            data.extend((name.len() as u16).to_le_bytes());
+            data.extend(name);
+            data.resize(data.len().div_ceil(4) * 4, 0);
+            data.extend(1u32.to_le_bytes());
+            data.extend(value);
+        };
+        let mut string = 5u32.to_le_bytes().to_vec();
+        string.extend(b"Adw\0\0\0\0\0");
+        setting(1, b"Net/ThemeName", &string);
+        setting(2, b"Gtk/Color", &[0; 8]);
+        setting(0, b"Net/DoubleClickTime", &250i32.to_le_bytes());
+        assert_eq!(xsetting_int(&data, b"Net/DoubleClickTime"), Some(250));
+        assert_eq!(xsetting_int(&data, b"Net/DoubleClickDistance"), None);
+        assert_eq!(xsetting_int(&data[..20], b"Net/DoubleClickTime"), None);
+    }
 
     #[test]
     #[ignore = "requires an isolated X11 server without a WM (run with xvfb-run)"]

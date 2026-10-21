@@ -819,6 +819,7 @@ impl<C: Widget> Widget for Scroll<C> {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                ..
             } => {
                 let Some(bar) = self.bar(cx.bounds()) else {
                     return;

@@ -104,6 +104,7 @@ impl Toggle {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                ..
             } if cx.bounds().contains(*position) => {
                 self.pressed = Some(*pointer);
                 let _ = cx.focus();
@@ -116,6 +117,7 @@ impl Toggle {
                 button: PointerButton::Primary,
                 down: false,
                 position,
+                ..
             } if self.pressed == Some(*pointer) => {
                 self.pressed = None;
                 let _ = cx.release(*pointer);

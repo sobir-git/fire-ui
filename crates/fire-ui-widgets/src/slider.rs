@@ -174,6 +174,7 @@ impl Widget for Slider {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                ..
             } => {
                 self.dragging = Some(*pointer);
                 let _ = cx.focus();

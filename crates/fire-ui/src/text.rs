@@ -240,10 +240,14 @@ impl Paragraph {
         })
         .unwrap_or_default()
     }
-    pub fn hit(&self, p: Point) -> Caret {
-        let index = (p.y / self.line_height).floor().max(0.) as usize;
+    /// The row at paragraph height `y`, clamped to the first and last rows.
+    fn row_at(&self, y: f32) -> Option<&TextLine> {
+        let index = (y / self.line_height).floor().max(0.) as usize;
         self.lines
             .get(index.min(self.lines.len().saturating_sub(1)))
+    }
+    pub fn hit(&self, p: Point) -> Caret {
+        self.row_at(p.y)
             .and_then(|l| {
                 l.stops()
                     .min_by(|a, b| (a.x - p.x).abs().total_cmp(&(b.x - p.x).abs()))
@@ -255,11 +259,7 @@ impl Paragraph {
     /// the character itself, as word and paragraph selection need. An empty row
     /// gives an empty range at its start.
     pub fn hit_cell(&self, p: Point) -> Range<usize> {
-        let index = (p.y / self.line_height).floor().max(0.) as usize;
-        let Some(line) = self
-            .lines
-            .get(index.min(self.lines.len().saturating_sub(1)))
-        else {
+        let Some(line) = self.row_at(p.y) else {
             return 0..0;
         };
         let distance = |c: &TextCell| (c.x - p.x).max(p.x - c.x - c.width()).max(0.);

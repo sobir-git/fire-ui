@@ -69,6 +69,7 @@ impl Widget for Tab {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                ..
             } if cx.bounds().contains(*position) => {
                 self.pressed = Some(*pointer);
                 let _ = cx.capture(*pointer);
@@ -79,6 +80,7 @@ impl Widget for Tab {
                 button: PointerButton::Primary,
                 down: false,
                 position,
+                ..
             } if self.pressed == Some(*pointer) => {
                 self.pressed = None;
                 let _ = cx.release(*pointer);

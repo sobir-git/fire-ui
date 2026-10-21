@@ -317,6 +317,7 @@ mod history_cost_tests {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                clicks: 1,
             },
             &mut TestText,
         );
@@ -451,16 +452,21 @@ struct Armed {
     pointer: u32,
     origin: Point,
 }
-/// A primary-button selection drag. The press selects `origin` in `unit`;
-/// moving extends the selection by whole units and always keeps `origin`.
+/// The pointer gesture that made the selection. The press selects `origin` in
+/// `unit`; dragging extends by whole units and always keeps `origin`. After
+/// release, shift-click extends the same way while the selection is still
+/// exactly the one the gesture made.
 #[derive(Clone, Debug)]
-struct Drag {
-    pointer: u32,
+struct Gesture {
+    /// The pointer holding the button, while dragging.
+    pointer: Option<u32>,
     position: Point,
     unit: TextUnit,
     origin: Range<usize>,
+    /// The document revision and `(anchor, caret)` the gesture last produced.
+    made: (u64, usize, usize),
 }
-impl Drag {
+impl Gesture {
     /// The `(anchor, caret)` selection covering `origin` and the unit `hit`.
     fn extend(&self, hit: Range<usize>) -> (usize, usize) {
         if hit.start < self.origin.start {
@@ -558,7 +564,7 @@ pub struct Editor<D: Document = StringDocument> {
     caret_blink: bool,
     max_bytes: usize,
     limit_reached: bool,
-    drag: Option<Drag>,
+    gesture: Option<Gesture>,
     state_pending: bool,
     preedit: String,
     preedit_selection: Option<(usize, usize)>,
@@ -566,8 +572,6 @@ pub struct Editor<D: Document = StringDocument> {
     key: Option<String>,
     composition_layout: Option<Arc<Paragraph>>,
     composition_source: Option<(u64, Range<usize>, String, Arc<str>)>,
-    last_click: Option<(Duration, Point)>,
-    click_count: u8,
     modifiers: Modifiers,
     chrome: bool,
     read_only: bool,
@@ -627,7 +631,7 @@ impl<D: Document> Editor<D> {
             caret_blink: true,
             max_bytes: usize::MAX,
             limit_reached: false,
-            drag: None,
+            gesture: None,
             state_pending: false,
             preedit: String::new(),
             preedit_selection: None,
@@ -635,8 +639,6 @@ impl<D: Document> Editor<D> {
             key: None,
             composition_layout: None,
             composition_source: None,
-            last_click: None,
-            click_count: 0,
             modifiers: Modifiers::default(),
             chrome: true,
             read_only: false,
@@ -1285,50 +1287,70 @@ impl<D: Document> Editor<D> {
             .as_ref()
             .map_or(Caret::at(0), |layout| layout.hit(self.paragraph_point(p)))
     }
-    /// The `unit` under `p`, or the empty range at the nearest caret for graphemes.
-    fn hit_unit(&self, p: Point, unit: TextUnit) -> Range<usize> {
+    /// The `unit` under `p`. A grapheme is the empty range at the nearest
+    /// caret, which is returned too for its affinity.
+    fn under(&self, p: Point, unit: TextUnit) -> (Range<usize>, Option<Caret>) {
         match (unit, &self.paragraph) {
             (TextUnit::Grapheme, _) | (_, None) => {
-                let byte = self.hit(p).byte;
-                byte..byte
+                let caret = self.hit(p);
+                (caret.byte..caret.byte, Some(caret))
             }
-            (unit, Some(layout)) => unit_at(
-                self.text(),
-                layout.hit_cell(self.paragraph_point(p)).start,
-                unit,
-            ),
+            (unit, Some(layout)) => {
+                let cell = layout.hit_cell(self.paragraph_point(p));
+                (unit_at(self.text(), cell.start, unit), None)
+            }
         }
+    }
+    /// The unit and origin of the gesture that made the current selection.
+    fn selection_gesture(&self) -> Option<(TextUnit, Range<usize>)> {
+        let current = (self.document.revision(), self.anchor?, self.caret.byte);
+        let gesture = self.gesture.as_ref().filter(|g| g.made == current)?;
+        Some((gesture.unit, gesture.origin.clone()))
     }
     /// Start a selection drag at `p`: the press selects `origin`.
     fn start_drag(&mut self, pointer: u32, p: Point, unit: TextUnit, origin: Range<usize>) {
-        self.drag = Some(Drag {
-            pointer,
+        self.gesture = Some(Gesture {
+            pointer: Some(pointer),
             position: p,
             unit,
             origin,
+            made: (0, 0, 0),
         });
         self.drag_to(p);
     }
-    /// Extend the dragged selection to `p` in the drag's unit.
+    /// Extend the gesture's selection to `p` in its unit.
     fn drag_to(&mut self, p: Point) {
-        let Some(unit) = self.drag.as_ref().map(|d| d.unit) else {
+        let Some(unit) = self.gesture.as_ref().map(|g| g.unit) else {
             return;
         };
-        let caret = self.hit(p);
-        let hit = self.hit_unit(p, unit);
-        let Some(drag) = &mut self.drag else { return };
-        drag.position = p;
-        let (anchor, byte) = drag.extend(hit);
+        let (hit, caret) = self.under(p, unit);
+        let revision = self.document.revision();
+        let Some(gesture) = &mut self.gesture else {
+            return;
+        };
+        let (anchor, byte) = gesture.extend(hit);
+        gesture.position = p;
+        gesture.made = (revision, anchor, byte);
         self.anchor = Some(anchor);
         // Keep the hit caret's affinity when it is the selection end.
-        self.caret = if byte == caret.byte {
-            caret
-        } else {
-            Caret::at(byte)
-        };
+        self.caret = caret.filter(|c| c.byte == byte).unwrap_or(Caret::at(byte));
+    }
+    /// The pointer position of an active drag.
+    fn drag_position(&self) -> Option<Point> {
+        self.gesture
+            .as_ref()
+            .filter(|g| g.pointer.is_some())
+            .map(|g| g.position)
     }
     fn dragging(&self, pointer: u32) -> bool {
-        self.drag.as_ref().is_some_and(|d| d.pointer == pointer)
+        self.gesture
+            .as_ref()
+            .is_some_and(|g| g.pointer == Some(pointer))
+    }
+    fn end_drag(&mut self) {
+        if let Some(gesture) = &mut self.gesture {
+            gesture.pointer = None;
+        }
     }
     fn reveal(&mut self, size: Size) {
         if let Some(p) = &self.paragraph {
@@ -1578,7 +1600,7 @@ impl<D: Document> Widget for Editor<D> {
         if std::mem::take(&mut self.state_pending) {
             self.report_state(cx);
         }
-        if let Some(position) = self.drag.as_ref().map(|d| d.position) {
+        if let Some(position) = self.drag_position() {
             let y = position.y;
             let height = cx.bounds().height;
             let overflow = if y < 0. {
@@ -1687,7 +1709,7 @@ impl<D: Document> Widget for Editor<D> {
                     self.composition_layout = None;
                     cx.relayout();
                 }
-                self.drag = None;
+                self.end_drag();
                 self.clear_preedit();
                 cx.cancel_timer(self.blink);
                 cx.repaint()
@@ -1697,7 +1719,7 @@ impl<D: Document> Widget for Editor<D> {
             }
             Lifecycle::CaptureLost(pointer) => {
                 if self.dragging(pointer) {
-                    self.drag = None;
+                    self.end_drag();
                 }
                 if self.scrollbar_drag.is_some_and(|(p, _)| p == pointer) {
                     self.scrollbar_drag = None;
@@ -1904,6 +1926,7 @@ impl<D: Document> Widget for Editor<D> {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                ..
             } if self
                 .scrollbar(cx.bounds())
                 .is_some_and(|bar| bar.track.contains(*position)) =>
@@ -1957,7 +1980,7 @@ impl<D: Document> Widget for Editor<D> {
                 cx.stop();
                 return;
             }
-            Input::Pointer { position, .. } if self.drag.is_none() => {
+            Input::Pointer { position, .. } if self.drag_position().is_none() => {
                 let hovered = self
                     .scrollbar(cx.bounds())
                     .is_some_and(|bar| bar.contains(*position));
@@ -1990,6 +2013,7 @@ impl<D: Document> Widget for Editor<D> {
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                clicks,
             } => {
                 self.finish_typing_group();
                 // A target that claims the press arms for activation on release
@@ -2000,30 +2024,22 @@ impl<D: Document> Widget for Editor<D> {
                     cx.stop();
                     return;
                 }
-                self.click_count = if self.last_click.is_some_and(|(time, p)| {
-                    cx.now().saturating_sub(time) < Duration::from_millis(350)
-                        && (p.x - position.x).abs() < 4.
-                        && (p.y - position.y).abs() < 4.
-                }) {
-                    self.click_count % 3 + 1
+                // Repeated clicks select words, then paragraphs, then cycle.
+                // Shift extends the selection by the unit that made it.
+                let (unit, origin) = if self.modifiers.shift {
+                    self.selection_gesture().unwrap_or_else(|| {
+                        let anchor = self.anchor.unwrap_or(self.caret.byte);
+                        (TextUnit::Grapheme, anchor..anchor)
+                    })
                 } else {
-                    1
-                };
-                // Shift extends the existing selection by graphemes; repeated
-                // clicks select, then drag by, words and paragraphs.
-                let unit = match (self.modifiers.shift, self.click_count) {
-                    (false, 2) => TextUnit::Word,
-                    (false, 3) => TextUnit::Paragraph,
-                    _ => TextUnit::Grapheme,
-                };
-                let origin = if self.modifiers.shift {
-                    let anchor = self.anchor.unwrap_or(self.caret.byte);
-                    anchor..anchor
-                } else {
-                    self.hit_unit(*position, unit)
+                    let unit = match clicks.saturating_sub(1) % 3 {
+                        1 => TextUnit::Word,
+                        2 => TextUnit::Paragraph,
+                        _ => TextUnit::Grapheme,
+                    };
+                    (unit, self.under(*position, unit).0)
                 };
                 self.start_drag(*pointer, *position, unit, origin);
-                self.last_click = Some((cx.now(), *position));
                 let _ = cx.focus();
                 let _ = cx.capture(*pointer);
             }
@@ -2054,7 +2070,7 @@ impl<D: Document> Widget for Editor<D> {
                 down: false,
                 ..
             } if self.dragging(*pointer) => {
-                self.drag = None;
+                self.end_drag();
                 let _ = cx.release(*pointer);
             }
             Input::Text { .. } | Input::Preedit { .. } if self.read_only => return,

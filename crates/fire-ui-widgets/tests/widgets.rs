@@ -517,6 +517,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(317., 210.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -533,6 +534,7 @@ fn restored_scroll_survives_layout_and_scrollbar_drag_does_not_reveal_caret() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(317., 235.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -552,13 +554,13 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
     let p = ui.root().paragraph().unwrap().clone();
     let position = p.caret_point(Caret::at(5));
     for clicks in 1..=3 {
-        ui.advance(std::time::Duration::from_millis(clicks * 100), 100);
         ui.dispatch(
             Input::Button {
                 pointer: 0,
                 button: PointerButton::Primary,
                 down: true,
                 position,
+                clicks,
             },
             &mut TestText,
         );
@@ -568,6 +570,7 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
                 button: PointerButton::Primary,
                 down: false,
                 position,
+                clicks,
             },
             &mut TestText,
         );
@@ -598,6 +601,7 @@ fn shift_click_double_click_and_triple_click_select_expected_text() {
             button: PointerButton::Primary,
             down: true,
             position,
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -759,6 +763,7 @@ fn menu_outside_click_dismisses_without_activating_an_action() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(390., 290.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -1258,6 +1263,7 @@ fn click<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, at: Point) {
                 button: PointerButton::Primary,
                 down,
                 position: at,
+                clicks: 1,
             },
             text,
         );
@@ -1272,6 +1278,7 @@ fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: P
             button: PointerButton::Primary,
             down: true,
             position: from,
+            clicks: 1,
         },
         text,
     );
@@ -1288,6 +1295,7 @@ fn drag<W: Widget>(ui: &mut Ui<W>, text: &mut dyn TextEngine, from: Point, to: P
             button: PointerButton::Primary,
             down: false,
             position: to,
+            clicks: 1,
         },
         text,
     );
@@ -1377,6 +1385,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(20., 20.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -1398,6 +1407,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(20., 20.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -1424,6 +1434,7 @@ fn release_without_a_press_does_not_activate_toggles_or_tabs() {
             button: PointerButton::Primary,
             down: false,
             position: center(second.bounds),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -2134,6 +2145,7 @@ fn a_list_scrollbar_can_be_dragged() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(x, 20.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -2157,6 +2169,7 @@ fn a_list_scrollbar_can_be_dragged() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(x, 200.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -2789,6 +2802,7 @@ fn selection_drag_requests_paint_before_release() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(100., 15.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -2826,6 +2840,7 @@ fn extension_drag_selects_instead_of_activating() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(20., 15.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -2842,6 +2857,7 @@ fn extension_drag_selects_instead_of_activating() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(200., 100.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -3192,6 +3208,7 @@ fn an_armed_release_notifies_exactly_once() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(20., 15.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -3214,6 +3231,7 @@ fn an_armed_release_notifies_exactly_once() {
             button: PointerButton::Primary,
             down: false,
             position: Point::new(22., 16.),
+            clicks: 1,
         },
         &mut text,
     );
@@ -3233,7 +3251,7 @@ fn an_armed_release_notifies_exactly_once() {
 /// Returns the selection after each step of the path.
 fn multi_click_drag(
     text: &str,
-    clicks: u64,
+    clicks: u8,
     start: usize,
     path: &[usize],
 ) -> Vec<Option<std::ops::Range<usize>>> {
@@ -3250,17 +3268,17 @@ fn multi_click_drag(
         let at = p.caret_point(Caret::at(byte));
         Point::new(at.x + 1., at.y + 1.)
     };
-    let button = |down| Input::Button {
+    let button = |down, clicks| Input::Button {
         pointer: 0,
         button: PointerButton::Primary,
         down,
         position: inside(start),
+        clicks,
     };
     for click in 1..=clicks {
-        ui.advance(std::time::Duration::from_millis(click * 100), 100);
-        ui.dispatch(button(true), &mut TestText);
+        ui.dispatch(button(true, click), &mut TestText);
         if click < clicks {
-            ui.dispatch(button(false), &mut TestText);
+            ui.dispatch(button(false, click), &mut TestText);
         }
     }
     path.iter()
@@ -3303,4 +3321,63 @@ fn triple_click_drag_extends_by_whole_paragraphs() {
         multi_click_drag("one\ntwo\nthree", 3, 5, &[5, 1, 10]),
         [Some(4..8), Some(0..8), Some(4..13)]
     );
+}
+#[test]
+fn shift_click_extends_by_the_unit_that_made_the_selection() {
+    let mut ui = Ui::new(
+        Editor::new("one two three four").padding(0., 0.),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let p = ui.root().paragraph().unwrap().clone();
+    let inside = |byte: usize| {
+        let at = p.caret_point(Caret::at(byte));
+        Point::new(at.x + 1., at.y + 1.)
+    };
+    let press = |ui: &mut Ui<Editor>, byte, clicks, shift| {
+        ui.dispatch(
+            Input::Modifiers(Modifiers {
+                shift,
+                ..Modifiers::default()
+            }),
+            &mut TestText,
+        );
+        for down in [true, false] {
+            ui.dispatch(
+                Input::Button {
+                    pointer: 0,
+                    button: PointerButton::Primary,
+                    down,
+                    position: inside(byte),
+                    clicks,
+                },
+                &mut TestText,
+            );
+        }
+        settle(ui, &mut TestText);
+        ui.root().selection()
+    };
+    // Double-click "three", then shift-click inside "one" and inside "four":
+    // whole words, always keeping "three".
+    assert_eq!(press(&mut ui, 9, 2, false), Some(8..13));
+    assert_eq!(press(&mut ui, 1, 1, true), Some(0..13));
+    assert_eq!(press(&mut ui, 15, 1, true), Some(8..18));
+    // Once the keyboard changes the selection, shift-click is by graphemes.
+    ui.dispatch(
+        Input::Key {
+            key: Key::Left,
+            physical: 0,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+        &mut TestText,
+    );
+    settle(&mut ui, &mut TestText);
+    assert_eq!(press(&mut ui, 1, 1, true), Some(1..8));
 }

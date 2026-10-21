@@ -289,6 +289,7 @@ impl Widget for MenuRow {
                 button: PointerButton::Primary,
                 down: false,
                 position,
+                ..
             } if self.pressed == Some(*pointer) => {
                 self.pressed = None;
                 let _ = cx.release(*pointer);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Breaking: `Input::Button` carries `clicks`, the platform's count of
+  consecutive presses; a release repeats its press's count. `ClickCounter`
+  counts them for hosts whose platform reports only presses. The native host
+  reads the desktop's double-click time and distance from XSETTINGS and falls
+  back to GTK's defaults. Widgets no longer time clicks themselves.
+- Shift-click after a double- or triple-click extends by whole words or
+  paragraphs and keeps the original unit, while the selection is still the one
+  that gesture made.
 - Add `TextUnit`, `unit_at` and `words` to `fire-ui`: one definition of
   grapheme, word and paragraph boundaries for selection gestures, word-wise
   caret movement, line moves and accessibility, and

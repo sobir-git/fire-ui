@@ -213,6 +213,7 @@ fn overlay_hit_order_follows_tree_order() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(5., 5.),
+            clicks: 1,
         },
         &mut TestText,
     );
@@ -499,6 +500,7 @@ fn retirement_delivers_input_cancellation_before_unmount() {
             button: PointerButton::Primary,
             down: true,
             position: Point::new(12., 2.),
+            clicks: 1,
         },
         &mut TestText,
     );

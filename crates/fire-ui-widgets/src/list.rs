@@ -417,6 +417,7 @@ where
                 down: true,
                 pointer,
                 position,
+                ..
             } if self
                 .bar(cx.bounds())
                 .is_some_and(|bar| bar.track.contains(*position)) =>

@@ -257,6 +257,7 @@ struct Host<W: Widget, F, R> {
     start: Instant,
     pointer: Point,
     pending_pointer: bool,
+    clicks: ClickCounter,
     next_frame: Instant,
     redraw_requested: bool,
     needs_full_redraw: bool,
@@ -322,6 +323,7 @@ pub fn run_with<W: Widget, F: FnMut(W::Output, &WakeHandle<W>) + 'static>(
         start: Instant::now(),
         pointer: Point::default(),
         pending_pointer: false,
+        clicks: click_counter(),
         next_frame: Instant::now(),
         redraw_requested: false,
         needs_full_redraw: true,
@@ -914,11 +916,16 @@ impl<W: Widget, F: FnMut(W::Output, &WakeHandle<W>), R: RendererFactory>
                     MouseButton::Forward => PointerButton::Forward,
                     MouseButton::Other(n) => PointerButton::Other(n),
                 };
+                let down = state == ElementState::Pressed;
+                let clicks = self
+                    .clicks
+                    .count(0, button, down, self.pointer, self.start.elapsed());
                 self.input(Input::Button {
                     pointer: 0,
                     button,
-                    down: state == ElementState::Pressed,
+                    down,
                     position: self.pointer,
+                    clicks,
                 })
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1387,6 +1394,19 @@ fn anchored(
         point.1 - GAP - h
     };
     (x, y.max(origin.1))
+}
+
+/// Click counting with the desktop's double-click settings where the platform
+/// publishes them, and GTK's defaults otherwise.
+fn click_counter() -> ClickCounter {
+    #[cfg(feature = "x11")]
+    if let Ok((interval, distance)) = crate::x11::double_click() {
+        return ClickCounter::new(
+            interval.unwrap_or(ClickCounter::INTERVAL),
+            distance.unwrap_or(ClickCounter::DISTANCE),
+        );
+    }
+    ClickCounter::default()
 }
 
 #[cfg(test)]

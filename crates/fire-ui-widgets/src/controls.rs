@@ -303,6 +303,7 @@ impl<C: Widget<Output = Infallible>> Widget for Button<C> {
                 button: PointerButton::Primary,
                 down: false,
                 position,
+                ..
             } if self.pressed == Some(*pointer) => {
                 self.pressed = None;
                 let _ = cx.release(*pointer);

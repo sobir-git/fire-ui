@@ -1,4 +1,5 @@
 use crate::Point;
+use std::time::Duration;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
@@ -47,6 +48,57 @@ pub enum PointerButton {
     /// Further buttons, numbered from 0 in platform order.
     Other(u16),
 }
+/// Counts consecutive clicks for hosts whose platform reports only presses.
+/// The platform's double-click interval and distance are policy the host
+/// supplies; the defaults match GTK's.
+#[derive(Clone, Debug)]
+pub struct ClickCounter {
+    interval: Duration,
+    distance: f32,
+    last: Option<(u32, PointerButton, Duration, Point, u8)>,
+}
+impl Default for ClickCounter {
+    fn default() -> Self {
+        Self::new(Self::INTERVAL, Self::DISTANCE)
+    }
+}
+impl ClickCounter {
+    /// GTK's default double-click interval.
+    pub const INTERVAL: Duration = Duration::from_millis(400);
+    /// GTK's default double-click distance, in logical pixels.
+    pub const DISTANCE: f32 = 5.;
+    pub fn new(interval: Duration, distance: f32) -> Self {
+        Self {
+            interval,
+            distance,
+            last: None,
+        }
+    }
+    /// The click count for a press or release at `time`, a monotonic clock
+    /// shared by every call.
+    pub fn count(
+        &mut self,
+        pointer: u32,
+        button: PointerButton,
+        down: bool,
+        position: Point,
+        time: Duration,
+    ) -> u8 {
+        let previous = self.last.filter(|(p, b, ..)| (*p, *b) == (pointer, button));
+        if !down {
+            return previous.map_or(1, |(.., clicks)| clicks);
+        }
+        let clicks = previous
+            .filter(|(_, _, at, from, _)| {
+                time.saturating_sub(*at) <= self.interval
+                    && (from.x - position.x).abs() <= self.distance
+                    && (from.y - position.y).abs() <= self.distance
+            })
+            .map_or(1, |(.., clicks)| clicks.saturating_add(1));
+        self.last = Some((pointer, button, time, position, clicks));
+        clicks
+    }
+}
 #[derive(Clone, Debug)]
 pub enum Input {
     Modifiers(Modifiers),
@@ -60,6 +112,11 @@ pub enum Input {
         button: PointerButton,
         down: bool,
         position: Point,
+        /// Consecutive presses of this button close in time and place, as the
+        /// platform counts them: 1 for a single click, 2 for a double click.
+        /// A release repeats its press's count. Hosts without a native count
+        /// use [`ClickCounter`].
+        clicks: u8,
     },
     Scroll {
         position: Point,
