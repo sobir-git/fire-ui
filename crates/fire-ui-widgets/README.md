@@ -6,7 +6,7 @@ exactly the same interfaces.
 
 **Controls.** `Label`, `Button` in four emphasis levels, `Checkbox`, `Switch`,
 `Slider`, `Progress`, `Dropdown`, `Tabs`, `Divider`, a Unicode `Editor` with undo,
-IME support and a selectable `read_only` mode, a modal `Menu`, and a fixed-height `VirtualList`. Each one carries
+IME support, find and a selectable `read_only` mode, a modal `Menu`, and a fixed-height `VirtualList`. Each one carries
 its own keyboard handling, focus ring, pointer cursor and accessible semantics.
 
 **Layout.** `row` and `column` take a `Flow` — a gap, a `Justify` for leftover

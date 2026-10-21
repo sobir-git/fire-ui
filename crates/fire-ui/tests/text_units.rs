@@ -34,3 +34,22 @@ fn clicks_count_close_presses_of_one_button_and_releases_repeat_them() {
     assert_eq!(c.count(0, PointerButton::Secondary, true, p, ms(950)), 1);
     assert_eq!(c.count(0, primary, true, p, ms(1000)), 1);
 }
+#[test]
+fn occurrences_ignore_case_and_cover_whole_graphemes() {
+    let find = |text: &str, query: &str| {
+        occurrences(text, query)
+            .map(|r| (r.start, r.end))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(find("Fire fire FIRE", "fIRe"), [(0, 4), (5, 9), (10, 14)]);
+    assert_eq!(find("aaaa", "aa"), [(0, 2), (2, 4)]);
+    assert_eq!(find("anything", ""), []);
+    // A combining accent belongs to the letter before it.
+    assert_eq!(find("cafe\u{301} cafe", "cafe"), [(7, 11)]);
+    assert_eq!(find("cafe\u{301}", "CAFE\u{301}"), [(0, 6)]);
+    // Ranges address the original text when lowercase forms change length.
+    assert_eq!(find("İİ fire", "FIRE"), [(5, 9)]);
+    assert_eq!(find("\u{212a}elvin", "kelvin"), [(0, 8)]);
+    // Uppercase Greek has one sigma; lowercase writes a final form.
+    assert_eq!(find("ΛΟΓΟΣ", "λογος"), [(0, 10)]);
+}

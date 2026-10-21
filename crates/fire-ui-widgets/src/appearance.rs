@@ -37,6 +37,8 @@ pub struct Palette {
     pub focus: Color,
     /// Text selection wash.
     pub selection: Color,
+    /// Marked text other than the selection, such as find matches.
+    pub highlight: Color,
     /// Destructive actions and errors.
     pub danger: Color,
     /// Confirmation and healthy state.
@@ -61,6 +63,7 @@ impl Palette {
             on_accent: Color::hex(0x1a0f06),
             focus: Color::hex(0xffb06a),
             selection: Color::hex(0xf2924f).alpha(0.24),
+            highlight: Color::hex(0xffc07a).alpha(0.16),
             danger: Color::hex(0xe5675a),
             success: Color::hex(0xa8c97e),
         }
@@ -83,6 +86,7 @@ impl Palette {
             on_accent: Color::hex(0xfff7ef),
             focus: Color::hex(0xc25a15),
             selection: Color::hex(0xc25a15).alpha(0.20),
+            highlight: Color::hex(0xe8873c).alpha(0.22),
             danger: Color::hex(0xb02a1c),
             success: Color::hex(0x4c7a2c),
         }
@@ -106,6 +110,7 @@ impl Palette {
             on_accent: Color::hex(0x06121c),
             focus: Color::hex(0x7fcbff),
             selection: Color::hex(0x4bb3fd).alpha(0.22),
+            highlight: Color::hex(0x7fcbff).alpha(0.14),
             danger: Color::hex(0xf0616d),
             success: Color::hex(0x5ec98a),
         }

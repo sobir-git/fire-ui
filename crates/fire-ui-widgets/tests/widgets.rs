@@ -2375,9 +2375,9 @@ fn a_scale_change_relays_the_window_while_a_palette_change_only_repaints() {
 
 #[test]
 fn theme_is_a_small_value() {
-    assert_eq!(std::mem::size_of::<Palette>(), 17 * 16);
+    assert_eq!(std::mem::size_of::<Palette>(), 18 * 16);
     assert!(
-        std::mem::size_of::<Theme>() <= 320,
+        std::mem::size_of::<Theme>() <= 336,
         "{}",
         std::mem::size_of::<Theme>()
     );

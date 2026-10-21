@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Add find to `Editor`. `Edit::Find` highlights every occurrence of a query and
+  selects the first one from the selection; `FindNext` and `FindPrevious` step
+  through them, wrapping. `EditorOutput::Found` reports the count and which
+  occurrence is selected after each find command, edit and selection change.
+  Occurrences are recomputed when the text changes and only visible ones paint.
+  A query with no occurrence leaves the selection and view where they were.
+- Add `occurrences` to `fire-ui`: case-insensitive matching by lowercase forms
+  that returns byte ranges in the original text and never splits a grapheme.
+- Breaking: `Palette` gains `highlight`, the wash behind marked text other than
+  the selection, such as find matches.
+
 ## 0.10.0 · 2026-10-21
 
 Tray icons, popup and anchored windows, platform click counting and unit-wise

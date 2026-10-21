@@ -156,6 +156,11 @@ text edits. Focus changes are also observable by consumers such as inline rename
 The editor supports word/line clicks, Shift-click, line movement and scrollbar drag.
 A read-only editor keeps selection, copying, scrolling and focus but refuses typing,
 input methods, clipboard edits, history and assistive replacement, and draws no caret.
+Find belongs to the editor because the occurrences index its document: it recomputes
+them when the text changes, paints only the visible ones in the theme's `highlight`,
+and selects one with the ordinary selection. The owner sends the query and hears the
+count. `occurrences` in the core is the same case-insensitive matching for anyone
+filtering their own text.
 
 `EditorDecoration` receives the editor's shared paragraph, selection, caret and
 visible rectangle. It paints behind or above text through the ordinary `Painter`.

@@ -6,7 +6,7 @@ use std::{
         Arc,
     },
 };
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
     pub size: f32,
@@ -75,6 +75,63 @@ pub fn unit_at(text: &str, byte: usize, unit: TextUnit) -> Range<usize> {
         }
     };
     found.unwrap_or(byte..byte)
+}
+/// Where `query` occurs in `text` ignoring case, as non-overlapping byte
+/// ranges in order. Characters compare by their lowercase forms. A match
+/// covers whole graphemes, so `e` is not found inside `e\u{301}`. An empty
+/// query occurs nowhere.
+pub fn occurrences<'a>(text: &'a str, query: &str) -> impl Iterator<Item = Range<usize>> + 'a {
+    let query: Vec<char> = query.chars().flat_map(fold).collect();
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let first = *query.first()?;
+        while from < text.len() {
+            // Skip to a character whose lowercase form can begin the query.
+            let (offset, ch) = text[from..].char_indices().find(|&(_, ch)| {
+                if ch.is_ascii() {
+                    ch.to_ascii_lowercase() == first
+                } else {
+                    fold(ch).next() == Some(first)
+                }
+            })?;
+            let start = from + offset;
+            from = start + ch.len_utf8();
+            let Some(len) = folded_prefix(&text[start..], &query) else {
+                continue;
+            };
+            if grapheme_boundary(text, start) && grapheme_boundary(text, start + len) {
+                from = start + len;
+                return Some(start..start + len);
+            }
+        }
+        None
+    })
+}
+/// A character's lowercase form. Final sigma compares as sigma, since
+/// uppercase text has only the one form.
+fn fold(ch: char) -> impl Iterator<Item = char> {
+    ch.to_lowercase().map(|c| if c == 'ς' { 'σ' } else { c })
+}
+/// The byte length of the prefix of `text` whose folded characters are
+/// exactly `query`, ending on a character boundary.
+fn folded_prefix(text: &str, query: &[char]) -> Option<usize> {
+    let mut expected = query.iter();
+    for (at, ch) in text.char_indices() {
+        for folded in fold(ch) {
+            if expected.next() != Some(&folded) {
+                return None;
+            }
+        }
+        if expected.len() == 0 {
+            return Some(at + ch.len_utf8());
+        }
+    }
+    None
+}
+fn grapheme_boundary(text: &str, at: usize) -> bool {
+    GraphemeCursor::new(at, text.len(), true)
+        .is_boundary(text, 0)
+        .expect("complete text chunk")
 }
 #[derive(Clone, Debug)]
 pub struct Stop {

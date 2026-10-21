@@ -58,32 +58,52 @@ impl Data for EditorState {
 pub enum Edit {
     Set(String),
     Insert(String),
-    Select { anchor: usize, caret: usize },
+    Select {
+        anchor: usize,
+        caret: usize,
+    },
     Undo,
     Redo,
     Wrap(bool),
     ReportCursor,
     Restore(EditorState),
     Placeholder(Arc<str>),
+    /// Highlight every [`occurrences`] of the query and select the first one
+    /// from the start of the selection, wrapping to the top. Highlights follow
+    /// edits until an empty query clears them.
+    Find(Arc<str>),
+    /// Select the next occurrence after the selection, wrapping.
+    FindNext,
+    /// Select the previous occurrence before the selection, wrapping.
+    FindPrevious,
 }
 impl Data for Edit {
     fn bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + match self {
                 Self::Set(s) | Self::Insert(s) => s.capacity(),
-                Self::Placeholder(s) => s.len(),
+                Self::Placeholder(s) | Self::Find(s) => s.len(),
                 _ => 0,
             }
     }
 }
 #[derive(Clone, Debug)]
 pub enum EditorOutput {
-    Changed { revision: u64, text: Arc<str> },
+    Changed {
+        revision: u64,
+        text: Arc<str>,
+    },
     Submitted,
     FocusChanged(bool),
     LimitReached,
     Cursor(Rect),
     StateChanged(EditorState),
+    /// After each find command, and whenever an edit or selection changes
+    /// them: how many occurrences there are, and which one the selection is.
+    Found {
+        selected: Option<usize>,
+        count: usize,
+    },
 }
 impl Data for EditorOutput {
     fn bytes(&self) -> usize {
@@ -94,7 +114,8 @@ impl Data for EditorOutput {
                 | Self::FocusChanged(_)
                 | Self::LimitReached
                 | Self::Cursor(_)
-                | Self::StateChanged(_) => 0,
+                | Self::StateChanged(_)
+                | Self::Found { .. } => 0,
             }
     }
 }
@@ -156,6 +177,15 @@ struct TypingGroup {
     end: usize,
     at: Duration,
     whitespace: bool,
+}
+/// A find query and its occurrences, recomputed whenever the document changes.
+struct Find {
+    query: Arc<str>,
+    /// Non-overlapping occurrences in order, in the document at `revision`.
+    matches: Vec<Range<usize>>,
+    revision: u64,
+    /// The `(selected, count)` the owner last heard.
+    reported: Option<(Option<usize>, usize)>,
 }
 
 #[cfg(test)]
@@ -595,6 +625,7 @@ pub struct Editor<D: Document = StringDocument> {
     height: f32,
     /// Whether the pointer is resting on the scrollbar.
     bar_hover: bool,
+    find: Option<Find>,
 }
 impl Editor<StringDocument> {
     #[cfg(test)]
@@ -655,6 +686,7 @@ impl<D: Document> Editor<D> {
             strip: 0.,
             height: 0.,
             bar_hover: false,
+            find: None,
         }
     }
     pub fn label(mut self, label: impl Into<String>) -> Self {
@@ -1264,6 +1296,7 @@ impl<D: Document> Editor<D> {
             });
             cx.relayout()
         }
+        self.report_found(cx, false);
         // Extensions decide their own scroll policy: a toggle that keeps the
         // viewport put must not drag the caret into view on the next layout.
         if reveal {
@@ -1352,6 +1385,94 @@ impl<D: Document> Editor<D> {
             gesture.pointer = None;
         }
     }
+    /// Bring find occurrences up to date with the document.
+    fn refresh_find(&mut self) {
+        let revision = self.document.revision();
+        if let Some(find) = self.find.as_mut().filter(|f| f.revision != revision) {
+            find.matches = occurrences(self.document.text(), &find.query).collect();
+            find.revision = revision;
+        }
+    }
+    /// The occurrence the selection is exactly, if any, and how many there are.
+    fn found(&self) -> Option<(Option<usize>, usize)> {
+        let find = self.find.as_ref()?;
+        let selected = self.selection().and_then(|s| {
+            let i = find.matches.partition_point(|m| m.start < s.start);
+            (find.matches.get(i) == Some(&s)).then_some(i)
+        });
+        Some((selected, find.matches.len()))
+    }
+    /// Tell the owner about the occurrences when they changed, or always when `force`.
+    fn report_found(&mut self, cx: &mut Update<'_, Self>, force: bool) {
+        self.refresh_find();
+        let Some((selected, count)) = self.found() else {
+            return;
+        };
+        let find = self.find.as_mut().expect("found has a query");
+        if (force || find.reported != Some((selected, count)))
+            && cx.emit(EditorOutput::Found { selected, count }).is_ok()
+        {
+            find.reported = Some((selected, count));
+        }
+    }
+    /// Select the first occurrence starting at or after `from`, or backward
+    /// the last one ending by `from`, wrapping around. False when there is none.
+    fn select_occurrence(&mut self, from: usize, forward: bool) -> bool {
+        self.refresh_find();
+        let Some(matches) = self.find.as_ref().map(|f| &f.matches) else {
+            return false;
+        };
+        let range = if forward {
+            let i = matches.partition_point(|m| m.start < from);
+            matches.get(i).or(matches.first())
+        } else {
+            let i = matches.partition_point(|m| m.end <= from);
+            i.checked_sub(1).map_or(matches.last(), |i| matches.get(i))
+        };
+        let Some(range) = range.cloned() else {
+            return false;
+        };
+        self.finish_typing_group();
+        self.anchor = Some(range.start);
+        self.caret = Caret::at(range.end);
+        true
+    }
+    /// Step to the next or previous occurrence from the selection and report
+    /// it. False when there is none to select.
+    fn step_find(&mut self, cx: &mut Update<'_, Self>, forward: bool) -> bool {
+        let selection = self.selection().unwrap_or(self.caret.byte..self.caret.byte);
+        let from = if forward {
+            selection.end
+        } else {
+            selection.start
+        };
+        let selected = self.select_occurrence(from, forward);
+        self.report_found(cx, true);
+        selected
+    }
+    /// The paragraph lines a viewport of `height` shows at the current scroll.
+    fn visible_lines(&self, p: &Paragraph, height: f32) -> Range<usize> {
+        let top = self.scroll.y - self.insets().y;
+        let bottom = top + height;
+        let first = p.lines.partition_point(|l| l.y + p.line_height < top);
+        let end = p.lines.partition_point(|l| l.y <= bottom);
+        first..end.max(first)
+    }
+    /// Find occurrences on the visible lines of `p`, while they describe its text.
+    fn visible_occurrences(&self, p: &Paragraph, height: f32) -> &[Range<usize>] {
+        let lines = self.visible_lines(p, height);
+        let Some(find) = self
+            .find
+            .as_ref()
+            .filter(|f| f.revision == p.revision && self.preedit.is_empty() && !lines.is_empty())
+        else {
+            return &[];
+        };
+        let visible = p.lines[lines.start].range.start..p.lines[lines.end - 1].range.end;
+        let first = find.matches.partition_point(|m| m.end <= visible.start);
+        let end = find.matches.partition_point(|m| m.start < visible.end);
+        &find.matches[first..end.max(first)]
+    }
     fn reveal(&mut self, size: Size) {
         if let Some(p) = &self.paragraph {
             let point = p.caret_point(self.caret);
@@ -1380,10 +1501,7 @@ impl<D: Document> Editor<D> {
     /// the caret or selection reveals them. Each visible stretch of a line is
     /// painted under its own clip, so suppressed glyphs never reach pixels.
     fn paint_text(&self, p: &Paragraph, cx: &mut Paint<'_>, brush: Brush) {
-        let top = self.scroll.y - self.insets().y;
-        let bottom = top + cx.bounds.height;
-        let first = p.lines.partition_point(|l| l.y + p.line_height < top);
-        let end = p.lines.partition_point(|l| l.y <= bottom);
+        let Range { start: first, end } = self.visible_lines(p, cx.bounds.height);
         if first >= end {
             return;
         }
@@ -1548,6 +1666,7 @@ impl<D: Document> Widget for Editor<D> {
         match command {
             Edit::Restore(state) => {
                 self.apply_state(state);
+                self.report_found(cx, false);
                 cx.relayout();
                 return;
             }
@@ -1573,9 +1692,45 @@ impl<D: Document> Widget for Editor<D> {
                 self.scroll = Point::default();
                 self.reveal_pending = true;
                 self.clear_preedit();
+                self.report_found(cx, false);
                 cx.relayout();
                 self.reset_blink(cx);
                 return;
+            }
+            Edit::Find(query) if query.is_empty() => {
+                if self.find.take().is_some() {
+                    cx.repaint();
+                }
+                let _ = cx.emit(EditorOutput::Found {
+                    selected: None,
+                    count: 0,
+                });
+                return;
+            }
+            Edit::Find(query) => {
+                self.find = Some(Find {
+                    matches: occurrences(self.text(), &query).collect(),
+                    query,
+                    revision: self.document.revision(),
+                    reported: None,
+                });
+                cx.repaint();
+                let from = self.selection().map_or(self.caret.byte, |s| s.start);
+                let selected = self.select_occurrence(from, true);
+                self.report_found(cx, true);
+                if !selected {
+                    return;
+                }
+            }
+            Edit::FindNext => {
+                if !self.step_find(cx, true) {
+                    return;
+                }
+            }
+            Edit::FindPrevious => {
+                if !self.step_find(cx, false) {
+                    return;
+                }
             }
             Edit::Insert(text) => self.insert(&text),
             Edit::Select { anchor, caret } => {
@@ -2332,16 +2487,19 @@ impl<D: Document> Widget for Editor<D> {
                     extension.paint(&view, EditorLayer::BehindText, cx.painter);
                 }
             }
+            let viewport = Rect::new(
+                self.scroll.x - inset.x,
+                self.scroll.y - inset.y,
+                cx.bounds.width,
+                cx.bounds.height,
+            );
+            for range in self.visible_occurrences(p, cx.bounds.height) {
+                for rect in p.selection_in(range.clone(), viewport) {
+                    cx.painter.rect(rect, 0., t.color.highlight.into())
+                }
+            }
             if let Some(selection) = self.selection().filter(|_| self.preedit.is_empty()) {
-                for rect in p.selection_in(
-                    selection,
-                    Rect::new(
-                        self.scroll.x - inset.x,
-                        self.scroll.y - inset.y,
-                        cx.bounds.width,
-                        cx.bounds.height,
-                    ),
-                ) {
+                for rect in p.selection_in(selection, viewport) {
                     cx.painter.rect(rect, 0., t.color.selection.into())
                 }
             }

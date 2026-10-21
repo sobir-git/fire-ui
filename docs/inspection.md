@@ -37,8 +37,8 @@ python3 tools/fire_ui_inspect.py /path/to/private/ui.sock '{"label":"Find a mate
 ```
 
 Discover names in the first snapshot; an example label is not a selector guaranteed
-by every app. Fire Notes publishes the `note-body`, `find-query`, and per-note
-`rename-note-ID` keys. Its note editor supports these requests:
+by every app. Fire Notes publishes the `note-body`, `find-bar`, `find-query`,
+`picker-query`, and per-note `rename-note-ID` keys. Its note editor supports these requests:
 
 ```json
 {"key":"note-body","action":"set_value","value":"Hello שלום"}
