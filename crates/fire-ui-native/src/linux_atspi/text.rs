@@ -1,6 +1,6 @@
 //! One current paragraph reference per text node. D-Bus objects own the store,
 //! never a historical paragraph. AccessKit keeps text events and control metadata.
-use fire_ui::{Caret, Paragraph, Point, Rect, SemanticNode, Transform};
+use fire_ui::{unit_at, Caret, Paragraph, Point, Rect, SemanticNode, TextUnit, Transform};
 use std::{collections::HashMap, ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 use zbus::fdo;
@@ -134,11 +134,7 @@ impl TextSnapshot {
         }
         match granularity {
             atspi::Granularity::Char => {
-                let range = value
-                    .grapheme_indices(true)
-                    .map(|(b, g)| b..b + g.len())
-                    .find(|r| r.contains(&byte))
-                    .ok_or_else(invalid)?;
+                let range = unit_at(value, byte, TextUnit::Grapheme);
                 if range.len() > u8::MAX as usize {
                     Ok(byte..byte + value[byte..].chars().next().ok_or_else(invalid)?.len_utf8())
                 } else {
@@ -159,32 +155,22 @@ impl TextSnapshot {
                     .map_or(value.len(), |l| l.range.start);
                 Ok(start..end)
             }
-            atspi::Granularity::Paragraph => {
-                let start = value[..byte].rfind('\n').map_or(0, |b| b + 1);
-                let end = value[byte..]
-                    .find('\n')
-                    .map_or(value.len(), |b| byte + b + 1);
-                Ok(start..end)
-            }
+            atspi::Granularity::Paragraph => Ok(unit_at(value, byte, TextUnit::Paragraph)),
             atspi::Granularity::Word => {
-                // Leading whitespace is its own word in each paragraph. A
-                // preceding word includes its newline, not the next paragraph.
-                let paragraph_start = value[..byte].rfind('\n').map_or(0, |b| b + 1);
-                let paragraph_end = value[byte..]
-                    .find('\n')
-                    .map_or(value.len(), |b| byte + b + 1);
-                let paragraph = &value[paragraph_start..paragraph_end];
-                let start = paragraph
-                    .unicode_word_indices()
-                    .map(|(b, _)| paragraph_start + b)
+                // AT-SPI words run from one word start to the next. Leading
+                // whitespace is its own word in each paragraph; a preceding word
+                // includes its newline, not the next paragraph.
+                let paragraph = unit_at(value, byte, TextUnit::Paragraph);
+                let starts = || {
+                    value[paragraph.clone()]
+                        .unicode_word_indices()
+                        .map(|(b, _)| paragraph.start + b)
+                };
+                let start = starts()
                     .take_while(|b| *b <= byte)
                     .last()
-                    .unwrap_or(paragraph_start);
-                let end = paragraph
-                    .unicode_word_indices()
-                    .map(|(b, _)| paragraph_start + b)
-                    .find(|b| *b > start)
-                    .unwrap_or(paragraph_end);
+                    .unwrap_or(paragraph.start);
+                let end = starts().find(|b| *b > start).unwrap_or(paragraph.end);
                 Ok(start..end)
             }
             atspi::Granularity::Sentence => Err(fdo::Error::NotSupported(

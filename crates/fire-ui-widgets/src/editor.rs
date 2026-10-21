@@ -423,6 +423,25 @@ struct Armed {
     pointer: u32,
     origin: Point,
 }
+/// A primary-button selection drag. The press selects `origin` in `unit`;
+/// moving extends the selection by whole units and always keeps `origin`.
+#[derive(Clone, Debug)]
+struct Drag {
+    pointer: u32,
+    position: Point,
+    unit: TextUnit,
+    origin: Range<usize>,
+}
+impl Drag {
+    /// The `(anchor, caret)` selection covering `origin` and the unit `hit`.
+    fn extend(&self, hit: Range<usize>) -> (usize, usize) {
+        if hit.start < self.origin.start {
+            (self.origin.end, hit.start)
+        } else {
+            (self.origin.start, hit.end.max(self.origin.end))
+        }
+    }
+}
 /// Whether a presented range currently shows its source text: the caret or
 /// the selection intersects it, so editing there must see real characters.
 /// Extensions apply the same rule when painting over a presented range.
@@ -511,8 +530,7 @@ pub struct Editor<D: Document = StringDocument> {
     caret_blink: bool,
     max_bytes: usize,
     limit_reached: bool,
-    drag: Option<u32>,
-    drag_position: Point,
+    drag: Option<Drag>,
     state_pending: bool,
     preedit: String,
     preedit_selection: Option<(usize, usize)>,
@@ -582,7 +600,6 @@ impl<D: Document> Editor<D> {
             max_bytes: usize::MAX,
             limit_reached: false,
             drag: None,
-            drag_position: Point::default(),
             state_pending: false,
             preedit: String::new(),
             preedit_selection: None,
@@ -1257,12 +1274,54 @@ impl<D: Document> Editor<D> {
         }
     }
     fn hit(&self, p: Point) -> Caret {
-        self.paragraph.as_ref().map_or(Caret::at(0), |layout| {
-            layout.hit(Point::new(
-                p.x - self.insets().x + self.scroll.x,
-                p.y - self.insets().y + self.scroll.y,
-            ))
-        })
+        self.paragraph
+            .as_ref()
+            .map_or(Caret::at(0), |layout| layout.hit(self.paragraph_point(p)))
+    }
+    /// The `unit` under `p`, or the empty range at the nearest caret for graphemes.
+    fn hit_unit(&self, p: Point, unit: TextUnit) -> Range<usize> {
+        match (unit, &self.paragraph) {
+            (TextUnit::Grapheme, _) | (_, None) => {
+                let byte = self.hit(p).byte;
+                byte..byte
+            }
+            (unit, Some(layout)) => unit_at(
+                self.text(),
+                layout.hit_cell(self.paragraph_point(p)).start,
+                unit,
+            ),
+        }
+    }
+    /// Start a selection drag at `p`: the press selects `origin`.
+    fn start_drag(&mut self, pointer: u32, p: Point, unit: TextUnit, origin: Range<usize>) {
+        self.drag = Some(Drag {
+            pointer,
+            position: p,
+            unit,
+            origin,
+        });
+        self.drag_to(p);
+    }
+    /// Extend the dragged selection to `p` in the drag's unit.
+    fn drag_to(&mut self, p: Point) {
+        let Some(unit) = self.drag.as_ref().map(|d| d.unit) else {
+            return;
+        };
+        let caret = self.hit(p);
+        let hit = self.hit_unit(p, unit);
+        let Some(drag) = &mut self.drag else { return };
+        drag.position = p;
+        let (anchor, byte) = drag.extend(hit);
+        self.anchor = Some(anchor);
+        // Keep the hit caret's affinity when it is the selection end.
+        self.caret = if byte == caret.byte {
+            caret
+        } else {
+            Caret::at(byte)
+        };
+    }
+    fn dragging(&self, pointer: u32) -> bool {
+        self.drag.as_ref().is_some_and(|d| d.pointer == pointer)
     }
     fn reveal(&mut self, size: Size) {
         if let Some(p) = &self.paragraph {
@@ -1512,8 +1571,8 @@ impl<D: Document> Widget for Editor<D> {
         if std::mem::take(&mut self.state_pending) {
             self.report_state(cx);
         }
-        if self.drag.is_some() {
-            let y = self.drag_position.y;
+        if let Some(position) = self.drag.as_ref().map(|d| d.position) {
+            let y = position.y;
             let height = cx.bounds().height;
             let overflow = if y < 0. {
                 y
@@ -1528,7 +1587,7 @@ impl<D: Document> Widget for Editor<D> {
                     self.scroll.y = (self.scroll.y
                         + overflow.clamp(-120., 120.) * 10. * time.elapsed.as_secs_f32().min(0.05))
                     .clamp(0., max);
-                    self.caret = self.hit(self.drag_position);
+                    self.drag_to(position);
                     self.report_state(cx);
                     cx.semantics_changed();
                     cx.repaint();
@@ -1630,7 +1689,7 @@ impl<D: Document> Widget for Editor<D> {
                 cx.relayout();
             }
             Lifecycle::CaptureLost(pointer) => {
-                if self.drag == Some(pointer) {
+                if self.dragging(pointer) {
                     self.drag = None;
                 }
                 if self.scrollbar_drag.is_some_and(|(p, _)| p == pointer) {
@@ -1870,10 +1929,8 @@ impl<D: Document> Widget for Editor<D> {
                 let origin = self.armed.as_ref().unwrap().origin;
                 if (position.x - origin.x).hypot(position.y - origin.y) > 4. {
                     self.armed = None;
-                    self.anchor = Some(self.hit(origin).byte);
-                    self.drag = Some(*pointer);
-                    self.drag_position = *position;
-                    self.caret = self.hit(*position);
+                    let anchor = self.hit(origin).byte;
+                    self.start_drag(*pointer, *position, TextUnit::Grapheme, anchor..anchor);
                     self.reveal(cx.bounds().size());
                     self.changed(cx, before, true);
                     cx.stop();
@@ -1885,10 +1942,9 @@ impl<D: Document> Widget for Editor<D> {
             }
             // Dragging with the button held extends the selection; the reveal
             // keeps the view following the dragging caret. The frame loop
-            // auto-scrolls from `drag_position` near the viewport edges.
-            Input::Pointer { pointer, position } if self.drag == Some(*pointer) => {
-                self.drag_position = *position;
-                self.caret = self.hit(*position);
+            // auto-scrolls from the drag position near the viewport edges.
+            Input::Pointer { pointer, position } if self.dragging(*pointer) => {
+                self.drag_to(*position);
                 self.reveal(cx.bounds().size());
                 self.changed(cx, before, true);
                 cx.stop();
@@ -1937,15 +1993,6 @@ impl<D: Document> Widget for Editor<D> {
                     cx.stop();
                     return;
                 }
-                let previous = self.caret.byte;
-                self.caret = self.hit(*position);
-                if self.modifiers.shift {
-                    self.anchor = Some(self.anchor.unwrap_or(previous));
-                } else {
-                    self.anchor = Some(self.caret.byte);
-                }
-                self.drag = Some(*pointer);
-                self.drag_position = *position;
                 self.click_count = if self.last_click.is_some_and(|(time, p)| {
                     cx.now().saturating_sub(time) < Duration::from_millis(350)
                         && (p.x - position.x).abs() < 4.
@@ -1955,26 +2002,20 @@ impl<D: Document> Widget for Editor<D> {
                 } else {
                     1
                 };
-                if self.click_count == 2 && !self.modifiers.shift {
-                    if let Some((start, word)) =
-                        self.text().unicode_word_indices().find(|(start, word)| {
-                            *start <= self.caret.byte && *start + word.len() >= self.caret.byte
-                        })
-                    {
-                        let end = start + word.len();
-                        self.anchor = Some(start);
-                        self.caret = Caret::at(end);
-                    }
-                } else if self.click_count == 3 && !self.modifiers.shift {
-                    let start = self.text()[..self.caret.byte]
-                        .rfind('\n')
-                        .map_or(0, |i| i + 1);
-                    let end = self.text()[self.caret.byte..]
-                        .find('\n')
-                        .map_or(self.text().len(), |i| self.caret.byte + i + 1);
-                    self.anchor = Some(start);
-                    self.caret = Caret::at(end);
-                }
+                // Shift extends the existing selection by graphemes; repeated
+                // clicks select, then drag by, words and paragraphs.
+                let unit = match (self.modifiers.shift, self.click_count) {
+                    (false, 2) => TextUnit::Word,
+                    (false, 3) => TextUnit::Paragraph,
+                    _ => TextUnit::Grapheme,
+                };
+                let origin = if self.modifiers.shift {
+                    let anchor = self.anchor.unwrap_or(self.caret.byte);
+                    anchor..anchor
+                } else {
+                    self.hit_unit(*position, unit)
+                };
+                self.start_drag(*pointer, *position, unit, origin);
                 self.last_click = Some((cx.now(), *position));
                 let _ = cx.focus();
                 let _ = cx.capture(*pointer);
@@ -2005,7 +2046,7 @@ impl<D: Document> Widget for Editor<D> {
                 button: PointerButton::Primary,
                 down: false,
                 ..
-            } if self.drag == Some(*pointer) => {
+            } if self.dragging(*pointer) => {
                 self.drag = None;
                 let _ = cx.release(*pointer);
             }

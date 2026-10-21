@@ -6,6 +6,7 @@ use std::{
         Arc,
     },
 };
+use unicode_segmentation::UnicodeSegmentation;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
     pub size: f32,
@@ -39,6 +40,35 @@ impl Caret {
             affinity: Affinity::Downstream,
         }
     }
+}
+/// A logical unit of source text, shared by selection gestures, caret
+/// movement and accessibility so every consumer agrees on its boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextUnit {
+    /// An extended grapheme cluster: one user-perceived character.
+    Grapheme,
+    /// A Unicode word-boundary segment: a word, a run of whitespace or one
+    /// punctuation mark.
+    Word,
+    /// A line between hard breaks, including its trailing newline.
+    Paragraph,
+}
+/// The `unit` containing `byte`. At the end of `text`, graphemes and words
+/// are empty and a paragraph is the final one, empty after a trailing newline.
+pub fn unit_at(text: &str, byte: usize, unit: TextUnit) -> Range<usize> {
+    let byte = byte.min(text.len());
+    let containing =
+        |(start, s): (usize, &str)| (byte < start + s.len()).then(|| start..start + s.len());
+    let found = match unit {
+        TextUnit::Grapheme => text.grapheme_indices(true).find_map(containing),
+        TextUnit::Word => text.split_word_bound_indices().find_map(containing),
+        TextUnit::Paragraph => {
+            let start = text[..byte].rfind('\n').map_or(0, |i| i + 1);
+            let end = text[byte..].find('\n').map_or(text.len(), |i| byte + i + 1);
+            return start..end;
+        }
+    };
+    found.unwrap_or(byte..byte)
 }
 #[derive(Clone, Debug)]
 pub struct Stop {
@@ -213,6 +243,23 @@ impl Paragraph {
                     .min_by(|a, b| (a.x - p.x).abs().total_cmp(&(b.x - p.x).abs()))
             })
             .map_or(Caret::at(0), |s| s.caret)
+    }
+    /// The source range of the cell under `p`, or the nearest one on its row.
+    /// Unlike [`Paragraph::hit`], which finds the nearest caret edge, this names
+    /// the character itself, as word and paragraph selection need. An empty row
+    /// gives an empty range at its start.
+    pub fn hit_cell(&self, p: Point) -> Range<usize> {
+        let index = (p.y / self.line_height).floor().max(0.) as usize;
+        let Some(line) = self
+            .lines
+            .get(index.min(self.lines.len().saturating_sub(1)))
+        else {
+            return 0..0;
+        };
+        let distance = |c: &TextCell| (c.x - p.x).max(p.x - c.x - c.width()).max(0.);
+        line.cells()
+            .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))
+            .map_or(line.range.start..line.range.start, |(range, _)| range)
     }
     /// Move between visually distinct caret positions, retaining bidi/wrap affinity.
     pub fn visual_move(&self, caret: Caret, right: bool) -> Caret {

@@ -12,3 +12,4 @@ readme = "README.md"
 include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [dependencies]
+unicode-segmentation = "1.12"

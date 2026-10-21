@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `TextUnit` and `unit_at` to `fire-ui`: one definition of grapheme, word
+  and paragraph boundaries for selection gestures and accessibility, and
+  `Paragraph::hit_cell` for the character under a point. Editor double- and
+  triple-click drags now extend by whole words or paragraphs and keep the
+  originally selected unit in either direction. `fire-ui` now depends on
+  `unicode-segmentation`.
 - Track X11 core focus transitions during keyboard grabs. Switching applications
   while a shortcut owns the keyboard now clears widget focus and stops focused
   animations; temporary grabs still preserve focus and keep popups open. The

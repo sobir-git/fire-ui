@@ -3229,3 +3229,78 @@ fn an_armed_release_notifies_exactly_once() {
         .count();
     assert_eq!(changed, 1, "one activation, one change notification");
 }
+/// Multi-click at `start`, holding the final press, then drag through `path`.
+/// Returns the selection after each step of the path.
+fn multi_click_drag(
+    text: &str,
+    clicks: u64,
+    start: usize,
+    path: &[usize],
+) -> Vec<Option<std::ops::Range<usize>>> {
+    let mut ui = Ui::new(
+        Editor::new(text).padding(0., 0.),
+        Size::new(300., 200.),
+        Limits::default(),
+    )
+    .unwrap();
+    settle(&mut ui, &mut TestText);
+    let p = ui.root().paragraph().unwrap().clone();
+    // A point inside the cell at `byte`, so word and paragraph units are unambiguous.
+    let inside = |byte: usize| {
+        let at = p.caret_point(Caret::at(byte));
+        Point::new(at.x + 1., at.y + 1.)
+    };
+    let button = |down| Input::Button {
+        pointer: 0,
+        button: PointerButton::Primary,
+        down,
+        position: inside(start),
+    };
+    for click in 1..=clicks {
+        ui.advance(std::time::Duration::from_millis(click * 100), 100);
+        ui.dispatch(button(true), &mut TestText);
+        if click < clicks {
+            ui.dispatch(button(false), &mut TestText);
+        }
+    }
+    path.iter()
+        .map(|&byte| {
+            ui.dispatch(
+                Input::Pointer {
+                    pointer: 0,
+                    position: inside(byte),
+                },
+                &mut TestText,
+            );
+            settle(&mut ui, &mut TestText);
+            ui.root().selection()
+        })
+        .collect()
+}
+#[test]
+fn double_click_drag_extends_by_whole_words_and_keeps_the_word() {
+    // "one two three": the press selects "two"; dragging left keeps it and
+    // grows to whole words, then dragging right flips the anchor.
+    assert_eq!(
+        multi_click_drag("one two three", 2, 5, &[5, 4, 3, 1, 9, 12]),
+        [
+            Some(4..7),
+            Some(4..7),
+            Some(3..7),
+            Some(0..7),
+            Some(4..13),
+            Some(4..13)
+        ]
+    );
+}
+#[test]
+fn double_click_on_whitespace_selects_the_run() {
+    assert_eq!(multi_click_drag("one   two", 2, 4, &[4]), [Some(3..6)]);
+}
+#[test]
+fn triple_click_drag_extends_by_whole_paragraphs() {
+    assert_eq!(
+        multi_click_drag("one\ntwo\nthree", 3, 5, &[5, 1, 10]),
+        [Some(4..8), Some(0..8), Some(4..13)]
+    );
+}

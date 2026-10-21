@@ -25,6 +25,19 @@ Previous implementations are evidence to examine in Git history, not contracts
 that future work must preserve. Preserve product requirements and useful behavioral
 counterexamples, not historical implementation choices.
 
+## A framework, not an app
+
+Every change is framework design. Before fixing a symptom, find the layer that
+owns the behavior and the abstraction it is missing; a local patch that makes one
+case pass while leaving the concept scattered is not a fix. Ask: which crate owns
+this knowledge, is the same concept already defined elsewhere (and do the copies
+disagree), and would a custom widget or another consumer need it too?
+
+Prefer one well-named concept used everywhere over several hand-maintained
+copies. Model a stateful interaction as one value with one rule, not as loose
+fields updated in several places. The design keeps evolving, so refactoring
+surrounding code to reach the right shape is normal and expected, not scope creep.
+
 ## Product and quality
 
 When unsure about Rust, crate APIs, or platform behavior, research current primary

@@ -493,6 +493,27 @@ sys.stdin.read()
                     shot("studio-editing.png")
                     sample("focused_caret")
 
+                    # Double-click a word and drag left: the selection grows by
+                    # whole words and keeps the double-clicked word. Pressing past
+                    # the line end names its last word without glyph positions.
+                    inspect_request(sock, {"id": editor["id"], "action": "set_value", "value": "one two three"})
+                    b = editor["bounds"]
+                    y = round(b["y"] + b["height"] / 2)
+
+                    def selection():
+                        time.sleep(0.15)
+                        t = next(n for n in snapshot() if n["id"] == editor["id"])["text"]
+                        return t["anchor"], t["caret"]
+                    x("mousemove", "--window", window, round(b["x"] + b["width"] - 20), y)
+                    x("click", 1)
+                    x("mousedown", 1)
+                    if selection() != (8, 13):
+                        raise RuntimeError(f"Double-click did not select the last word: {selection()}")
+                    x("mousemove", "--window", window, round(b["x"] + 2), y)
+                    x("mouseup", 1)
+                    if selection() != (13, 0):
+                        raise RuntimeError(f"Word drag left lost the double-clicked word: {selection()}")
+
                     navigate("Lists")
                     search = next(n for n in snapshot()
                                   if n["text"] and not n["text"]["multiline"])
